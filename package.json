@@ -1,0 +1,22 @@
+{
+  "name": "viman-shop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Viman Mobile local shop management system (offline, SQLite)",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "start": "node server/src/index.ts",
+    "dev:server": "node --watch server/src/index.ts",
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace web run build",
+    "typecheck": "npm --workspace server run typecheck && npm --workspace web run typecheck",
+    "test": "npm --workspace server run test"
+  }
+}
