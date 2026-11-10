@@ -17,9 +17,11 @@ interface Props<T> {
   emptyHint?: string;
   /** Optional extra row rendered below a data row (for expandable details). */
   renderExtra?: (row: T) => ReactNode;
+  /** Optional mouse row click (keyboard users need a button inside the row). */
+  onRowClick?: (row: T) => void;
 }
 
-export function DataTable<T>({ columns, rows, rowKey, emptyTitle = 'Nothing here yet', emptyHint, renderExtra }: Props<T>) {
+export function DataTable<T>({ columns, rows, rowKey, emptyTitle = 'Nothing here yet', emptyHint, renderExtra, onRowClick }: Props<T>) {
   if (rows.length === 0) return <EmptyState title={emptyTitle} hint={emptyHint} />;
   return (
     <div className="overflow-x-auto">
@@ -41,7 +43,7 @@ export function DataTable<T>({ columns, rows, rowKey, emptyTitle = 'Nothing here
           {rows.map((row) => {
             const extra = renderExtra?.(row);
             return (
-              <FragmentRow key={rowKey(row)} extra={extra} colSpan={columns.length}>
+              <FragmentRow key={rowKey(row)} extra={extra} colSpan={columns.length} onClick={onRowClick ? () => onRowClick(row) : undefined}>
                 {columns.map((c) => (
                   <td key={c.key} className={`px-3 py-2.5 align-middle ${c.align === 'right' ? 'num text-right' : 'text-left'} ${c.className ?? ''}`}>
                     {c.render(row)}
@@ -56,10 +58,10 @@ export function DataTable<T>({ columns, rows, rowKey, emptyTitle = 'Nothing here
   );
 }
 
-function FragmentRow({ children, extra, colSpan }: { children: ReactNode; extra: ReactNode; colSpan: number }) {
+function FragmentRow({ children, extra, colSpan, onClick }: { children: ReactNode; extra: ReactNode; colSpan: number; onClick?: () => void }) {
   return (
     <>
-      <tr className="border-b border-slate-100 hover:bg-slate-50/60">{children}</tr>
+      <tr onClick={onClick} className={"border-b border-slate-100 hover:bg-slate-50/60 " + (onClick ? "cursor-pointer" : "")}>{children}</tr>
       {extra ? (
         <tr className="border-b border-slate-100 bg-slate-50">
           <td colSpan={colSpan} className="px-3 py-3">{extra}</td>
