@@ -3,7 +3,8 @@
 | Phase | Scope | Status |
 |---|---|---|
 | **1** | Foundation: DB + migrations, settings, audit log, backup/restore, web shell, launcher, docs | **☑ Complete (2026-11-10) — awaiting owner approval for Phase 2** |
-| 2–14 | See TASKS.md | not started |
+| **2** | Catalog: categories, products, suppliers (migration 003, API, screens) | **☑ Complete (2026-11-10) — awaiting owner approval for Phase 3** |
+| 3–14 | See TASKS.md | not started |
 
 ## Phase 1 — what exists
 - **Server** (`server/src`): Fastify on `127.0.0.1:4300`; SQLite via `node:sqlite` (WAL, foreign keys); migration runner with LF-normalised checksums; `001_foundation.sql` (`schema_migrations`, `settings`, `audit_logs`).
@@ -33,3 +34,12 @@
 - The in-app Claude browser pane was hidden during verification; interactive checks ran in Playwright's Chromium against the same server.
 - Launcher: if `node_modules` exists but is incomplete it does not self-repair (run `npm ci`); stale-build detection uses file timestamps of `web/src`, `index.html`, `vite.config.ts` only.
 - Electricity / segment rules are documented (BUSINESS_RULES.md) but enforced only from Phase 8/10 when those tables exist.
+
+## Phase 2 — Catalog (2026-11-10)
+- **Database:** migration `003_catalog.sql` (schema v3): categories (12 seeded defaults, 11 shop + Scratch Cards telecom), products, suppliers; case-insensitive unique names/codes; CHECKs (prices, min ≤ sell, services hold no stock) and triggers (product book = category book, kind/book immutable, default categories locked, category book locked while it has products).
+- **API:** `/api/v1/categories`, `/products` (search, filters, paging, lowStock), `/suppliers` — validated, no type coercion, every write audited in one transaction with its audit row; no-op edits write no audit row.
+- **Web:** Products section with Products / Categories / Suppliers tabs.
+- **Stock fields are read-only** (always 0 until Phase 3/4/13).
+- **Tests:** 15 files, **299 passing** (86 new catalog tests; one Phase 1 startup test re-targeted to data pages because the new schema moved the corrupted byte range). Typecheck clean. Production build OK (363 kB JS).
+- **Browser (Playwright, via Start-Viman-Shop.bat cold start):** product create, min > sell blocked with message, case-insensitive duplicate name rejected, default category locked ("Built-in category…"), owner category and supplier create, audit rows written, schema v3. Test data moved out afterwards.
+- **Outstanding / notes:** empty product list shows two "New product" buttons (header + empty state); a PUT validates in order 404 → field validation → no-op → 409 rules; the Excel/Phase 13 and stock screens are not yet available.

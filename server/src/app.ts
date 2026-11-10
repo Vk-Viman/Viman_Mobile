@@ -11,6 +11,9 @@ import { registerHealthRoutes } from './routes/health.ts';
 import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerAuditLogRoutes } from './routes/audit-logs.ts';
 import { registerBackupRoutes } from './routes/backups.ts';
+import { registerCategoryRoutes } from './routes/categories.ts';
+import { registerProductRoutes } from './routes/products.ts';
+import { registerSupplierRoutes } from './routes/suppliers.ts';
 
 export interface AppOptions { dataDir: string; webDistDir?: string | null; logger?: boolean }
 export interface AppContext {
@@ -145,6 +148,9 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerSettingsRoutes(api, ctx);
     registerAuditLogRoutes(api, ctx);
     registerBackupRoutes(api, ctx);
+    registerCategoryRoutes(api, ctx);
+    registerProductRoutes(api, ctx);
+    registerSupplierRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;
