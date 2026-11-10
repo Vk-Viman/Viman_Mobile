@@ -1,0 +1,253 @@
+# API Contracts
+
+Base path: `/api/v1`. JSON in/out (UTF-8). Money fields end in `Cents` and are **integers**. Rates end in `Bp` (basis points, 600 = 6.00%). Dates `YYYY-MM-DD`; timestamps ISO-8601 UTC strings. Field names are camelCase in JSON, snake_case in SQL.
+
+## Conventions
+- **Errors**: any non-2xx response body is
+  `{ "error": { "code": "UPPER_SNAKE", "message": "Human readable", "fields": { "<path>": "message" } } }` (`fields` optional).
+  - Request validation failures → `400 VALIDATION_ERROR` with `fields` keyed by JSON path (e.g. `"shop.name"`, `"rates.reloadCommissionBp"`).
+  - Unknown route under `/api` → `404 NOT_FOUND` (JSON, never the SPA HTML).
+  - Unexpected → `500 INTERNAL_ERROR` (message generic; details only in server log).
+- **Idempotency** (from Phase 2+): every create of a financial record accepts `clientRef` (UUID from the browser). A repeat with the same `clientRef` returns the original record with `200` instead of creating a duplicate.
+- **Validation** uses Fastify's native JSON Schema (`additionalProperties: false` on bodies). **No type coercion**: a money/rate field sent as `null` or `"600"` is a 400, never silently converted. Numeric query-string params are digit strings validated in the route.
+- **Business date vs posting time** (Phase 2+): every financial record in any response carries `businessDate` (owner-entered) and `postedAt` (server timestamp, read-only, never accepted in a request body) plus `backdated: boolean`. Reports group by `businessDate`; posting-order rules (Ice Cream limits, D4, D2, costing) use `postedAt`. `asOf`, `from`, `to` query parameters are business dates. Reversal rows carry the business date of the row they reverse. From Phase 8, `GET /audit-logs` items add `postedAt` (= `at`), `businessDate` (null for non-financial entries) and `backdated`.
+- **Future-dated transactions** (R-FD, Phase 2+): every financial write whose body contains a business date (`businessDate`, or the date field of that record) is validated **on the server**: a date later than today in Asia/Colombo → `400 FUTURE_DATE_NOT_ALLOWED` with `message: "Future-dated transactions are not allowed. Please select today or an earlier date."` and `fields: { businessDate: "Future-dated transactions are not allowed. Please select today or an earlier date." }` (field name = the request's date field). Applies to all P2–P13 write endpoints that create financial records (sales, sales returns, purchases, purchase returns, opening stock, stocktakes, losses, drawings, reloads, EZCash, top-ups, printing supplies, expenses, opening balances, capital, transfers, cash counts, daily closings, Ice Cream days/payments/fund moves — incl. the replacement row of `PUT /icecream/days/:date` — and opening-stock import rows). Earlier dates are accepted. `postedAt` is read-only: a request body containing `postedAt` → `400 VALIDATION_ERROR` with `fields.postedAt` (`additionalProperties: false`). The web date pickers use `max = today` (from `GET /health` `today`), but the server is authoritative. **Validation order:** JSON schema → R-FD → (returns only: original lookup `404 NOT_FOUND`, then R-RD) → `DAY_CLOSED` → `SPLIT_CONFIRMATION_REQUIRED` / void guards / other business rules. **Scope:** report and query dates (`asOf`, `from`, `to`) are never rejected. Write paths always call `todayBusinessDate()` without an injected clock (the database trigger uses the real clock); tests fake time only for read/report logic.
+- **Return date** (R-RD, Phase 3/5): `POST /sales/:id/returns` and `POST /purchases/:id/returns` with a `businessDate` earlier than the original sale's / purchase's business date → `400 RETURN_BEFORE_ORIGINAL_DATE` with `message: "The return date cannot be earlier than the original sale date (2026-11-05). Please select 2026-11-05 or a later date (not after today)."` (`purchase` for purchase returns; the date is the original's business date), `fields: { businessDate: <same message> }` and `originalDate: "YYYY-MM-DD"` in the error body. On-or-after dates (incl. backdated) are accepted, subject to R-FD. The web return form sets the date picker range to *original date … today*, but the server is authoritative. **Validation order** for returns: JSON schema → R-FD (`FUTURE_DATE_NOT_ALLOWED`) → original lookup (`404 NOT_FOUND`) → R-RD (`RETURN_BEFORE_ORIGINAL_DATE`) → `DAY_CLOSED` (judged on the **return's** business date) → quantity/void/business rules. The original date is returned as `error.originalDate`.
+- While a restore is running every other `/api` request gets `503 RESTORE_IN_PROGRESS`.
+
+---
+
+## Phase 1 endpoints (implemented in Phase 1)
+
+### `GET /api/v1/health`
+`200`
+```json
+{ "status": "ok", "appVersion": "0.1.0", "schemaVersion": 2, "time": "2026-11-10T06:00:00.000Z", "today": "2026-11-10" }
+```
+`today` is the business date in Asia/Colombo.
+
+### `GET /api/v1/settings`
+`200`
+```json
+{
+  "shop": { "name": "Viman Mobile", "address": "162 Padiliyathuduwa Rd, Hunupitiya, Wattala", "phone": "+94 71 900 4044", "email": "viman.mobile.shop@gmail.com" },
+  "rates": { "reloadCommissionBp": 600, "ezcashCommissionBp": 80 },
+  "printDefaults": [
+    { "code": "BW_1S",   "name": "B/W print – one side",       "priceCents": 1500, "costCents": 650 },
+    { "code": "BW_2S",   "name": "B/W print – double side",    "priceCents": 2500, "costCents": 900 },
+    { "code": "CLR_1S",  "name": "Colour print – one side",    "priceCents": 2000, "costCents": 650 },
+    { "code": "CLR_2S",  "name": "Colour print – double side", "priceCents": 3000, "costCents": 900 },
+    { "code": "PC_BW_1S","name": "Photocopy B/W – one side",   "priceCents": 1000, "costCents": 650 },
+    { "code": "PC_BW_2S","name": "Photocopy B/W – double side","priceCents": 1500, "costCents": 900 },
+    { "code": "CUSTOM",  "name": "Custom image print",         "priceCents": 4000, "costCents": 650 }
+  ],
+  "updatedAt": "2026-11-10T06:00:00.000Z"
+}
+```
+`updatedAt` = latest `updated_at` across settings rows (null if never updated). The values above are the **defaults** seeded when no row exists. `printDefaults` are stored now and used in Phase 7 to seed print service types.
+
+### `PUT /api/v1/settings`
+Body: any subset of the three sections; each section present **replaces that section entirely**.
+```json
+{ "shop": {...}, "rates": {...}, "printDefaults": [...] }
+```
+Validation:
+- `shop.name` 1–100 chars (trimmed, required when `shop` given); `address` 0–200; `phone` 0–30; `email` 0–100 (empty or contains `@`).
+- `rates.reloadCommissionBp`, `rates.ezcashCommissionBp`: integers 0–10000, both required when `rates` given.
+- `printDefaults`: array 1–30 items; `code` `^[A-Z0-9_]{1,20}$` unique within array; `name` 1–60; `priceCents`, `costCents` integers 0–100000000.
+- Empty body `{}` → `400 VALIDATION_ERROR`.
+Response `200`: the full settings object (same shape as GET).
+Side effect: one `audit_logs` row per changed section: `entity='settings'`, `entityId=<section>`, `action='update'`, `before`/`after` = section JSON. Unchanged sections are not logged.
+
+### `GET /api/v1/audit-logs?entity=&limit=&beforeId=`
+- `entity` optional exact match; `limit` 1–200 (default 50); `beforeId` optional (keyset pagination, returns rows with `id < beforeId`), newest first.
+`200`
+```json
+{ "items": [ { "id": 12, "at": "…", "entity": "settings", "entityId": "rates", "action": "update", "before": {…}, "after": {…}, "note": null } ], "nextBeforeId": 12 }
+```
+`nextBeforeId` is null when there are no more rows.
+
+### `GET /api/v1/backups`
+`200`
+```json
+{ "items": [ { "name": "viman-20261110-113000-startup.db", "reason": "startup", "sizeBytes": 49152, "createdAt": "2026-11-10T06:00:00.000Z" } ] }
+```
+Newest first. Only files matching the backup name pattern are listed. `reason` ∈ `startup | manual | pre-restore`.
+
+### `POST /api/v1/backups`
+Body: none or `{}`. Creates a manual backup. `201` → `{ "item": { ...same shape... } }`.
+Errors: `500 BACKUP_FAILED`.
+
+### `POST /api/v1/backups/restore`
+Two forms:
+1. JSON `{ "name": "viman-20261110-113000-manual.db", "confirm": "RESTORE" }` — restore an existing backup.
+2. `multipart/form-data` with field `confirm=RESTORE` and file field `file` (≤ 200 MB) — restore an uploaded `.db`.
+
+`200`
+```json
+{ "restoredFrom": "viman-20261110-113000-manual.db", "safetyBackup": "viman-20261110-114500-pre-restore.db", "schemaVersion": 2 }
+```
+For uploads `restoredFrom` is `"upload:<original filename>"`.
+Errors:
+| status | code | when |
+|---|---|---|
+| 400 | `RESTORE_CONFIRM_REQUIRED` | `confirm` missing or not exactly `RESTORE` |
+| 400 | `VALIDATION_ERROR` | bad name format / no file |
+| 404 | `BACKUP_NOT_FOUND` | named backup does not exist |
+| 422 | `RESTORE_INVALID_FILE` | not a SQLite database (header check / cannot open) |
+| 422 | `RESTORE_INTEGRITY_FAILED` | `PRAGMA integrity_check` ≠ `ok` |
+| 422 | `RESTORE_SCHEMA_MISSING` | no `schema_migrations` table or required tables missing |
+| 422 | `RESTORE_SCHEMA_TOO_NEW` | backup schema version > app's latest migration |
+| 409 | `RESTORE_IN_PROGRESS` | another restore is running (in practice the global guard answers every request during a restore with **503** `RESTORE_IN_PROGRESS` first) |
+| 413 | `FILE_TOO_LARGE` | uploaded file over 200 MB |
+| 500 | `RESTORE_FAILED` | the swap or post-restore migration failed; previous data was put back from the safety backup |
+On any validation failure the live database is untouched; on `RESTORE_FAILED` it is put back from the safety backup. The swap itself is an atomic same-folder file rename.
+
+Backup name pattern: `^viman-\d{8}-\d{6}-(startup|manual|pre-restore)(-\d{1,3})?\.db$` (suffix used only when two backups land in the same second). Names are validated before any filesystem access (no path traversal).
+
+---
+
+## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
+- **P2 Catalog**: `GET/POST /categories`, `PUT /categories/:id` · `GET /products?q=&book=&categoryId=&lowStock=&active=`, `POST /products`, `PUT /products/:id` · `GET/POST /suppliers`, `PUT /suppliers/:id`
+- **P3/P4 Inventory**: `POST /opening-stock` · `GET /products/:id/movements` · `POST /purchases`, `GET /purchases`, `GET /purchases/:id`, `POST /purchases/:id/void`, `POST /purchases/:id/returns` (R-RD) · `POST /stocktakes`, `GET /stocktakes`, `POST /stocktakes/:id/complete` · `POST /stock-losses`, `GET /stock-losses` · `GET /inventory/valuation`
+- **P5 Sales**: `POST /sales` (server splits a mixed cart by book), `GET /sales`, `GET /sales/:id`, `POST /sales/:id/void`, `POST /sales/:id/returns` (R-RD)
+- **P6 Telecom**: `GET/PUT /reload-providers` · `POST/GET /reload-sales` · `POST/GET /ezcash-sales` · `POST/GET /telecom/topups`
+- **P7 Printing**: `GET/POST /print-service-types`, `PUT /print-service-types/:id` · `POST /printing-supplies`
+- **P8 Money**: `POST/GET /expenses`, `POST /expenses/:id/void` · `GET /cashbooks/:book?from&to` · `POST /cashbooks/:book/opening` · `POST /cash-counts` · `POST /daily-closings`, `POST /daily-closings/:id/reopen`
+  - **Electricity rule (BUSINESS_RULES §7 E1–E5):** `POST /expenses` accepts `book` ∈ `shop|telecom` only and `category` ∈ `water|rent|internet|transport|repairs|cleaning_supplies|packaging|stationery|other`. (All books: `409 DAY_CLOSED` applies to every financial write dated in a closed day, including voids — BUSINESS_RULES R9.)
+    - `category: "electricity"` → `400 ELECTRICITY_NOT_ALLOWED` — "Electricity is paid from the Ice Cream book." (`fields.category`)
+    - `book: "icecream"` → `400 USE_ICECREAM_PAYMENTS` — ice-cream costs are recorded via `/icecream/payments`.
+  - **Funds (§10.2):** for `book = icecream`, `opening` and `cash-counts` (over/short) require `fund` ∈ `cost|electricity|profit` (`400 FUND_REQUIRED`); for other books `fund` is rejected (`400 FUND_NOT_ALLOWED`). Ice Cream cash-book entries in `GET /cashbooks/icecream` carry their `fund`.
+- **P9**: `POST/GET /cash-transfers`, `POST /cash-transfers/:id/void` · `POST/GET /drawings` · `POST/GET /capital`
+  - `fromFund` required when `fromBook = icecream`, `toFund` when `toBook = icecream`; drawings and capital in the Ice Cream book require `fund`. None of these ever change recognized profit; capital/opening/transfer-in money is never profit-eligible.
+- **P10 Ice cream (BUSINESS_RULES §10 — final, P-1 approved with D1–D4)**. Every write is one transaction: business record + fund-ledger rows + cash entry (if cash moves) + audit row. All writes take `clientRef` (idempotent).
+  - Every Ice Cream write dated in a closed day → `409 DAY_CLOSED` (reopen first, R9). `fund` is **required** in every API body; the defaults in §10.2 (Cost for materials, Electricity for the bill, Profit for over/short) are UI presets only.
+  - `POST /icecream/days` `{ businessDate, salesCents, costAllocCents, electricityAllocCents, items?, confirmNegativeProfit?, clientRef }` → `{ day: { …, profitShareCents }, funds, warnings }` — profit share server-computed; `422 NEGATIVE_PROFIT_UNCONFIRMED` without confirmation.
+  - `PUT /icecream/days/:date` (void-and-replace, judged on the final state) · `POST /icecream/days/:date/void` — `409 DAY_CLOSED` unless reopened; `422 VOID_BREAKS_RELEASE` ("profit already released depends on this entry — reverse the release first") when the §10.4 void guard (D2) fails.
+  - `GET /icecream/days?from&to`
+  - `GET /icecream/funds?asOf=` → fund balances and recognized profit returned **separately**:
+    `{ funds: { cost: { balanceCents }, electricity: { balanceCents }, profit: { balanceCents } }, totalCents, cashBookBalanceCents, lines: { materials: { chargedCents, settledCents, unspentCents }, electricity: { chargedCents, settledCents, unspentCents } }, unspentAllocationCents, outstandingExcessCostCents, recognizedProfitToDateCents, profitAfterExcessCostToDateCents, warnings: [{ code: "NEGATIVE_FUND_BALANCE" | "EXCESS_COST_OUTSTANDING", message, … }] }`
+  - `POST /icecream/fund-moves/preview` `{ fromFund, toFund, amountCents }` → `{ profitEligibleCents, cashOnlyCents, chargeRelabelCents, profitEffectCents, explanation, warnings }` — no write; the UI shows this before confirmation.
+  - `POST /icecream/fund-moves` `{ businessDate, fromFund, toFund, amountCents, confirmSplit?, confirmedProfitEligibleCents?, note?, clientRef }` → `{ move: { …, profitEffectCents, chargeRelabelCents, cashOnlyCents }, funds, warnings }`
+    - `400 SAME_FUND`.
+    - **D4:** a move into Profit with `amountCents` > profit-eligible limit and without `confirmSplit: true` → `409 SPLIT_CONFIRMATION_REQUIRED` `{ profitEligibleCents, cashOnlyCents, explanation }` (nothing posted). Resent with `confirmSplit: true` and `confirmedProfitEligibleCents` → the server recomputes; if the split changed meanwhile it answers `409 SPLIT_CONFIRMATION_REQUIRED` again with the new split; otherwise it posts one record with both parts.
+    - Negative fund balances only produce `warnings`.
+  - `POST /icecream/fund-moves/:id/void` — `422 VOID_BREAKS_RELEASE` for re-allocations and Cost↔Electricity moves when the void guard fails; releases can always be voided.
+  - `POST /icecream/payments` `{ businessDate, kind: "materials" | "electricity_bill" | "other_cost", fund, amountCents, category?, description, clientRef }` → `{ payment: { …, pnlTreatment: "settlement" | "expense" }, funds, warnings }` — `category: "electricity"` → `400 ELECTRICITY_NOT_ALLOWED` (use `kind: "electricity_bill"`). `pnlTreatment` is derived: `expense` only for `other_cost` paid from the Profit fund. · `POST /icecream/payments/:id/void`
+  - History: `GET /icecream/payments?from&to`, `GET /icecream/fund-moves?from&to`, `GET /icecream/funds/entries?fund&from&to` (complete fund ledger incl. reversals).
+- **P11/P12 Reports** (`?from&to&granularity=day|month&format=json|xlsx`): `/reports/pnl/shop|telecom|icecream|combined`, `/reports/cashbook/:book`, `/reports/transfers`, `/reports/inventory/valuation`, `/reports/stock-movements`, `/reports/stock-losses`, `/reports/product-profitability`, `/reports/low-stock`, `/reports/purchases`, `/reports/sales`, `/reports/drawings`, `/reports/printing-variance`, `/reports/icecream-funds`, `/dashboard`
+  - **D3 rule for every report that shows Ice Cream or Combined profit** (daily rows, monthly rows, any period, totals, dashboard) — BUSINESS_RULES §10.6: each row is computed **only from movements dated inside that row's period** and carries `recognizedProfitCents` (period), `excessCostNotChargedCents` (= change in uncovered excess during the period; may be negative), `profitAfterExcessCostCents` (= recognized − excess change). These three are additive (daily rows sum to the month). `outstandingExcessCostCents` (as of period end) is informational for the warning only and is never summed. A `warnings` entry `EXCESS_COST_OUTSTANDING` appears whenever outstanding excess > 0. Excess cost is never deducted from official profit.
+  - `/reports/pnl/icecream` (per day or month row and total) → `{ salesCents, materialsChargeCents, electricityChargeCents, otherExpensesCents, cashOverShortCents, recognizedProfitCents, recognition: { dailyProfitShareCents, profitEligibleReleasesCents, reallocationsCents, otherExpensesCents, cashOverShortCents }, memo: { actualMaterialsPaidCents, actualElectricityPaidCents, otherCostsFromCostElecFundsCents }, excessCostNotChargedCents, profitAfterExcessCostCents, balancesAsOfPeriodEnd: { unspentByLine: { materialsCents, electricityCents }, outstandingExcessCostCents }, warnings }` — charge lines are movements dated in the period; `recognition` components are signed contributions to profit (re-allocations negative); `balancesAsOfPeriodEnd` is never summed (a total row carries the value at `to`)`
+  - `/reports/icecream-funds` → per fund: opening, + allocations, + opening/capital/transfers in, ± moves (with profit-eligible / cash-only split), − payments, − drawings/transfers out, ± over/short, = closing; total = Ice Cream cash book; recognized profit, `excessCostNotChargedCents`, `profitAfterExcessCostCents` (period flows) and `outstandingExcessCostCents` with the warning, shown in a separate block from the fund balances.
+  - `/reports/pnl/combined` → `recognizedProfitCents` per segment (Shop, Telecom, Ice Cream) and combined (official), `electricityChargedCents` (Ice Cream electricity charge for the period) and `electricityBillsPaidCents` (memo) **plus** `icecreamExcessCostNotChargedCents` (period change), `combinedProfitAfterExcessCostCents`, `outstandingExcessCostCents`, the excess-cost warning, and an informational electricity line (E5).
+  - `/dashboard` → Ice Cream tile shows recognized profit, fund balances (separately) plus today's and this month's `excessCostNotChargedCents` / `profitAfterExcessCostCents` (period flows), `outstandingExcessCostCents` and the excess-cost warning when present.
+  - `/reports/backdated?from&to&book` → every record whose `businessDate` is earlier than the Colombo date of its `postedAt`, with both values, the record type, amount and the audit entry id.
+- **P13 Excel**: `GET /excel/opening-stock-template`, `POST /excel/opening-stock/preview`, `POST /excel/opening-stock/import` — `preview` and `import` take one `businessDate` for the opening stock (default today in Asia/Colombo); a future `businessDate` → `400 FUTURE_DATE_NOT_ALLOWED`; a future date in a row's date column is reported in the preview as an `import_issues` row with the R-FD message and that row is not imported.
+- **System**: `GET /go-live` (checklist status)
+
+`book` ∈ `shop | telecom | icecream`.
+
+---
+
+## Internal module contracts (Phase 1, server)
+
+These TypeScript signatures are the hand-off between agents. Relative imports use `.ts` extensions. Only erasable TS syntax.
+
+### `server/src/db/db.ts` (DB Architect)
+```ts
+import type { DatabaseSync } from 'node:sqlite';
+export class AppDatabase {
+  constructor(filePath: string);          // opens + applies PRAGMAs (journal_mode=WAL, foreign_keys=ON, busy_timeout=5000, synchronous=FULL)
+  readonly filePath: string;
+  get conn(): DatabaseSync;               // throws DB_CLOSED error if closed
+  get isOpen(): boolean;
+  tx<T>(fn: (conn: DatabaseSync) => T): T; // BEGIN IMMEDIATE / COMMIT; ROLLBACK + rethrow on error; nested call → SAVEPOINT/RELEASE
+  close(): void;                          // idempotent; checkpoints WAL (PRAGMA wal_checkpoint(TRUNCATE)) before closing
+  reopen(): void;                         // close() if open, then open again with PRAGMAs
+}
+export function openDatabase(filePath: string): DatabaseSync; // raw open + PRAGMAs (used by AppDatabase)
+```
+`tx()` must not use async functions (node:sqlite is synchronous); passing an async fn should throw.
+
+### `server/src/db/migrate.ts` (DB Architect)
+```ts
+import type { DatabaseSync } from 'node:sqlite';
+export interface MigrationFile { version: number; name: string; checksum: string; sql: string }
+export const MIGRATIONS_DIR: string;                       // absolute path to ./migrations
+export function loadMigrations(dir?: string): MigrationFile[];   // sorted; file names ^\d{3}_[a-z0-9_]+\.sql$; duplicate versions → throw
+export function checksumOf(sql: string): string;           // sha256 hex of text with CRLF→LF
+export function currentVersion(conn: DatabaseSync): number; // 0 if table missing/empty
+export function latestVersion(dir?: string): number;
+export function migrate(conn: DatabaseSync, dir?: string): { applied: string[]; version: number };
+// - creates schema_migrations IF NOT EXISTS
+// - for already-applied versions: checksum mismatch → throw Error code MIGRATION_CHECKSUM_MISMATCH
+// - each pending file runs inside its own transaction together with its schema_migrations insert
+// - database version > latestVersion → throw MIGRATION_DB_TOO_NEW
+export const REQUIRED_TABLES: readonly string[];            // ['schema_migrations','settings','audit_logs'] for Phase 1
+```
+
+### `server/src/repositories/settings.repo.ts` (DB Architect)
+```ts
+export interface SettingsRow { key: string; valueJson: string; updatedAt: string }
+export function getAllSettings(conn: DatabaseSync): SettingsRow[];
+export function getSetting(conn: DatabaseSync, key: string): SettingsRow | undefined;
+export function upsertSetting(conn: DatabaseSync, key: string, valueJson: string): void; // sets updated_at = now
+```
+
+### `server/src/repositories/audit.repo.ts` (DB Architect)
+```ts
+export interface AuditInsert { entity: string; entityId?: string | null; action: string; beforeJson?: string | null; afterJson?: string | null; note?: string | null }
+export interface AuditRow { id: number; at: string; entity: string; entityId: string | null; action: string; beforeJson: string | null; afterJson: string | null; note: string | null }
+export function insertAudit(conn: DatabaseSync, row: AuditInsert): number;   // returns id
+export function listAudit(conn: DatabaseSync, q: { entity?: string; limit: number; beforeId?: number }): AuditRow[]; // id DESC
+```
+
+### `server/src/lib/money.ts` (Backend)
+```ts
+export function isCents(n: unknown): n is number;                    // safe integer
+export function mulDivRound(a: number, b: number, c: number): number; // exact BigInt; half away from zero; c ≠ 0; all args safe integers; result must be safe integer else throw RangeError
+export function applyBp(amountCents: number, bp: number): number;    // mulDivRound(amountCents, bp, 10000)
+export function rupeesToCents(input: string | number): number;      // "1,320.50" → 132050, "15" → 1500, "-2.5" → -250; >2 decimals or junk → throw RangeError
+export function formatLKR(cents: number): string;                    // 1234567 → "Rs. 12,345.67"; -123450 → "-Rs. 1,234.50"; 0 → "Rs. 0.00"
+```
+
+### `server/src/lib/dates.ts` (Backend)
+```ts
+export const BUSINESS_TZ = 'Asia/Colombo';
+export function todayBusinessDate(now?: Date): string;  // YYYY-MM-DD in Asia/Colombo
+export function isIsoDate(s: string): boolean;          // strict YYYY-MM-DD and a real calendar date
+export function nowIso(): string;                       // new Date().toISOString()
+export function backupStamp(now?: Date): string;        // YYYYMMDD-HHmmss in Asia/Colombo
+```
+
+### `server/src/lib/errors.ts` (Backend)
+```ts
+export class AppError extends Error {
+  readonly statusCode: number; readonly code: string; readonly fields?: Record<string, string>;
+  constructor(statusCode: number, code: string, message: string, fields?: Record<string, string>);
+}
+```
+(Declare fields explicitly and assign in the constructor — parameter properties are not erasable.)
+
+### `server/src/app.ts` (Backend)
+```ts
+export interface AppOptions { dataDir: string; webDistDir?: string | null; logger?: boolean }
+export interface AppContext { database: AppDatabase; dataDir: string; backupsDir: string; dbPath: string; appVersion: string; isRestoring: boolean }
+export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance; ctx: AppContext }>;
+// - mkdir dataDir/backups; open <dataDir>/viman.db; migrate; register routes under /api/v1; static web if webDistDir exists
+// - does NOT create the startup backup (index.ts does) so tests control backups
+// - app.addHook('onClose') closes the database
+```
+
+### `server/src/services/backup.service.ts` (Backend)
+```ts
+export type BackupReason = 'startup' | 'manual' | 'pre-restore';
+export interface BackupInfo { name: string; reason: BackupReason; sizeBytes: number; createdAt: string }
+export const BACKUP_NAME_RE: RegExp;
+export const KEEP_REGULAR = 30; export const KEEP_PRE_RESTORE = 10;
+export function createBackup(ctx: AppContext, reason: BackupReason, now?: Date): BackupInfo; // VACUUM INTO tmp → rename; then rotate
+export function listBackups(ctx: AppContext): BackupInfo[];                                  // newest first
+export function rotateBackups(ctx: AppContext): string[];                                    // returns deleted names
+export function validateDatabaseFile(filePath: string): { schemaVersion: number };          // throws AppError(422, RESTORE_*)
+export function restoreFromFile(ctx: AppContext, sourcePath: string, label: string): { restoredFrom: string; safetyBackup: string; schemaVersion: number };
+```
