@@ -107,8 +107,83 @@ Backup name pattern: `^viman-\d{8}-\d{6}-(startup|manual|pre-restore)(-\d{1,3})?
 
 ---
 
+## Phase 2 endpoints — Catalog (categories, products, suppliers)
+
+Catalog data is **not financial**: no `clientRef`, no business date, no R-FD/R-RD. All writes are audited (`audit_logs`: entity `category` | `product` | `supplier`, `entityId` = id as text, action `create`/`update`, before/after = the full item JSON). No hard deletes — retire with `active: false`. Unchanged values in a PUT write no audit row. Stock fields are **read-only** here (always 0 in Phase 2); stock arrives with Phases 3/4/13.
+
+Numeric/boolean **query** params are strings validated in the route (no coercion): integers `^[0-9]{1,9}$`, booleans exactly `true` | `false`. Unknown query params → `400 VALIDATION_ERROR`. Path `:id` must be digits, else `400`; unknown id → `404 NOT_FOUND`.
+
+Common errors: `400 VALIDATION_ERROR` (fields keyed by JSON path), `404 NOT_FOUND`, `409 DUPLICATE_NAME` (`fields.name`, "Another … already uses this name." — comparison is case-insensitive, after trimming), `409 DUPLICATE_CODE` (`fields.code`).
+
+### Categories
+`Category` = `{ id, name, book: "shop"|"telecom", isDefault, active, productCount, createdAt, updatedAt }` (`productCount` = all products incl. inactive).
+
+- `GET /api/v1/categories?active=&book=` → `{ items: Category[] }` ordered by `book` (shop first), then `name`.
+- `POST /api/v1/categories` `{ name, book }` → `201 { item }`. `name` 1–60 trimmed; `book` required.
+- `PUT /api/v1/categories/:id` — any of `{ name, book, active }`, `minProperties: 1` → `200 { item }`.
+  - The 12 **default** categories (seeded by migration `003`) have `isDefault: true`: their `name` and `book` can never change → `409 DEFAULT_CATEGORY_LOCKED`. They may be deactivated/reactivated.
+  - `book` of an owner-created category can change only while `productCount = 0` → `409 CATEGORY_HAS_PRODUCTS`.
+  - Deactivating a category keeps its products; new products (or a product moved) cannot use an inactive category (`400 CATEGORY_INACTIVE`, `fields.categoryId`).
+
+Default categories (shop): Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other · (telecom): Scratch Cards.
+
+### Products
+`Product` = `{ id, code: string|null, name, description, categoryId, categoryName, kind: "stock"|"service", book: "shop"|"telecom", sellPriceCents, minPriceCents, reorderLevel, active, qtyOnHand, stockValueCents, avgUnitCostCents: number|null, lowStock, createdAt, updatedAt }`.
+- `book` is derived from the category (never sent by the client).
+- `avgUnitCostCents` = `mulDivRound(stockValueCents, 1, qtyOnHand)` when `qtyOnHand > 0`, else `null` (display only — BUSINESS_RULES §3).
+- `lowStock` = `kind = "stock" AND active AND reorderLevel > 0 AND qtyOnHand <= reorderLevel`.
+
+- `GET /api/v1/products?q=&book=&categoryId=&lowStock=&active=&limit=&offset=` → `{ items: Product[], total }`. `q`: case-insensitive substring of name **or** code (LIKE wildcards in `q` are escaped). `limit` 1–500 (default 100), `offset` ≥ 0. Order: `name` (case-insensitive), then `id`.
+- `GET /api/v1/products/:id` → `{ item }`.
+- `POST /api/v1/products` `{ code?, name, description?, categoryId, kind, sellPriceCents, minPriceCents, reorderLevel? }` → `201 { item }` (qty and value start at 0).
+  - `code`: optional, trimmed; empty string = no code; 1–30 chars; unique case-insensitively (`409 DUPLICATE_CODE`). `name` 1–120 trimmed. `description` 0–500 (default ""). `reorderLevel` integer ≥ 0 (default 0).
+  - `sellPriceCents`, `minPriceCents`: integers 0–`999999999`; **`minPriceCents ≤ sellPriceCents`** else `400` with `fields.minPriceCents` = "Minimum price cannot be higher than the selling price."
+  - `kind = "service"`: `reorderLevel` must be 0 (`fields.reorderLevel`); services never hold stock.
+  - `categoryId` must exist (`400 VALIDATION_ERROR` `fields.categoryId` "Choose a category.") and be active (`400 CATEGORY_INACTIVE`).
+- `PUT /api/v1/products/:id` — any of `{ code, name, description, categoryId, sellPriceCents, minPriceCents, reorderLevel, active }`, `minProperties: 1` → `200 { item }`. `code: null` or `""` clears the code.
+  - `kind` is **immutable** (sending it → `400`, `additionalProperties: false`). The category may change **only within the same book** (`400 CATEGORY_BOOK_MISMATCH`, `fields.categoryId`) — so `book` never changes.
+  - Price and `reorderLevel` rules are validated against the **merged** (existing + patch) values.
+  - Setting `active: false` is always allowed (stock history is never lost).
+
+### Suppliers
+`Supplier` = `{ id, name, phone, notes, active, createdAt, updatedAt }`.
+- `GET /api/v1/suppliers?q=&active=` → `{ items: Supplier[] }` (name order; `q` substring of name or phone).
+- `POST /api/v1/suppliers` `{ name, phone?, notes? }` → `201 { item }`. `name` 1–120; `phone` 0–30; `notes` 0–500.
+- `PUT /api/v1/suppliers/:id` — any of `{ name, phone, notes, active }`, `minProperties: 1` → `200 { item }`.
+
+### Internal module contracts (Phase 2, server)
+Repositories take the connection first, contain SQL only, map snake_case → camelCase, return plain numbers (convert bigint) and booleans (0/1 → boolean). Time stamps via SQL default / `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.
+
+`server/src/repositories/categories.repo.ts`
+```ts
+export interface CategoryRow { id: number; name: string; book: 'shop'|'telecom'; isDefault: boolean; active: boolean; productCount: number; createdAt: string; updatedAt: string }
+export function listCategories(conn, q: { active?: boolean; book?: 'shop'|'telecom' }): CategoryRow[];
+export function getCategory(conn, id: number): CategoryRow | undefined;
+export function findCategoryByName(conn, name: string): CategoryRow | undefined;      // case-insensitive
+export function insertCategory(conn, c: { name: string; book: 'shop'|'telecom' }): number;
+export function updateCategory(conn, id: number, patch: { name?: string; book?: 'shop'|'telecom'; active?: boolean }): void; // sets updated_at
+```
+`server/src/repositories/products.repo.ts`
+```ts
+export interface ProductRow { id; code: string|null; name; description; categoryId; categoryName; kind: 'stock'|'service'; book: 'shop'|'telecom'; sellPriceCents; minPriceCents; reorderLevel; active: boolean; qtyOnHand; stockValueCents; createdAt; updatedAt }
+export interface ProductQuery { q?: string; book?; categoryId?: number; lowStock?: boolean; active?: boolean; limit: number; offset: number }
+export function listProducts(conn, q: ProductQuery): { items: ProductRow[]; total: number };
+export function getProduct(conn, id: number): ProductRow | undefined;
+export function findProductByName(conn, name: string): ProductRow | undefined;       // case-insensitive
+export function findProductByCode(conn, code: string): ProductRow | undefined;       // case-insensitive
+export function insertProduct(conn, p: { code: string|null; name; description; categoryId; kind; book; sellPriceCents; minPriceCents; reorderLevel }): number;
+export function updateProduct(conn, id: number, patch: { code?: string|null; name?; description?; categoryId?; book?; sellPriceCents?; minPriceCents?; reorderLevel?; active?: boolean }): void; // sets updated_at
+```
+`server/src/repositories/suppliers.repo.ts` — `SupplierRow`, `listSuppliers(conn,{q?,active?})`, `getSupplier`, `findSupplierByName`, `insertSupplier(conn,{name,phone,notes})`, `updateSupplier(conn,id,patch)` (same conventions).
+
+Services (`server/src/services/catalog.service.ts` or one per entity) own validation, trimming, case-insensitive uniqueness checks, derived fields (`book`, `avgUnitCostCents`, `lowStock`), error codes and audit rows; each write runs inside one `database.tx()` together with its audit row. Routes are thin (JSON schema + call service). The database triggers/constraints in `003_catalog.sql` are the backstop: SQLite aborts surface as `INTERNAL_ERROR` only if the service missed a rule.
+
+Web types (`web/src/types/api.ts`) mirror the shapes above; money in the UI uses the Phase 1 converters (`rupeesToCents`, `formatLKR`).
+
+---
+
 ## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
-- **P2 Catalog**: `GET/POST /categories`, `PUT /categories/:id` · `GET /products?q=&book=&categoryId=&lowStock=&active=`, `POST /products`, `PUT /products/:id` · `GET/POST /suppliers`, `PUT /suppliers/:id`
+- **P2 Catalog**: specified above (Phase 2 endpoints).
 - **P3/P4 Inventory**: `POST /opening-stock` · `GET /products/:id/movements` · `POST /purchases`, `GET /purchases`, `GET /purchases/:id`, `POST /purchases/:id/void`, `POST /purchases/:id/returns` (R-RD) · `POST /stocktakes`, `GET /stocktakes`, `POST /stocktakes/:id/complete` · `POST /stock-losses`, `GET /stock-losses` · `GET /inventory/valuation`
 - **P5 Sales**: `POST /sales` (server splits a mixed cart by book), `GET /sales`, `GET /sales/:id`, `POST /sales/:id/void`, `POST /sales/:id/returns` (R-RD)
 - **P6 Telecom**: `GET/PUT /reload-providers` · `POST/GET /reload-sales` · `POST/GET /ezcash-sales` · `POST/GET /telecom/topups`

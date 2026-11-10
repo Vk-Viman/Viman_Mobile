@@ -14,7 +14,7 @@ Migrations live in `server/src/db/migrations/NNN_name.sql`. Each phase adds its 
 |---|---|---|
 | `001_foundation.sql` | 1 | **implemented in Phase 1** |
 | `002_audit_append_only.sql` | 1 (final review) | **implemented** — triggers block UPDATE/DELETE on `audit_logs` |
-| `003_catalog.sql` … | 2+ | planned |
+| `003_catalog.sql` | 2 | categories (+12 seeded defaults), products, suppliers + triggers (in progress) |
 | Phase 8 migration (planned) | 8 | `ALTER TABLE audit_logs ADD COLUMN business_date TEXT NULL` + `ADD COLUMN backdated INTEGER NOT NULL DEFAULT 0` + index on `business_date` — additive; leaves 001/002 and the append-only triggers untouched |
 
 ---
@@ -59,10 +59,10 @@ Notes:
 
 **Book** = `TEXT CHECK (book IN ('shop','telecom','icecream'))`. **Status** for business documents = `TEXT CHECK (status IN ('posted','void'))`.
 
-### Phase 2 — catalog
-- `categories(id, name UNIQUE, book shop|telecom, is_default, active, created_at, updated_at)` — 12 defaults: Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other (shop) and Scratch Cards (telecom).
-- `products(id, code UNIQUE NULL, name UNIQUE (case-insensitive), description, category_id FK, kind stock|service, book shop|telecom, sell_price_cents, min_price_cents, reorder_level, active, qty_on_hand, stock_value_cents, created_at, updated_at)` with `CHECK (qty_on_hand >= 0 AND stock_value_cents >= 0)`; `book` must equal its category's book (service rule).
-- `suppliers(id, name UNIQUE, phone, notes, active, created_at, updated_at)`.
+### Phase 2 — catalog (migration `003_catalog.sql`)
+- `categories(id, name UNIQUE COLLATE NOCASE, book shop|telecom, is_default, active, created_at, updated_at)` — triggers: `BEFORE UPDATE OF name, book` on `is_default = 1` aborts `DEFAULT_CATEGORY_LOCKED`; `BEFORE UPDATE OF book` aborts `CATEGORY_HAS_PRODUCTS` when products exist — 12 defaults: Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other (shop) and Scratch Cards (telecom).
+- `products(id, code UNIQUE NULL, name UNIQUE (case-insensitive), description, category_id FK, kind stock|service, book shop|telecom, sell_price_cents, min_price_cents, reorder_level, active, qty_on_hand, stock_value_cents, created_at, updated_at)` with `CHECK (qty_on_hand >= 0 AND stock_value_cents >= 0)`, `CHECK (kind = 'stock' OR (qty_on_hand = 0 AND stock_value_cents = 0))`, `CHECK (sell_price_cents >= 0 AND min_price_cents >= 0 AND min_price_cents <= sell_price_cents AND reorder_level >= 0)`, `CHECK (code IS NULL OR length(code) > 0)`; `name` and `code` use `COLLATE NOCASE` unique constraints. Triggers: `BEFORE INSERT` / `BEFORE UPDATE OF category_id, book` abort `PRODUCT_BOOK_MISMATCH` unless `book` = the category's book; `BEFORE UPDATE OF kind, book` aborts `PRODUCT_KIND_IMMUTABLE` (kind and book never change after creation). Indexes: `category_id`, `(active, name)`.
+- `suppliers(id, name UNIQUE COLLATE NOCASE, phone, notes, active, created_at, updated_at)`. The 12 default categories are seeded by the migration (`is_default = 1`). Restore validation keeps requiring only the Phase 1 tables (`REQUIRED_TABLES`), because later tables arrive via `migrate()` after a restore.
 
 ### Phase 3/4 — inventory
 - `stock_movements(id, product_id FK, at, business_date, type opening|purchase|purchase_return|purchase_void|sale|sale_return|sale_void|personal_use|loss|stocktake_gain|stocktake_loss|adjustment, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason)` — append-only; SUM(qty_delta)/SUM(value_delta_cents) per product must equal the product cache.
