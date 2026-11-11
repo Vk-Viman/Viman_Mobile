@@ -428,7 +428,7 @@ describe('POST /excel/opening-stock/import - same file, clientRef, date', () => 
   it('clientRef is required and must have the right shape', async () => {
     const s = await setup();
     const file = await xlsx([['A', 'a', 1, 1]]);
-    for (const fields of [{ businessDate: today() }, { businessDate: today(), clientRef: 'short' }, { businessDate: today(), clientRef: 'bad ref with spaces!' }]) {
+    for (const fields of [{ businessDate: today() } as Record<string, string>,{ businessDate: today(), clientRef: 'short' }, { businessDate: today(), clientRef: 'bad ref with spaces!' }]) {
       const r = await upload(s, 'import', { name: 'f.xlsx', content: file }, fields);
       expect(r.status).toBe(400);
       expect(err(r).fields).toHaveProperty('clientRef');
