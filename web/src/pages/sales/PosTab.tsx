@@ -6,6 +6,9 @@
  *  - Money is integer cents; totals shown are integer sums, the server recomputes COGS, profit and everything else.
  *  - A mixed cart (Shop goods + Telecom scratch cards) is saved as one Shop sale and one Telecom sale.
  *  - Sale date: default today (from GET /health), `max = today` (R-FD); backdating is allowed and audited.
+ *  - C13: each line shows the automatic cost per unit (editable upward only). `unitCostCents` is sent ONLY for lines
+ *    whose cost the cashier changed; otherwise it is omitted so the server uses its exact automatic cost.
+ *    COST_BELOW_AUTOMATIC is shown under that line's cost input.
  *  - Below-minimum / below-cost prices only WARN (R13); the server's warnings are listed after saving.
  *  - IDEMPOTENCY: one `clientRef` per sale-in-progress. It is created when the sale starts and replaced only after a
  *    successful save ("New sale" remounts the session below with a fresh one). So if the network drops after the
@@ -23,7 +26,7 @@ import { useClientRef } from '../../hooks/useClientRef';
 import { errorBanner } from '../../lib/errors';
 import type { Product, Sale, Warning } from '../../types/api';
 import { CartTable } from './CartTable';
-import { cartIsValid, lineFromProduct, linePriceCents, lineQty, MAX_CART_LINES } from './cart';
+import { cartIsValid, costToSend, lineFromProduct, linePriceCents, lineQty, MAX_CART_LINES } from './cart';
 import type { CartLine } from './cart';
 import { ProductPicker } from './ProductPicker';
 import { SaleResult } from './SaleResult';
@@ -64,7 +67,7 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
       return next;
     });
   };
-  const changeLine = (i: number, patch: Partial<Pick<CartLine, 'qty' | 'price'>>) => {
+  const changeLine = (i: number, patch: Partial<Pick<CartLine, 'qty' | 'price' | 'cost'>>) => {
     setErr(null);
     setLines((prev) => prev.map((l, k) => (k === i ? { ...l, ...patch } : l)));
   };
@@ -79,9 +82,12 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
   // ---- Server errors: per-line messages (items.N.*) are shown on their row, the date under the date field ----
   const fe = err instanceof ApiError ? err.fields : {};
   const lineErrors: Record<number, string> = {};
+  const costErrors: Record<number, string> = {};
   for (const [k, m] of Object.entries(fe)) {
-    const hit = /^items\.(\d+)\./.exec(k);
-    if (hit) lineErrors[Number(hit[1])] = m;
+    const hit = /^items\.(\d+)\.(\w+)$/.exec(k);
+    if (!hit) continue;
+    // The cost message belongs under the cost input; every other line message highlights the row.
+    (hit[2] === 'unitCostCents' ? costErrors : lineErrors)[Number(hit[1])] = m;
   }
   const handled = Object.keys(fe).filter((k) => k === 'businessDate' || k.startsWith('items.'));
   // A future-date error is already shown under the date picker (the server message, unchanged); do not repeat it.
@@ -96,7 +102,15 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
       {
         businessDate: effDate,
         // Cart order is kept: the server numbers lines, warnings and errors by this position.
-        items: submitted.map((l) => ({ productId: l.productId, qty: lineQty(l) as number, unitPriceCents: linePriceCents(l) as number })),
+        items: submitted.map((l) => {
+          const unitCostCents = costToSend(l);
+          return {
+            productId: l.productId,
+            qty: lineQty(l) as number,
+            unitPriceCents: linePriceCents(l) as number,
+            ...(unitCostCents !== undefined ? { unitCostCents } : {}),
+          };
+        }),
         ...(notes.trim() ? { notes: notes.trim() } : {}),
         clientRef,
       },
@@ -129,7 +143,7 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
             {lines.length === 0 ? (
               <EmptyState title="The cart is empty" hint="Search for a product and press Enter, or click it in the list." />
             ) : (
-              <CartTable lines={lines} onChange={changeLine} onRemove={removeLine} lineErrors={lineErrors} disabled={create.isPending} />
+              <CartTable lines={lines} onChange={changeLine} onRemove={removeLine} lineErrors={lineErrors} costErrors={costErrors} disabled={create.isPending} />
             )}
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">

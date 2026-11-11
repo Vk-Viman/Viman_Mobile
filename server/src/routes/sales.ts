@@ -3,7 +3,7 @@
  *
  * Layer: route (thin). Validates the request shape with JSON schema (no type coercion), calls
  * `sales.service.ts`, shapes the response. All business rules (cart split by book, weighted-average COGS,
- * R13 warnings, R1 void, C5 return values, R-FD, R-RD) are in the services.
+ * C13 extra cost, R13 warnings, R1 void, C5 return values, R-FD, R-RD) are in the services.
  *
  *   POST /sales                  save a cart (201 { sales, warnings }; 200 when `clientRef` was already used)
  *   GET  /sales                  list with filters and totals     GET /sales/:id   one sale
@@ -27,6 +27,8 @@ const MAX_PAGE_SIZE = 200;
 const MAX_LINES = 100;
 const MAX_QTY = 1000000;
 const MAX_UNIT_PRICE_CENTS = 999999999;
+/** Same ceiling for the optional per-unit cost (C13). */
+const MAX_UNIT_COST_CENTS = MAX_UNIT_PRICE_CENTS;
 
 const listQuery = {
   type: 'object',
@@ -60,6 +62,8 @@ const createBody = {
           productId: { type: 'integer', minimum: 1 },
           qty: { type: 'integer', minimum: 1, maximum: MAX_QTY },
           unitPriceCents: { type: 'integer', minimum: 0, maximum: MAX_UNIT_PRICE_CENTS },
+          // C13: optional cost per unit to charge (never below the automatic cost; the service enforces that).
+          unitCostCents: { type: 'integer', minimum: 0, maximum: MAX_UNIT_COST_CENTS },
         },
       },
     },

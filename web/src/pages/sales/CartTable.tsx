@@ -1,11 +1,15 @@
 /**
- * CartTable: the cart of the POS (right half). One row per product: quantity, unit price (editable), line total.
+ * CartTable: the cart of the POS (right half). One row per product: quantity, unit price (editable), cost per unit
+ * (editable upward only, C13), line total.
  * Where: Sales > POS. No API calls; it edits the cart state owned by PosTab.
  * Rules shown here (all advisory, the server decides):
  *  - quantity is a whole number >= 1; a hint shows stock on hand and an inline warning appears above it
  *    (the server may still refuse with INSUFFICIENT_STOCK);
  *  - unit price is typed in rupees and converted to integer cents (lib/units.ts); a price below the product's
  *    minimum price shows a warning but never blocks the sale (R13);
+ *  - cost per unit is filled from the product's automatic (average) cost and may only be raised (BUSINESS_RULES C13);
+ *    typing less shows an inline message and Save stays disabled; the read-only "Extra cost" is (typed - automatic) x qty
+ *    as an integer estimate (the server's figure is authoritative);
  *  - line totals and per-book subtotals are integer sums (cart.ts).
  */
 import { Trash2 } from 'lucide-react';
@@ -14,16 +18,18 @@ import { BookBadge } from '../../components/StatusBadges';
 import { TextField } from '../../components/TextField';
 import { BOOK_LABEL } from '../../lib/constants';
 import type { Book } from '../../types/api';
-import { bookSubtotalCents, linePriceCents, lineQty, lineTotalCents } from './cart';
+import { bookSubtotalCents, lineCostError, lineExtraCostCents, linePriceCents, lineQty, lineTotalCents } from './cart';
 import type { CartLine } from './cart';
 
 interface Props {
   lines: CartLine[];
   /** Merge `patch` into the line at `index`. */
-  onChange: (index: number, patch: Partial<Pick<CartLine, 'qty' | 'price'>>) => void;
+  onChange: (index: number, patch: Partial<Pick<CartLine, 'qty' | 'price' | 'cost'>>) => void;
   onRemove: (index: number) => void;
   /** Server messages per line index (e.g. INSUFFICIENT_STOCK from `fields["items.N.qty"]`); those rows are highlighted. */
   lineErrors: Record<number, string>;
+  /** Server messages for the cost input per line index (COST_BELOW_AUTOMATIC, `fields["items.N.unitCostCents"]`). */
+  costErrors?: Record<number, string>;
   /** Disables editing while the sale is being saved. */
   disabled?: boolean;
 }
@@ -31,7 +37,7 @@ interface Props {
 const BOOKS: Book[] = ['shop', 'telecom'];
 
 /** Cart rows plus the per-book subtotals and the grand total. */
-export function CartTable({ lines, onChange, onRemove, lineErrors, disabled }: Props) {
+export function CartTable({ lines, onChange, onRemove, lineErrors, costErrors = {}, disabled }: Props) {
   const grand = BOOKS.reduce((sum, b) => sum + bookSubtotalCents(lines, b), 0);
   return (
     <div className="space-y-3">
@@ -42,6 +48,7 @@ export function CartTable({ lines, onChange, onRemove, lineErrors, disabled }: P
               <th scope="col" className="px-2 py-2 text-left">Product</th>
               <th scope="col" className="px-2 py-2 text-right">Qty</th>
               <th scope="col" className="px-2 py-2 text-right">Unit price (Rs.)</th>
+              <th scope="col" className="px-2 py-2 text-right">Cost per unit (Rs.)</th>
               <th scope="col" className="px-2 py-2 text-right">Line total</th>
               <th scope="col" className="px-2 py-2"><span className="sr-only">Remove</span></th>
             </tr>
@@ -52,6 +59,8 @@ export function CartTable({ lines, onChange, onRemove, lineErrors, disabled }: P
               const price = linePriceCents(l);
               const total = lineTotalCents(l);
               const serverErr = lineErrors[i];
+              const extra = lineExtraCostCents(l);
+              const costErr = lineCostError(l) ?? costErrors[i];
               const overStock = qty !== null && qty > l.onHand;
               const belowMin = price !== null && l.minPriceCents > 0 && price < l.minPriceCents;
               return (
@@ -90,6 +99,22 @@ export function CartTable({ lines, onChange, onRemove, lineErrors, disabled }: P
                       className="[&_input]:text-right [&_input]:tabular-nums"
                     />
                     {belowMin && <p className="mt-1 text-xs text-amber-700">Below the minimum price (<Money cents={l.minPriceCents} />). You can still sell.</p>}
+                  </td>
+                  <td className="w-40 px-2 py-2 text-right">
+                    <TextField
+                      label={`Cost per unit of ${l.name} in rupees`}
+                      hideLabel
+                      inputMode="decimal"
+                      value={l.cost}
+                      disabled={disabled}
+                      onChange={(e) => onChange(i, { cost: e.target.value })}
+                      error={costErr}
+                      hint={l.autoCostCents === null ? 'No cost yet' : undefined}
+                      className="[&_input]:text-right [&_input]:tabular-nums"
+                    />
+                    {extra !== null && extra > 0 && (
+                      <p className="mt-1 text-xs text-slate-600">Extra cost: <Money cents={extra} /></p>
+                    )}
                   </td>
                   <td className="px-2 py-2 text-right">{total === null ? '—' : <Money cents={total} className="font-medium" />}</td>
                   <td className="px-2 py-2 text-right">

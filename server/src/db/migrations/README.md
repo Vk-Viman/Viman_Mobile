@@ -214,3 +214,23 @@ Damaged returns (`stock_losses`):
 **What it adds:** one `BEFORE DELETE` trigger per table that aborts with `RECORD_DELETE_FORBIDDEN` — `purchases`, `purchase_items`, `stocktakes`, `stock_losses`, `owner_drawings`, `sales`, `sale_items`. 
 
 **Not covered on purpose:** `stocktake_items` (a draft count sheet is rewritten by delete + insert; completed/void sheets are already frozen by migration 005) and the catalogue tables (master data, retired with `active = 0`).
+
+
+## 008_sale_extra_cost.sql - extra cost on sales (Phase 5 amendment, BUSINESS_RULES C13)
+
+**Why:** when a sale is recorded the cost fills in automatically (weighted average), but the cashier may raise it per unit, never lower it. The part above the automatic cost is the line's **extra cost**. It counts as cost whenever cost is calculated (profit = revenue - automatic cost - extra cost), but it never touches stock, stock movements or cash.
+
+**What it adds (additive `ALTER TABLE ... ADD COLUMN`, existing rows get 0):**
+
+| Column | Purpose |
+|---|---|
+| `sale_items.extra_cost_cents` | Cost charged above the automatic cost (`cogs_cents`) for the line. `NOT NULL DEFAULT 0 CHECK (>= 0)`. |
+| `sales_return_items.extra_cost_cents` | The share of that extra reversed by one returned line (same exact-remainder split as revenue, C5). |
+| `sales_returns.extra_cost_reversed_cents` | Sum of the extra reversed by the lines of one return. |
+
+**Triggers:**
+
+- `trg_sale_items_extra_cost_immutable` (`SALE_ITEM_IMMUTABLE`): the immutability trigger of migration 006 predates the column, so this one freezes `extra_cost_cents` of a saved line.
+- `trg_sales_return_items_extra_exceeds` (`RETURN_EXCEEDS_EXTRA_COST`): backstop - earlier return lines of the same sale line plus the new one may not exceed the line's extra cost.
+
+Return tables stay append-only (migration 006 triggers). SQLite accepts `ADD COLUMN ... NOT NULL DEFAULT 0 CHECK (...)` on existing tables, and checks the CHECK against existing rows only for new writes, which is fine because the default 0 satisfies it.

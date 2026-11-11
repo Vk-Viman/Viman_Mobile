@@ -81,3 +81,11 @@
 
 ## Housekeeping check (2026-11-11, before Phase 6)
 - Local and remote `main` identical; working tree clean; no `data/` folder in the project (first launch starts with an empty database containing only the 12 built-in categories).
+
+## Phase 5 amendment — editable sale cost / extra cost, rule C13 (2026-11-11)
+- **Owner rule C13:** a sale line's cost fills in automatically at the weighted-average value; the cashier may **raise** it (never lower) — e.g. automatic Rs 37.40 → Rs 38. Profit uses the cost charged; the difference is the line's **extra cost**, shown under cost and included whenever cost is calculated. Stock leaves at the true average (stock and reconciliation unaffected); no stock movement, cash entry or balance for the extra.
+- **Database (schema v8):** migration 008 — `extra_cost_cents` on sale items and return items, `extra_cost_reversed_cents` on returns, immutability trigger, over-reversal backstop. Migrations 001–007 untouched.
+- **API:** optional `unitCostCents` per cart line; `COST_BELOW_AUTOMATIC` (422, nothing saved, message names the minimum); sales/returns/totals gain extra-cost fields; returns reverse the extra with the same exact-remainder split (C5); resalable returns restock and damaged-return losses use the automatic cost only.
+- **Web:** POS cart "Cost per unit" field (auto-filled, raise only), extra cost shown on the result, history, detail and returns.
+- **Tests:** 38 files, **798 passing** (47 new). Typecheck clean; production build OK.
+- **Browser (Playwright, launcher cold start):** charger with automatic Rs 37.40: cost field auto-filled; Rs 37 refused ("can only be increased", Save disabled); Rs 38 on 5 units → extra Rs 3.00, cost Rs 190.00 (automatic Rs 187.00 + extra Rs 3.00), profit Rs 310; stock left at Rs 187.00; return of 2 reversed extra Rs 1.20 and restocked at the automatic Rs 74.80; reconciliation OK; 0 console errors.

@@ -6,7 +6,9 @@
  * Business rules reflected here:
  *  - C5: a sale line's `cogsCents` is the stock value removed when it was sold and is only ever READ here;
  *        `unitCostCents` is the display-only snapshot `mulDivRound(cogs, 1, qty)`.
- *  - Section 4: `grossProfitCents = totalCents - cogsCents`, before returns (returns are listed on their own).
+ *  - C13: a line may carry an `extraCostCents` (cost charged above the automatic cost); `chargedCostCents` =
+ *        automatic + extra. Section 4 / C13: `grossProfitCents = totalCents - chargedCostCents`, before returns
+ *        (returns are listed on their own).
  *  - Section 12: every record carries `businessDate`, the server `postedAt` and the `backdated` flag.
  *  - R-FD / R-RD / R1 safety net: `runSalesWrite` runs one transaction and turns database trigger aborts into the
  *        contract's error envelopes should a service check ever be missed.
@@ -14,7 +16,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
-import { mulDivRound } from '../lib/money.ts';
+import { formatLKR, mulDivRound } from '../lib/money.ts';
 import {
   getSale, listSaleItems, listSaleReturnItems, listSaleReturns,
 } from '../repositories/sales.repo.ts';
@@ -23,29 +25,30 @@ import type {
 } from '../repositories/sales.repo.ts';
 import { returnBeforeOriginalError } from './return-rules.ts';
 import { runWrite } from './stock-common.ts';
-import { futureDateError, isBackdated, notFound } from './validation.ts';
+import { futureDateError, isBackdated, notFound, validationError } from './validation.ts';
 
 /** One sold line as returned by the API. */
 export interface SaleItem {
   id: number; lineNo: number; lineType: SaleLineType; productId: number; productName: string;
   productCode: string | null; qty: number; unitPriceCents: number; unitCostCents: number;
-  revenueCents: number; cogsCents: number; returnedQty: number;
+  revenueCents: number; cogsCents: number; extraCostCents: number; chargedCostCents: number; returnedQty: number;
 }
 /** One returned line: the revenue and cost portions reversed (C5) and whether the goods went back on the shelf. */
 export interface SaleReturnLine {
   id: number; saleItemId: number; productId: number; productName: string; qty: number; resalable: boolean;
-  revenueCents: number; cogsCents: number;
+  revenueCents: number; cogsCents: number; extraCostCents: number;
 }
 /** A customer return as returned by the API. */
 export interface SaleReturn {
   id: number; saleId: number; businessDate: string; postedAt: string; backdated: boolean; refundCents: number;
-  cogsReversedCents: number; note: string; clientRef: string; items: SaleReturnLine[];
+  cogsReversedCents: number; extraCostReversedCents: number; note: string; clientRef: string; items: SaleReturnLine[];
 }
 /** A sale with its lines and returns, as returned by the API. */
 export interface Sale {
   id: number; businessDate: string; postedAt: string; backdated: boolean; book: SaleBook; totalCents: number;
-  cogsCents: number; grossProfitCents: number; status: SaleStatus; notes: string; voidedAt: string | null;
-  voidReason: string | null; clientRef: string; items: SaleItem[]; returns: SaleReturn[];
+  cogsCents: number; extraCostCents: number; chargedCostCents: number; grossProfitCents: number; status: SaleStatus;
+  notes: string; voidedAt: string | null; voidReason: string | null; clientRef: string; items: SaleItem[];
+  returns: SaleReturn[];
 }
 
 /** Cash-ledger type of the money taken for a sale, per book (BUSINESS_RULES section 2). */
@@ -63,7 +66,8 @@ function toItem(i: SaleItemRow): SaleItem {
   return {
     id: i.id, lineNo: i.lineNo, lineType: i.lineType, productId: i.productId, productName: i.productName,
     productCode: i.productCode, qty: i.qty, unitPriceCents: i.unitPriceCents, unitCostCents: i.unitCostCents,
-    revenueCents: i.revenueCents, cogsCents: i.cogsCents, returnedQty: i.returnedQty,
+    revenueCents: i.revenueCents, cogsCents: i.cogsCents, extraCostCents: i.extraCostCents,
+    chargedCostCents: i.cogsCents + i.extraCostCents, returnedQty: i.returnedQty,
   };
 }
 
@@ -72,19 +76,23 @@ export function toSaleReturn(conn: DatabaseSync, r: SaleReturnRow): SaleReturn {
   return {
     id: r.id, saleId: r.saleId, businessDate: r.businessDate, postedAt: r.postedAt,
     backdated: isBackdated(r.businessDate, r.postedAt), refundCents: r.refundCents,
-    cogsReversedCents: r.cogsReversedCents, note: r.note, clientRef: r.clientRef,
+    cogsReversedCents: r.cogsReversedCents, extraCostReversedCents: r.extraCostReversedCents, note: r.note,
+    clientRef: r.clientRef,
     items: listSaleReturnItems(conn, r.id).map((i) => ({
       id: i.id, saleItemId: i.saleItemId, productId: i.productId, productName: i.productName, qty: i.qty,
       resalable: i.resalable, revenueCents: i.revenueCents, cogsCents: i.cogsCents,
+      extraCostCents: i.extraCostCents,
     })),
   };
 }
 
-/** Builds the API shape of a sale (adds lines, returns, gross profit and the `backdated` flag). */
+/** Builds the API shape of a sale (adds lines, returns, charged cost, gross profit and the `backdated` flag). */
 export function toSale(conn: DatabaseSync, h: SaleRow): Sale {
   return {
     id: h.id, businessDate: h.businessDate, postedAt: h.postedAt, backdated: isBackdated(h.businessDate, h.postedAt),
-    book: h.book, totalCents: h.totalCents, cogsCents: h.cogsCents, grossProfitCents: h.totalCents - h.cogsCents,
+    book: h.book, totalCents: h.totalCents, cogsCents: h.cogsCents, extraCostCents: h.extraCostCents,
+    chargedCostCents: h.cogsCents + h.extraCostCents,
+    grossProfitCents: h.totalCents - (h.cogsCents + h.extraCostCents),
     status: h.status, notes: h.notes, voidedAt: h.voidedAt, voidReason: h.voidReason, clientRef: h.clientRef,
     items: listSaleItems(conn, h.id).map(toItem),
     returns: listSaleReturns(conn, h.id).map((r) => toSaleReturn(conn, r)),
@@ -117,6 +125,10 @@ function mapSalesAbort(err: unknown, originalDate?: string): never {
   if (msg.includes('SALE_VOID')) {
     throw new AppError(409, 'SALE_VOID', 'This sale has been voided, so it cannot be returned.');
   }
+  if (msg.includes('RETURN_EXCEEDS_EXTRA_COST')) {
+    // C13 backstop: returnPortion never takes more than what remains, so this only fires if a check was missed.
+    throw new AppError(422, 'RETURN_EXCEEDS_SOLD', 'You cannot return more than was sold.');
+  }
   if (msg.includes('RETURN_EXCEEDS_SOLD')) {
     throw new AppError(422, 'RETURN_EXCEEDS_SOLD', 'You cannot return more than was sold.');
   }
@@ -141,6 +153,38 @@ export function runSalesWrite<T>(ctx: AppContext, fn: (conn: DatabaseSync) => T,
     if (err instanceof AppError) throw err;
     return mapSalesAbort(err, originalDate?.());
   }
+}
+
+/** Text of the C13 refusal; the contract writes the amount as `Rs X.XX` (formatLKR gives `Rs. X.XX`). */
+function belowAutomaticMessage(minUnitCostCents: number): string {
+  const amount = formatLKR(minUnitCostCents).replace('Rs. ', 'Rs ');
+  return `The cost cannot be lower than the automatic cost (${amount} per unit). You can only increase it.`;
+}
+
+/**
+ * C13: the extra cost of a sale line when the cashier entered a cost per unit.
+ * The charged cost is `qty x enteredUnitCost` and must not be below the automatic cost the stock engine removed
+ * (`cogsCents`). Cost is only ever raised, so the extra cost is never negative.
+ *
+ * @param cogsCents  Automatic cost of the whole line (value removed from stock).
+ * @param qty        Units on the line (>= 1).
+ * @param enteredUnitCostCents Cost per unit typed by the cashier, in cents.
+ * @param fieldKey   Field name for the error, e.g. `items.2.unitCostCents`.
+ * @returns The extra cost in cents (`charged - cogsCents`, 0 when equal).
+ * @throws AppError 422 COST_BELOW_AUTOMATIC (`fields[fieldKey]`, `minUnitCostCents` = ceil(cogs / qty)),
+ *   400 VALIDATION_ERROR when the charged cost is too large to add up safely.
+ */
+export function extraCostFor(cogsCents: number, qty: number, enteredUnitCostCents: number, fieldKey: string): number {
+  const charged = qty * enteredUnitCostCents;
+  if (!Number.isSafeInteger(charged)) throw validationError({ [fieldKey]: 'This line cost is too large.' });
+  if (charged < cogsCents) {
+    // Exact integer ceil(cogs / qty): no floating point, so large amounts cannot round the wrong way.
+    const rest = cogsCents % qty;
+    const minUnitCostCents = (cogsCents - rest) / qty + (rest > 0 ? 1 : 0);
+    const message = belowAutomaticMessage(minUnitCostCents);
+    throw new AppError(422, 'COST_BELOW_AUTOMATIC', message, { [fieldKey]: message }, { minUnitCostCents });
+  }
+  return charged - cogsCents;
 }
 
 /** Rounded unit cost of a snapshot (display only). */

@@ -2,11 +2,12 @@
  * services/sales-returns.service.ts - customer returns against a sale (full or partial, resalable or damaged).
  *
  * Layer: service (route -> SERVICE -> repository -> database). Business rules implemented here:
- *  - R5 / C5: the revenue and cost (COGS) of a returned line are split proportionally; the return that brings the
- *         line's cumulative returned quantity to its full quantity takes the exact remainder of BOTH, so the
+ *  - R5 / C5 / C13: the revenue, cost (COGS) and extra cost of a returned line are split proportionally; the return
+ *         that brings the line's cumulative returned quantity to its full quantity takes the exact remainder of ALL
+ *         THREE, so the
  *         returns of a line always add up to the line with no rounding gap (`returnPortion`).
  *  - Resalable goods go back on the shelf at the ORIGINAL snapshot cost (`sale_return` movement, value = COGS
- *         portion), so the pool value rises by exactly the cost that left it.
+ *         portion; the extra cost never entered stock, so it is not restocked), so the pool value rises by exactly the cost that left it.
  *  - Damaged goods write NO stock movement (nothing goes back on the shelf). Instead exactly ONE `stock_losses`
  *         row per damaged line records the written-off cost, so the loss is counted once (section 4, R2) - the
  *         revenue and COGS reversal alone would otherwise hide it.
@@ -48,6 +49,7 @@ export interface SaleReturnCreate {
 /** A requested line matched to its sale line, with the C5 portions worked out. */
 interface PricedLine {
   index: number; item: SaleItemRow; qty: number; resalable: boolean; revenueCents: number; cogsCents: number;
+  extraCostCents: number;
 }
 
 /**
@@ -82,7 +84,7 @@ function assertWithinSold(lines: ReturnType<typeof matchSaleItems>): void {
   }
 }
 
-/** C5: works out the revenue and COGS portion of every line from what earlier returns already took back. */
+/** C5 / C13: works out the revenue, COGS and extra-cost portion of every line from what earlier returns already took back. */
 function priceLines(conn: DatabaseSync, lines: ReturnType<typeof matchSaleItems>): PricedLine[] {
   return lines.map((l) => {
     const so = returnedAmountsSoFar(conn, l.item.id);
@@ -90,13 +92,15 @@ function priceLines(conn: DatabaseSync, lines: ReturnType<typeof matchSaleItems>
       ...l,
       revenueCents: returnPortion(l.item.revenueCents, l.qty, l.item.qty, so.qty, so.revenueCents),
       cogsCents: returnPortion(l.item.cogsCents, l.qty, l.item.qty, so.qty, so.cogsCents),
+      extraCostCents: returnPortion(l.item.extraCostCents, l.qty, l.item.qty, so.qty, so.extraCostCents),
     };
   });
 }
 
 /**
- * Writes the stock side of one returned line: a resalable line restocks at the COGS portion; a damaged line
- * writes NO movement and one `damaged_return` loss row instead.
+ * Writes the stock side of one returned line: a resalable line restocks at the AUTOMATIC cost portion only; a
+ * damaged line writes NO movement and one `damaged_return` loss row (automatic cost only) instead. The C13 extra
+ * cost never entered stock, so it never comes back to it.
  *
  * @param lossNo 1-based number of this damaged line within the return (makes the loss `clientRef` unique).
  */
@@ -126,14 +130,16 @@ function writeReturn(
 ): number {
   const refundCents = lines.reduce((sum, l) => sum + l.revenueCents, 0);
   const cogsReversedCents = lines.reduce((sum, l) => sum + l.cogsCents, 0);
+  const extraCostReversedCents = lines.reduce((sum, l) => sum + l.extraCostCents, 0);
   const returnId = insertSaleReturn(conn, {
-    saleId: sale.id, businessDate: body.businessDate, refundCents, cogsReversedCents, note, clientRef: body.clientRef,
+    saleId: sale.id, businessDate: body.businessDate, refundCents, cogsReversedCents, extraCostReversedCents, note,
+    clientRef: body.clientRef,
   });
   // The DB trigger compares a new return line with (qty - returned_qty), so the lines go in BEFORE the counter moves.
   for (const l of lines) {
     insertSaleReturnItem(conn, {
       salesReturnId: returnId, saleItemId: l.item.id, qty: l.qty, resalable: l.resalable,
-      revenueCents: l.revenueCents, cogsCents: l.cogsCents,
+      revenueCents: l.revenueCents, cogsCents: l.cogsCents, extraCostCents: l.extraCostCents,
     });
     addReturnedQty(conn, l.item.id, l.qty);
   }

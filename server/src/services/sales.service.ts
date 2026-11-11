@@ -8,6 +8,8 @@
  *         so the same product on two lines is checked cumulatively. The value removed is the line's frozen
  *         `cogsCents`; the unit cost is only a display snapshot. Later purchases never change an old sale.
  *  - Section 2: one cash-in entry per sale with a total above zero (`sale_goods` Shop / `card_sale` Telecom).
+ *  - C13: a cart line may carry `unitCostCents` (cost per unit to charge, never below the automatic cost). The
+ *         extra above the automatic cost is stored on the line; stock, movements and cash ignore it.
  *  - R13: a low price never blocks the sale; it produces warnings (PRICE_BELOW_MINIMUM, PRICE_BELOW_COST,
  *         ZERO_COST) that carry the cart position of the line.
  *  - R1 / C6: a void never edits or deletes; the stock movements are exactly negated, the cash entry is cancelled
@@ -29,11 +31,11 @@ import {
   getSale as getSaleRow, getSaleByClientRef, insertSale, insertSaleItem, listSaleReturns, listSales as listSaleRows,
   markSaleVoid,
 } from '../repositories/sales.repo.ts';
-import type { SaleBook, SaleStatus } from '../repositories/sales.repo.ts';
+import type { SaleBook, SaleStatus, SalesTotals } from '../repositories/sales.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { issueStock, reverseMovements } from './inventory.service.ts';
 import {
-  BOOK_ORDER, LINE_TYPE, SALE_CASH_TYPE, loadSale, runSalesWrite, toSale, unitCostOf,
+  BOOK_ORDER, LINE_TYPE, SALE_CASH_TYPE, extraCostFor, loadSale, runSalesWrite, toSale, unitCostOf,
 } from './sales-common.ts';
 import type { Sale } from './sales-common.ts';
 import {
@@ -47,7 +49,7 @@ export { createSaleReturn } from './sales-returns.service.ts';
 export type { SaleReturnCreate } from './sales-returns.service.ts';
 
 /** One line of the cart as sent by the browser. */
-export interface SaleCartLine { productId: number; qty: number; unitPriceCents: number }
+export interface SaleCartLine { productId: number; qty: number; unitPriceCents: number; unitCostCents?: number }
 /** Body of `POST /sales`. */
 export interface SaleCreate { businessDate: string; items: SaleCartLine[]; notes?: string; clientRef: string }
 
@@ -70,11 +72,12 @@ export function getSale(ctx: AppContext, id: number): Sale {
 
 /**
  * Lists sales newest business date first. `totals` cover the POSTED sales that match the filter (voided sales are
- * listed but never summed); `refundsCents` is the sum of their returns' refunds.
+ * listed but never summed); `cogsCents` is the automatic cost, `extraCostCents` the C13 extra, `costCents` their
+ * sum, `refundsCents` the sum of their returns' refunds.
  */
 export function listSales(ctx: AppContext, q: {
   from?: string; to?: string; book?: SaleBook; status?: SaleStatus; productId?: number; limit: number; offset: number;
-}): { items: Sale[]; total: number; totals: { revenueCents: number; cogsCents: number; refundsCents: number } } {
+}): { items: Sale[]; total: number; totals: SalesTotals } {
   const conn = ctx.database.conn;
   const { items, total, totals } = listSaleRows(conn, q);
   return { items: items.map((h) => toSale(conn, h)), total, totals };
@@ -172,10 +175,12 @@ function shortageForLine(err: unknown, cart: CartLine): unknown {
 
 /**
  * Sells one cart line: removes the stock at the live weighted average (this is the line's COGS) and stores the
- * line with its frozen price and cost. Because it runs in cart order against the live pool, the same product on
+ * line with its frozen price and cost. If the cashier entered a cost per unit (C13) it is checked against the
+ * automatic cost AFTER the stock was removed (the automatic cost is only known then); a refusal throws and the
+ * whole cart's transaction rolls back. Because it runs in cart order against the live pool, the same product on
  * several lines is checked cumulatively.
  *
- * @returns The frozen unit cost and COGS (needed for the R13 warnings).
+ * @returns The frozen automatic unit cost and COGS (needed for the R13 warnings, which ignore the extra).
  */
 function sellLine(conn: DatabaseSync, sale: OpenSale, cart: CartLine, businessDate: string) {
   let removed;
@@ -189,10 +194,14 @@ function sellLine(conn: DatabaseSync, sale: OpenSale, cart: CartLine, businessDa
   }
   const cogsCents = removed.valueRemovedCents;
   const unitCostCents = unitCostOf(cogsCents, cart.line.qty);
+  const entered = cart.line.unitCostCents;
+  const extraCostCents = entered === undefined
+    ? 0
+    : extraCostFor(cogsCents, cart.line.qty, entered, `items.${cart.index}.unitCostCents`);
   insertSaleItem(conn, {
     saleId: sale.id, lineNo: sale.nextLineNo++, lineType: LINE_TYPE[sale.book], productId: cart.product.id,
     description: cart.product.name, qty: cart.line.qty, unitPriceCents: cart.line.unitPriceCents,
-    unitCostCents, revenueCents: cart.revenueCents, cogsCents,
+    unitCostCents, revenueCents: cart.revenueCents, cogsCents, extraCostCents,
   });
   return { cogsCents, unitCostCents };
 }
@@ -223,7 +232,8 @@ function lineWarnings(cart: CartLine, sold: { cogsCents: number; unitCostCents: 
  *
  * @throws AppError 400 VALIDATION_ERROR (fields, unknown product, totals too large), 400 FUTURE_DATE_NOT_ALLOWED
  *   (R-FD), 400 PRODUCT_NOT_SELLABLE_YET (service product), 400 PRODUCT_INACTIVE, 422 INSUFFICIENT_STOCK
- *   (`fields["items.N.qty"]`, `onHand`).
+ *   (`fields["items.N.qty"]`, `onHand`), 422 COST_BELOW_AUTOMATIC (C13, `fields["items.N.unitCostCents"]`,
+ *   `minUnitCostCents`).
  * @returns The sales (Shop first), the R13 warnings and whether the sales were newly created.
  */
 export function createSales(

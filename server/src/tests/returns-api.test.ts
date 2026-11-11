@@ -57,9 +57,9 @@ describe('POST /sales/:id/returns - resalable', () => {
     expect(Object.keys(r1.body.item).sort()).toEqual(RETURN_KEYS);
     expect(Object.keys(r1.body.item.items[0]).sort()).toEqual(RETURN_ITEM_KEYS);
     expect(r1.body.item).toMatchObject({
-      saleId: sale.id, businessDate: today(), backdated: false, refundCents: 100000, cogsReversedCents: 35000, note: '', clientRef: 'return-0001',
+      saleId: sale.id, businessDate: today(), backdated: false, refundCents: 100000, cogsReversedCents: 35000, extraCostReversedCents: 0, note: '', clientRef: 'return-0001',
     });
-    expect(r1.body.item.items[0]).toMatchObject({ saleItemId: item.id, productId: P.id, qty: 1, resalable: true, revenueCents: 100000, cogsCents: 35000 });
+    expect(r1.body.item.items[0]).toMatchObject({ saleItemId: item.id, productId: P.id, qty: 1, resalable: true, revenueCents: 100000, cogsCents: 35000, extraCostCents: 0 });
     expect(poolOf(s, P.id)).toEqual({ qty: 17, value: 595000 });
     const m = mvsByRef(s, 'sales_returns', r1.body.item.id);
     expect(m).toHaveLength(1);

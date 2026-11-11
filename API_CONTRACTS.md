@@ -339,6 +339,17 @@ Repositories (DB Architect): `sales.repo.ts` — `insertSale`, `insertSaleItem`,
 
 Web: the **Sales** section (sidebar, now built): *POS* (product search by name/code with live stock and price, cart with editable qty/price, line and grand totals as integer sums, date picker `max = today`, Save sale, per-book result summary + warnings, today's sales), *History* (filters, paging, detail with returns, Void, Return items). `clientRef` generated when the POS opens and replaced after a successful save.
 
+### Phase 5 amendment — editable sale cost / extra cost (BUSINESS_RULES C13)
+- `POST /api/v1/sales` — each cart line accepts an optional `unitCostCents` (integer 0–999 999 999) = the **cost per unit to charge**. Omitted or equal to the automatic cost → `extraCostCents = 0`.
+  - The **automatic cost** of a line is the weighted-average value the engine removes for it (its `cogsCents`). The line must satisfy `qty × unitCostCents ≥ cogsCents`; otherwise `422 COST_BELOW_AUTOMATIC` with `fields["items.N.unitCostCents"]` = "The cost cannot be lower than the automatic cost (Rs X.XX per unit). You can only increase it." and `minUnitCostCents = ceil(cogsCents / qty)` in the error body; nothing is saved.
+  - `extraCostCents = qty × unitCostCents − cogsCents` (≥ 0; exact integers). The stock still leaves at `cogsCents`; no extra movement, no extra cash entry.
+- `SaleItem` adds `extraCostCents` and `chargedCostCents` (= `cogsCents + extraCostCents`); `unitCostCents` stays the display snapshot of the **automatic** unit cost.
+- `Sale` adds `extraCostCents` and `chargedCostCents` (sums over lines); `grossProfitCents = totalCents − chargedCostCents`. `GET /sales` `totals` adds `extraCostCents` and `costCents` (= automatic + extra, posted sales).
+- `POST /sales/:id/returns`: each returned item also reverses its `extraCostCents` portion (same C5 remainder logic; the completing return takes the exact remainder); `SaleReturn` adds `extraCostReversedCents`; return items add `extraCostCents`. `cogsReversedCents` remains the automatic cost only. Stock restoration and damaged-return loss rows use the automatic cost only.
+- Voiding a sale needs no change (the whole sale, including its extra cost, is excluded from totals).
+- Warnings: `PRICE_BELOW_COST` still compares the price with the **automatic** unit cost.
+- Web: the POS cart line shows **Cost per unit**, filled from the product's current average cost and editable upward; the server's rules above are authoritative (the UI sends `unitCostCents` only when the cashier changed it).
+
 ---
 
 ## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)

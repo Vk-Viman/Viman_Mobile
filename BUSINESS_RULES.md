@@ -213,6 +213,12 @@ These complete rules above; they introduce no new owner decisions.
 - **C11 Rate validation:** every rate in bp must satisfy 0 ≤ rateBp ≤ 10000; extras ≥ 0.
 - **C12 Selling price:** never derived from average cost; it is an owner-maintained product field.
 
+- **C13 Extra cost on a sale (owner rule, 2026-11-11):** when a sale line is recorded, the **cost (COGS) fills in automatically** at the weighted-average value removed from stock (§3). The cashier **may raise the cost per unit but never lower it** below the automatic cost (e.g. automatic Rs 37.40 → entered Rs 38.00). The line's **cost charged** = quantity × entered unit cost; the part above the automatic cost is the line's **extra cost** (here Rs 0.60 per unit), kept as its own figure under cost and **included whenever cost is calculated**.
+  - **Stock is unaffected:** it leaves at the true weighted-average value, so stock quantity/value and reconciliation stay exact. The extra cost creates **no stock movement, no cash entry and no separate balance**; it is money already in the book's cash that the owner may later use to buy products.
+  - **Profit uses the cost charged:** line gross profit = revenue − (automatic cost + extra cost). The extra is part of the cost of sales for the period, shown separately ("Cost: automatic Rs X + extra Rs Y").
+  - **Returns and voids (C5/C6):** a return reverses the extra cost in proportion (the same exact-remainder split as revenue and automatic cost, the final return takes the remainder) together with the automatic cost; a void removes the whole sale including its extra. Resalable returns restore stock at the **automatic** snapshot cost only; a damaged return's stock-loss row is the automatic cost only (the extra is just reversed from cost of sales).
+  - **Default:** if the cashier leaves the cost as filled in, the extra cost is 0 and behaviour is exactly as before (§3, §4). Supersedes the earlier "COGS is always automatic" wording for the *sale screen only*; costing of stock itself remains automatic.
+
 ## 14. Owner decisions log (Phase 1 final review)
 
 ### P-2 Electricity documentation — **APPROVED 2026-11-10, applied** (§1, §2, §7 E1–E5, DATABASE_SCHEMA, API_CONTRACTS).
