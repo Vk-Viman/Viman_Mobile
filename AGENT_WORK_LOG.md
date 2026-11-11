@@ -75,3 +75,11 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 | Backend | sonnet | inventory.service, purchases.service, 2 route files, audit/errors/app edits | Accepted — engine read line by line; demo numbers re-derived by hand (all match to the cent) |
 | QA | sonnet | 4 test files + helper (+2 fixed tests) | Accepted — QA connection dropped mid-run; resumed; 4 failures were test mistakes (hand-verified), no code bugs |
 | Orchestrator | opus/sonnet | contract + schema detail, review | Cash ledger created early (owner decision); audit columns moved to Phase 3 (documented) |
+
+## Phase 4 — Stocktake, losses, personal use, valuation (2026-11-11)
+| Agent | Model | Files | Orchestrator review |
+|---|---|---|---|
+| DB Architect | sonnet | 005 migration, 3 repos, 2 movement queries | Accepted; QA later found a NULL-passing CHECK (goods drawing qty) — orchestrator fixed in 005 (not yet released) and scanned 004/005 for the same pattern |
+| Backend | sonnet | stocktake/stock-losses/drawings services, stock-common, inventory additions, 3 route files | Accepted — reversal and C10 gain logic read line by line; smoke numbers re-derived by hand |
+| Frontend | sonnet | web/src/pages/stock/*, api/stock.ts | Accepted — browser-verified end to end |
+| QA | sonnet | 8 new test files + helper | Accepted — found the CHECK bug; 607/607 after fix |

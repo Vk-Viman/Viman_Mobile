@@ -54,6 +54,24 @@ export function listMovements(conn: DatabaseSync, q: {
   return { items: rows.map(map), total };
 }
 
+/** Movements written for one source record (e.g. refTable 'stocktakes'), in posting order. */
+export function listMovementsByRef(conn: DatabaseSync, refTable: string, refId: number): MovementRow[] {
+  const rows = conn.prepare(
+    `SELECT id, product_id, business_date, posted_at, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason
+     FROM stock_movements WHERE ref_table = ? AND ref_id = ? ORDER BY id ASC`,
+  ).all(refTable, refId) as unknown as Raw[];
+  return rows.map(map);
+}
+
+/** Per-product SUM of movements dated on or before asOf (business-date basis), for valuation. */
+export function sumMovementsAsOf(conn: DatabaseSync, asOf: string): Array<{ productId: number; qty: number; valueCents: number }> {
+  const rows = conn.prepare(
+    `SELECT product_id, SUM(qty_delta) AS qty, SUM(value_delta_cents) AS value_cents
+     FROM stock_movements WHERE business_date <= ? GROUP BY product_id ORDER BY product_id`,
+  ).all(asOf) as unknown as Array<{ product_id: number | bigint; qty: number | bigint; value_cents: number | bigint }>;
+  return rows.map((r) => ({ productId: Number(r.product_id), qty: Number(r.qty), valueCents: Number(r.value_cents) }));
+}
+
 /** Per-product SUM of movements (for reconciliation against the products cache). */
 export function sumMovements(conn: DatabaseSync): Array<{ productId: number; qty: number; valueCents: number }> {
   const rows = conn.prepare(

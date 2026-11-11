@@ -228,3 +228,113 @@ export interface ReconciliationMismatch {
   movementValueCents: number;
 }
 export interface InventoryReconciliation { ok: boolean; checkedProducts: number; mismatches: ReconciliationMismatch[] }
+
+// ---- Phase 4: Stocktake, stock losses, personal use, valuation ----
+export type StocktakeStatus = 'draft' | 'completed' | 'void';
+export interface StocktakeItem {
+  id: number;
+  productId: number;
+  productName: string;
+  productCode: string | null;
+  countedQty: number;
+  expectedQty: number;
+  differenceQty: number;
+  valueDeltaCents: number | null;
+  gainUnitCostCents: number | null;
+}
+export interface Stocktake {
+  id: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  book: Book;
+  status: StocktakeStatus;
+  notes: string;
+  completedAt: string | null;
+  voidedAt: string | null;
+  voidReason: string | null;
+  clientRef: string;
+  items: StocktakeItem[];
+}
+export interface StocktakeList { items: Stocktake[]; total: number }
+export interface StocktakeOne { item: Stocktake }
+export interface StocktakeQuery { from?: string; to?: string; book?: Book; status?: StocktakeStatus; limit?: number; offset?: number }
+export interface StocktakeItemInput { productId: number; countedQty: number; gainUnitCostCents?: number }
+export interface StocktakeCreate { businessDate: string; book: Book; notes?: string; items?: StocktakeItemInput[]; clientRef: string }
+export interface StocktakeUpdate { notes?: string; items?: StocktakeItemInput[] }
+
+export type StockLossReason = 'damaged' | 'lost' | 'expired' | 'other';
+export type PostedStatus = 'posted' | 'void';
+export interface StockLoss {
+  id: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  productId: number;
+  productName: string;
+  book: Book;
+  qty: number;
+  costCents: number;
+  unitCostCents: number;
+  reason: StockLossReason;
+  note: string;
+  source: 'manual';
+  status: PostedStatus;
+  voidedAt: string | null;
+  voidReason: string | null;
+  clientRef: string;
+}
+export interface StockLossList { items: StockLoss[]; total: number; totalCostCents: number }
+export interface StockLossOne { item: StockLoss }
+export interface StockLossQuery {
+  from?: string; to?: string; productId?: number; book?: Book; reason?: StockLossReason; status?: PostedStatus;
+  limit?: number; offset?: number;
+}
+export interface StockLossCreate {
+  businessDate: string; productId: number; qty: number; reason: StockLossReason; note?: string; clientRef: string;
+}
+
+export interface Drawing {
+  id: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  book: Book;
+  kind: 'goods' | 'cash';
+  amountCents: number;
+  productId: number | null;
+  productName: string | null;
+  qty: number | null;
+  note: string;
+  status: PostedStatus;
+  voidedAt: string | null;
+  voidReason: string | null;
+  clientRef: string;
+}
+export interface DrawingList { items: Drawing[]; total: number; totalAmountCents: number }
+export interface DrawingOne { item: Drawing }
+export interface DrawingQuery {
+  kind?: 'goods' | 'cash'; from?: string; to?: string; book?: Book; productId?: number; status?: PostedStatus;
+  limit?: number; offset?: number;
+}
+export interface DrawingCreate { kind: 'goods'; businessDate: string; productId: number; qty: number; note?: string; clientRef: string }
+
+export interface ValuationItem {
+  productId: number;
+  code: string | null;
+  name: string;
+  categoryId: number;
+  categoryName: string;
+  book: Book;
+  active: boolean;
+  qty: number;
+  valueCents: number;
+  avgUnitCostCents: number | null;
+}
+export interface BookTotals { qty: number; valueCents: number }
+export interface Valuation {
+  asOf: string | null;
+  items: ValuationItem[];
+  totals: { qty: number; valueCents: number; byBook: { shop: BookTotals; telecom: BookTotals } };
+}
+export interface ValuationQuery { book?: Book; categoryId?: number; asOf?: string; includeZero?: boolean; includeInactive?: boolean }

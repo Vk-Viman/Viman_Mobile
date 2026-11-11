@@ -13,6 +13,12 @@ import { ProductsPage } from './pages/products/ProductsPage';
 import { ProductsTab } from './pages/products/ProductsTab';
 import { CategoriesTab } from './pages/products/CategoriesTab';
 import { PurchasesPage } from './pages/purchases/PurchasesPage';
+import { StockPage } from './pages/stock/StockPage';
+import { ValuationTab } from './pages/stock/ValuationTab';
+import { StocktakeTab } from './pages/stock/StocktakeTab';
+import { StocktakeSheet } from './pages/stock/StocktakeSheet';
+import { StockLossesTab } from './pages/stock/StockLossesTab';
+import { PersonalUseTab } from './pages/stock/PersonalUseTab';
 import { SuppliersTab } from './pages/products/SuppliersTab';
 
 export function App() {
@@ -29,6 +35,13 @@ export function App() {
           <Route path="suppliers" element={<SuppliersTab />} />
         </Route>
         <Route path="purchases" element={<PurchasesPage />} />
+        <Route path="stock" element={<StockPage />}>
+          <Route index element={<ValuationTab />} />
+          <Route path="stocktake" element={<StocktakeTab />} />
+          <Route path="stocktake/:id" element={<StocktakeSheet />} />
+          <Route path="losses" element={<StockLossesTab />} />
+          <Route path="personal-use" element={<PersonalUseTab />} />
+        </Route>
         <Route path="settings" element={<SettingsPage />}>
           <Route index element={<GeneralTab />} />
           <Route path="rates" element={<RatesTab />} />

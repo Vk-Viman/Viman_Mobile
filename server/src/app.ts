@@ -16,6 +16,9 @@ import { registerProductRoutes } from './routes/products.ts';
 import { registerSupplierRoutes } from './routes/suppliers.ts';
 import { registerPurchaseRoutes } from './routes/purchases.ts';
 import { registerInventoryRoutes } from './routes/inventory.ts';
+import { registerStocktakeRoutes } from './routes/stocktakes.ts';
+import { registerStockLossRoutes } from './routes/stock-losses.ts';
+import { registerDrawingRoutes } from './routes/drawings.ts';
 
 export interface AppOptions { dataDir: string; webDistDir?: string | null; logger?: boolean }
 export interface AppContext {
@@ -158,6 +161,9 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerSupplierRoutes(api, ctx);
     registerPurchaseRoutes(api, ctx);
     registerInventoryRoutes(api, ctx);
+    registerStocktakeRoutes(api, ctx);
+    registerStockLossRoutes(api, ctx);
+    registerDrawingRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;
