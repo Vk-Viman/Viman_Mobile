@@ -169,8 +169,8 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   // ---------- top-ups ----------
   app.post('/telecom/topups', { schema: { body: topupBody } }, async (request, reply) => {
-    const { item, created } = createTopup(ctx, request.body as TopupCreate);
-    return reply.code(created ? 201 : 200).send({ item });
+    const { item, warnings, created } = createTopup(ctx, request.body as TopupCreate);
+    return reply.code(created ? 201 : 200).send({ item, warnings });
   });
 
   app.get('/telecom/topups', { schema: { querystring: topupListQuery } }, async (request) => {

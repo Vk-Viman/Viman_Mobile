@@ -95,3 +95,6 @@
 - Parallel agents, each in its own git worktree with exclusive files: Phase 6 telecom (migration 009), Phase 7 printing (010), Phase 13 opening stock/Excel (011). Orchestrator owns all `.md` docs, `app.ts`, `App.tsx`, `navItems.ts`.
 - Status: **built and integrated** — Phase 6 (109 new tests), Phase 7 (84), Phase 13 (136); merged tree: typecheck (server+web) clean, **1,127 tests passing, 0 skipped** (798 baseline), web build OK. Phase 6 and 13 agents ran browser smoke tests; the combined launcher-based browser pass for Waves 1–4 is scheduled for Phase 14.
 - Not yet built (later waves): DAY_CLOSED enforcement (R9, Phase 8), Phase 11 printing variance report, date-check trigger follow-up (see migrations README).
+
+## Wave 2 — Phase 8 (2026-11-11) — built and integrated
+Migration 012; expenses, opening balances, cash counts, daily closings, DAY_CLOSED across all write services, shared negative-cash/fund warnings, Ice Cream fund ledger table, invalid-date triggers. Merged tree: typecheck (server+web) clean, **1,264 tests pass, 0 skipped** (1,127 + 137 new), web build OK; agent browser smoke test passed (opening balance, closing with Rs 500 short, DAY_CLOSED message, negative-cash toast, Ice Cream fund tiles). Existing test changes (5 files) re-derived and accepted. Launcher-based combined browser pass is scheduled for Phase 14.

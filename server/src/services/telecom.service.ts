@@ -35,6 +35,9 @@ import type {
 } from '../repositories/telecom.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { getSettings } from './settings.service.ts';
+import { negativeCashWarnings } from './cash-warnings.ts';
+import type { CashWarning } from './cash-warnings.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -229,6 +232,7 @@ export function createReloadSale(ctx: AppContext, body: ReloadSaleCreate): { ite
     const existing = getReloadSaleByClientRef(conn, body.clientRef);
     if (existing) return { item: toReload(existing), created: false };
 
+    assertDayOpen(conn, ['telecom'], body.businessDate); // R9
     const provider = getProvider(conn, body.providerId);
     if (!provider) throw validationError({ providerId: 'Provider not found.' });
     if (!provider.active) {
@@ -269,6 +273,7 @@ export function voidReloadSale(ctx: AppContext, id: number, body: { reason: stri
   return runWrite(ctx, (conn) => {
     const row = getReloadRow(conn, id);
     if (!row) throw notFound('Reload sale');
+    assertDayOpen(conn, ['telecom'], row.businessDate); // R9: a void is judged on the entry's own date
     if (row.status === 'void') throw alreadyVoid('reload sale');
     const before = toReload(row);
     reverseCashEntry(conn, 'reload_sales', id, 'reload sale');
@@ -324,6 +329,7 @@ export function createEzCashSale(ctx: AppContext, body: EzCashSaleCreate): { ite
     const existing = getEzCashSaleByClientRef(conn, body.clientRef);
     if (existing) return { item: toEz(existing), created: false };
 
+    assertDayOpen(conn, ['telecom'], body.businessDate); // R9
     const dialog = getProviderByName(conn, 'Dialog');
     if (!dialog) throw new Error('The Dialog provider is missing from reload_providers');
     const commissionCents = ezcashCommission(body.billTotalCents, commissionBp);
@@ -351,6 +357,7 @@ export function voidEzCashSale(ctx: AppContext, id: number, body: { reason: stri
   return runWrite(ctx, (conn) => {
     const row = getEzCashRow(conn, id);
     if (!row) throw notFound('EZCash entry');
+    assertDayOpen(conn, ['telecom'], row.businessDate); // R9
     if (row.status === 'void') throw alreadyVoid('EZCash entry');
     const before = toEz(row);
     reverseCashEntry(conn, 'ezcash_sales', id, 'EZCash entry');
@@ -396,7 +403,7 @@ export interface TopupCreate {
  * @throws AppError 400 VALIDATION_ERROR (provider missing / not allowed for the kind) / FUTURE_DATE_NOT_ALLOWED,
  *   409 PROVIDER_INACTIVE.
  */
-export function createTopup(ctx: AppContext, body: TopupCreate): { item: Topup; created: boolean } {
+export function createTopup(ctx: AppContext, body: TopupCreate): { item: Topup; warnings: CashWarning[]; created: boolean } {
   const fields: Fields = {};
   const notes = trimmed(fields, 'notes', 'Notes', body.notes, 0, NOTE_MAX_LENGTH);
   checkAmount(fields, 'amountCents', 'Amount', body.amountCents, 1);
@@ -407,8 +414,9 @@ export function createTopup(ctx: AppContext, body: TopupCreate): { item: Topup; 
 
   return runWrite(ctx, (conn) => {
     const existing = getTopupByClientRef(conn, body.clientRef);
-    if (existing) return { item: toTopup(existing), created: false };
+    if (existing) return { item: toTopup(existing), warnings: [], created: false };
 
+    assertDayOpen(conn, ['telecom'], body.businessDate); // R9
     let providerId: number | null = null;
     if (body.kind === 'provider_topup') {
       const provider = getProvider(conn, body.providerId as number);
@@ -431,7 +439,7 @@ export function createTopup(ctx: AppContext, body: TopupCreate): { item: Topup; 
     const item = loadTopup(conn, id);
     logAudit(conn, 'telecom_topup', String(id), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, created: true };
+    return { item, warnings: negativeCashWarnings(conn, ['telecom']), created: true }; // R13: warn, never block
   });
 }
 
@@ -443,6 +451,7 @@ export function voidTopup(ctx: AppContext, id: number, body: { reason: string })
   return runWrite(ctx, (conn) => {
     const row = getTopupRow(conn, id);
     if (!row) throw notFound('Top-up');
+    assertDayOpen(conn, ['telecom'], row.businessDate); // R9
     if (row.status === 'void') throw alreadyVoid('top-up');
     const before = toTopup(row);
     reverseCashEntry(conn, 'telecom_topups', id, 'top-up');

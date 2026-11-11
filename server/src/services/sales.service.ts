@@ -33,6 +33,7 @@ import {
 } from '../repositories/sales.repo.ts';
 import type { SaleBook, SaleStatus, SalesTotals } from '../repositories/sales.repo.ts';
 import { logAudit } from './audit.service.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { issueStock, reverseMovements } from './inventory.service.ts';
 import {
   BOOK_ORDER, LINE_TYPE, SALE_CASH_TYPE, extraCostFor, loadSale, runSalesWrite, toSale, unitCostOf,
@@ -249,7 +250,10 @@ export function createSales(
     const existing = findSalesByClientRef(conn, body.clientRef);
     if (existing.length > 0) return { sales: existing.map((h) => toSale(conn, h)), warnings: [], created: false };
 
-    const lines = priceCart(body.items, resolveSellableProducts(conn, body.items));
+    const products = resolveSellableProducts(conn, body.items);
+    // R9: every book the cart touches (one sale per book) must be open on the sale's date.
+    assertDayOpen(conn, products.map((p) => p.book), body.businessDate);
+    const lines = priceCart(body.items, products);
     const open = openSales(conn, body, notes, lines);
 
     const warnings: SaleWarning[] = [];
@@ -296,6 +300,7 @@ export function voidSale(ctx: AppContext, id: number, body: { reason: string }):
   return runSalesWrite(ctx, (conn) => {
     const header = getSaleRow(conn, id);
     if (!header) throw notFound('Sale');
+    assertDayOpen(conn, [header.book], header.businessDate); // R9: a void is judged on the sale's own date
     if (header.status === 'void') throw alreadyVoid('sale');
     // A sale with returns is already partly undone; voiding it too would reverse the same goods twice.
     if (listSaleReturns(conn, id).length > 0) {

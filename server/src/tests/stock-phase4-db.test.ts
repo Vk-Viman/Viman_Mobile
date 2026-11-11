@@ -139,7 +139,8 @@ describe('stocktakes table', () => {
     addST(c, { date: today() });
     addST(c, { date: daysAgo(40) });
     for (const d of ['2026-02-31', '2026-2-3', '20260203', '2026-13-01', 'abc', '2025-02-29', '']) {
-      expect(msgOf(() => addST(c, { date: d })), d).toMatch(/CHECK|FUTURE_DATE_NOT_ALLOWED/);
+      // 2026-13-01 is well shaped but impossible: migration 012's INVALID_BUSINESS_DATE trigger (or R-FD) stops it.
+      expect(msgOf(() => addST(c, { date: d })), d).toMatch(/CHECK|FUTURE_DATE_NOT_ALLOWED|INVALID_BUSINESS_DATE/);
     }
     addST(c, { date: '2024-02-29' });
   });

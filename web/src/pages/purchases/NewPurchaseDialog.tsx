@@ -22,6 +22,7 @@ import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner } from '../../lib/errors';
 import { useDebounced } from '../../hooks/useDebounced';
 import { formatLKR } from '../../lib/format';
@@ -140,7 +141,7 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
     if (notes.trim()) body.notes = notes.trim();
     setErr(null);
     create.mutate(body, {
-      onSuccess: () => { toast.success('Purchase saved.'); onClose(); },
+      onSuccess: (r) => { toast.success('Purchase saved.'); notifyCashWarnings(toast, r.warnings); onClose(); },
       onError: (e) => setErr(e),
     });
   };

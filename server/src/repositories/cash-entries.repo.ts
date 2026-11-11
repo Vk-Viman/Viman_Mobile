@@ -12,17 +12,20 @@ import { numberOrNull } from './sql-helpers.ts';
 /** The three logical cash books (BUSINESS_RULES section 0). */
 export type CashBook = 'shop' | 'telecom' | 'icecream';
 
+/** The three Ice Cream funds (BUSINESS_RULES section 10). */
+export type IceFund = 'cost' | 'electricity' | 'profit';
+
 /** One cash ledger row. `fund` is only set for the ice-cream book (section 10.2). */
 export interface CashEntryRow {
   id: number; book: CashBook; businessDate: string; postedAt: string; type: string; amountCents: number;
-  fund: 'cost' | 'electricity' | 'profit' | null; refTable: string | null; refId: number | null;
+  fund: IceFund | null; refTable: string | null; refId: number | null;
   transferId: number | null; reversesEntryId: number | null; note: string | null;
 }
 
 /** Row as SQLite returns it. */
 interface Raw {
   id: number | bigint; book: CashBook; business_date: string; posted_at: string; type: string;
-  amount_cents: number | bigint; fund: 'cost' | 'electricity' | 'profit' | null;
+  amount_cents: number | bigint; fund: IceFund | null;
   ref_table: string | null; ref_id: number | bigint | null; transfer_id: number | bigint | null;
   reverses_entry_id: number | bigint | null; note: string | null;
 }
@@ -39,21 +42,23 @@ function map(r: Raw): CashEntryRow {
 }
 
 /**
- * Appends a cash entry (posted_at comes from the DB default). Phase 3 callers pass no fund (shop/telecom only).
+ * Appends a cash entry (posted_at comes from the DB default). Shop/telecom callers pass no fund; every Ice Cream
+ * entry names exactly one fund (section 10.2, enforced by a CHECK).
  *
  * @param e.amountCents      Signed: positive = cash in, negative = cash out.
  * @param e.refTable/refId   The business record that caused the entry (e.g. 'purchases', 12).
  * @param e.reversesEntryId  Set when this row cancels an earlier row (void, R1).
+ * @param e.fund             Ice Cream only: the fund this movement belongs to.
  * @returns The new entry id.
  */
 export function insertCashEntry(conn: DatabaseSync, e: {
   book: CashBook; businessDate: string; type: string; amountCents: number; refTable: string | null; refId: number | null;
-  reversesEntryId?: number | null; note?: string | null;
+  reversesEntryId?: number | null; note?: string | null; fund?: IceFund | null;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO cash_entries (book, business_date, type, amount_cents, ref_table, ref_id, reverses_entry_id, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(e.book, e.businessDate, e.type, e.amountCents, e.refTable, e.refId, e.reversesEntryId ?? null, e.note ?? null);
+    `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, reverses_entry_id, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(e.book, e.businessDate, e.type, e.amountCents, e.fund ?? null, e.refTable, e.refId, e.reversesEntryId ?? null, e.note ?? null);
   return Number(res.lastInsertRowid);
 }
 
@@ -73,5 +78,15 @@ export function findCashEntriesByRef(conn: DatabaseSync, refTable: string, refId
 export function cashBalance(conn: DatabaseSync, book: CashBook): number {
   const r = conn.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM cash_entries WHERE book = ?')
     .get(book) as unknown as { total: number | bigint };
+  return Number(r.total);
+}
+
+/**
+ * Balance of a cash book at the END of a business date: the sum of every ledger row dated on or before it
+ * (section 8, "expected" of a cash count). Business date, not posting time, decides which rows count (R7).
+ */
+export function cashBalanceAsOf(conn: DatabaseSync, book: CashBook, date: string): number {
+  const r = conn.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM cash_entries WHERE book = ? AND business_date <= ?')
+    .get(book, date) as unknown as { total: number | bigint };
   return Number(r.total);
 }

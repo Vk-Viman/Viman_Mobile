@@ -41,6 +41,8 @@ import { PrintingPage } from './pages/printing/PrintingPage';
 import { PrintSalesTab } from './pages/printing/PrintSalesTab';
 import { ServiceTypesTab } from './pages/printing/ServiceTypesTab';
 import { SuppliesTab } from './pages/printing/SuppliesTab';
+import { ExpensesPage } from './pages/expenses/ExpensesPage';
+import { CashBooksPage } from './pages/cashbooks/CashBooksPage';
 import { OpeningStockPage } from './pages/opening-stock/OpeningStockPage';
 import { ManualTab } from './pages/opening-stock/ManualTab';
 import { ImportTab } from './pages/opening-stock/ImportTab';
@@ -72,6 +74,8 @@ export function App() {
           <Route path="losses" element={<StockLossesTab />} />
           <Route path="personal-use" element={<PersonalUseTab />} />
         </Route>
+        <Route path="expenses" element={<ExpensesPage />} />
+        <Route path="cash-books" element={<CashBooksPage />} />
         <Route path="telecom" element={<TelecomPage />}>
           <Route index element={<ReloadsTab />} />
           <Route path="ezcash" element={<EzCashTab />} />

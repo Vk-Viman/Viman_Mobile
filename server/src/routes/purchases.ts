@@ -98,8 +98,8 @@ const returnBody = {
 /** Registers the purchase endpoints under the `/api/v1` prefix. */
 export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/purchases', { schema: { body: createBody } }, async (request, reply) => {
-    const { item, created } = createPurchase(ctx, request.body as PurchaseCreate);
-    return reply.code(created ? 201 : 200).send({ item });
+    const { item, warnings, created } = createPurchase(ctx, request.body as PurchaseCreate);
+    return reply.code(created ? 201 : 200).send({ item, warnings });
   });
 
   app.get('/purchases', { schema: { querystring: listQuery } }, async (request) => {
@@ -129,9 +129,9 @@ export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): v
   }));
 
   app.post('/purchases/:id/returns', { schema: { params: idParamsSchema, body: returnBody } }, async (request, reply) => {
-    const { item, purchase, created } = createPurchaseReturn(
+    const { item, purchase, warnings, created } = createPurchaseReturn(
       ctx, parseId(request.params), request.body as PurchaseReturnCreate,
     );
-    return reply.code(created ? 201 : 200).send({ item, purchase });
+    return reply.code(created ? 201 : 200).send({ item, purchase, warnings });
   });
 }

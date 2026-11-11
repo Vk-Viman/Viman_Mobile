@@ -16,6 +16,7 @@ import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner } from '../../lib/errors';
 import { BOOK_LABEL } from '../../lib/constants';
 import { parseIntStrict } from './helpers';
@@ -69,7 +70,7 @@ export function ReturnDialog({ purchase, onClose }: { purchase: Purchase; onClos
           clientRef,
         },
       },
-      { onSuccess: () => { toast.success('Return saved.'); onClose(); }, onError: (e) => setErr(e) },
+      { onSuccess: (r) => { toast.success('Return saved.'); notifyCashWarnings(toast, r.warnings); onClose(); }, onError: (e) => setErr(e) },
     );
   };
 

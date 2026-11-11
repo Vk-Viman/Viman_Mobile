@@ -20,6 +20,7 @@ import { ApiError } from '../../api/client';
 import { useCreateSaleReturn } from '../../api/sales';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner } from '../../lib/errors';
 import type { Sale, SaleItem } from '../../types/api';
 import { parseIntStrict } from '../purchases/helpers';
@@ -71,7 +72,7 @@ export function SaleReturnDialog({ sale, onClose }: { sale: Sale; onClose: () =>
           clientRef,
         },
       },
-      { onSuccess: () => { toast.success('Return saved.'); onClose(); }, onError: (e) => setErr(e) },
+      { onSuccess: (r) => { toast.success('Return saved.'); notifyCashWarnings(toast, r.warnings); onClose(); }, onError: (e) => setErr(e) },
     );
   };
 

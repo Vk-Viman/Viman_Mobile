@@ -53,7 +53,7 @@ describe('POST /sales/:id/returns - resalable', () => {
     expect(poolOf(s, P.id)).toEqual({ qty: 16, value: 560000 });
     const r1 = await returnNew(s, sale.id, [rl(item.id, 1, true)], { clientRef: 'return-0001' });
     expect(r1.status).toBe(201);
-    expect(Object.keys(r1.body).sort()).toEqual(['item', 'sale']);
+    expect(Object.keys(r1.body).sort()).toEqual(['item', 'sale', 'warnings']);
     expect(Object.keys(r1.body.item).sort()).toEqual(RETURN_KEYS);
     expect(Object.keys(r1.body.item.items[0]).sort()).toEqual(RETURN_ITEM_KEYS);
     expect(r1.body.item).toMatchObject({

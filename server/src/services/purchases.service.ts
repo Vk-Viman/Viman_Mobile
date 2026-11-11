@@ -36,6 +36,9 @@ import type {
 } from '../repositories/purchases.repo.ts';
 import { getSupplier } from '../repositories/suppliers.repo.ts';
 import { logAudit } from './audit.service.ts';
+import { negativeCashWarnings } from './cash-warnings.ts';
+import type { CashWarning } from './cash-warnings.ts';
+import { assertDayOpen, mapCashAbort } from './day-closing.ts';
 import { issueStockCapped, receiveStock } from './inventory.service.ts';
 import { returnBeforeOriginalError, returnPortion } from './return-rules.ts';
 import {
@@ -80,6 +83,7 @@ const BILL_NO_MAX_LENGTH = 40;
 function mapDbAbort(err: unknown, originalDate?: string): never {
   const msg = err instanceof Error ? err.message : '';
   if (msg.includes('FUTURE_DATE_NOT_ALLOWED')) throw futureDateError();
+  mapCashAbort(err); // R9 DAY_CLOSED backstop and INVALID_BUSINESS_DATE (migration 012)
   if (msg.includes('RETURN_BEFORE_ORIGINAL_DATE')) {
     if (originalDate !== undefined) throw returnBeforeOriginalError('purchase', originalDate);
     throw new AppError(400, 'RETURN_BEFORE_ORIGINAL_DATE',
@@ -182,7 +186,9 @@ export interface PurchaseCreate {
  *   400 MIXED_BOOKS (R11).
  * @returns The saved purchase and whether it was newly created.
  */
-export function createPurchase(ctx: AppContext, body: PurchaseCreate): { item: Purchase; created: boolean } {
+export function createPurchase(
+  ctx: AppContext, body: PurchaseCreate,
+): { item: Purchase; warnings: CashWarning[]; created: boolean } {
   const fields: Fields = {};
   const billNo = trimmed(fields, 'billNo', 'Bill number', body.billNo, 0, BILL_NO_MAX_LENGTH);
   const notes = trimmed(fields, 'notes', 'Notes', body.notes, 0, NOTE_MAX_LENGTH);
@@ -193,7 +199,7 @@ export function createPurchase(ctx: AppContext, body: PurchaseCreate): { item: P
   return runWrite(ctx, (conn) => {
     // Idempotency first: a retry must succeed even if the data has changed since (e.g. supplier made inactive).
     const existing = getPurchaseByClientRef(conn, body.clientRef);
-    if (existing) return { item: toPurchase(conn, existing), created: false };
+    if (existing) return { item: toPurchase(conn, existing), warnings: [], created: false };
 
     const bad: Fields = {};
     const products: ProductRow[] = [];
@@ -223,6 +229,7 @@ export function createPurchase(ctx: AppContext, body: PurchaseCreate): { item: P
       throw new AppError(400, 'MIXED_BOOKS', 'Shop and Telecom items cannot be on one bill — please split into two bills.');
     }
     const book = (products[0] as ProductRow).book;
+    assertDayOpen(conn, [book], body.businessDate); // R9 (the book is only known once the products are)
 
     // units = packs x pack size; the bill total is the sum of the exact line totals.
     let totalCents = 0;
@@ -258,7 +265,9 @@ export function createPurchase(ctx: AppContext, body: PurchaseCreate): { item: P
     const item = loadPurchase(conn, purchaseId);
     logAudit(conn, 'purchase', String(purchaseId), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, created: true };
+    // R13: a cash-out may leave the book negative; that is a warning, never a block.
+    const warnings = totalCents > 0 ? negativeCashWarnings(conn, [book]) : [];
+    return { item, warnings, created: true };
   });
 }
 
@@ -284,6 +293,7 @@ export function voidPurchase(ctx: AppContext, id: number, body: { reason: string
   return runWrite(ctx, (conn) => {
     const header = getPurchaseRow(conn, id);
     if (!header) throw notFound('Purchase');
+    assertDayOpen(conn, [header.book], header.businessDate); // R9: a void is judged on the purchase's own date
     if (header.status === 'void') throw alreadyVoid('purchase');
     const before = toPurchase(conn, header);
     if (before.returns.length > 0 || before.items.some((i) => i.returnedUnits > 0)) {
@@ -362,7 +372,7 @@ export interface PurchaseReturnCreate {
  */
 export function createPurchaseReturn(
   ctx: AppContext, purchaseId: number, body: PurchaseReturnCreate,
-): { item: PurchaseReturn; purchase: Purchase; created: boolean } {
+): { item: PurchaseReturn; purchase: Purchase; warnings: CashWarning[]; created: boolean } {
   const fields: Fields = {};
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -376,13 +386,14 @@ export function createPurchaseReturn(
       if (existing.purchaseId !== purchaseId) {
         throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different purchase.');
       }
-      return { item: toReturn(conn, existing), purchase: loadPurchase(conn, purchaseId), created: false };
+      return { item: toReturn(conn, existing), purchase: loadPurchase(conn, purchaseId), warnings: [], created: false };
     }
 
     const header = getPurchaseRow(conn, purchaseId);
     if (!header) throw notFound('Purchase');
     originalDate = header.businessDate;
     if (body.businessDate < header.businessDate) throw returnBeforeOriginalError('purchase', header.businessDate); // R-RD
+    assertDayOpen(conn, [header.book], body.businessDate); // R9: judged on the RETURN's date
     if (header.status === 'void') {
       throw new AppError(409, 'PURCHASE_VOID', 'This purchase has been voided, so it cannot be returned.');
     }
@@ -458,6 +469,7 @@ export function createPurchaseReturn(
     const item = toReturn(conn, row);
     logAudit(conn, 'purchase_return', String(returnId), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, purchase: loadPurchase(conn, purchaseId), created: true };
+    // A purchase return is cash IN (refund), so no negative-cash warning can arise from it.
+    return { item, purchase: loadPurchase(conn, purchaseId), warnings: [], created: true };
   }, () => originalDate);
 }

@@ -139,8 +139,9 @@ describe('stock_movements checks', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
     for (const d of ['2026-02-31', '2026-2-3', '20260203', '2026-13-01', 'abc', '2026-02-30', '2025-02-29']) {
-      // BEFORE-INSERT triggers may fire ahead of the CHECK (string compare), either way the row is refused
-      expect(msgOf(() => addMove(c, p, 1, 1, { date: d })), d).toMatch(/CHECK|FUTURE_DATE_NOT_ALLOWED/);
+      // BEFORE-INSERT triggers may fire ahead of the CHECK (string compare), either way the row is refused.
+      // Migration 012 adds INVALID_BUSINESS_DATE for a well-shaped but impossible date such as 2026-13-01.
+      expect(msgOf(() => addMove(c, p, 1, 1, { date: d })), d).toMatch(/CHECK|FUTURE_DATE_NOT_ALLOWED|INVALID_BUSINESS_DATE/);
     }
     addMove(c, p, 1, 1, { date: '2024-02-29' }); // real leap day
     expect(movements(c, p)).toHaveLength(1);

@@ -36,6 +36,7 @@ import {
 } from './excel-opening-stock.ts';
 import type { PreviewRow, ProductRef } from './excel-opening-stock.ts';
 import { getPool, receiveStock, reverseMovements } from './inventory.service.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -127,6 +128,8 @@ function postBatch(conn: DatabaseSync, p: {
   businessDate: string; source: BatchSource; fileName: string | null; notes: string; clientRef: string;
   lines: LineInput[];
 }): OpeningBatchDetail {
+  // R9: opening stock lands in the book of each product; a closed day of any of them refuses the batch.
+  assertDayOpen(conn, p.lines.map((l) => getProduct(conn, l.productId)?.book ?? 'shop'), p.businessDate);
   const totalValueCents = p.lines.reduce((sum, l) => sum + l.valueCents, 0);
   if (!Number.isSafeInteger(totalValueCents)) throw validationError({ items: 'The batch total is too large.' });
   const batchId = insertBatch(conn, {
@@ -237,9 +240,11 @@ export function voidOpeningBatch(ctx: AppContext, id: number, body: { reason: st
   return runWrite(ctx, (conn) => {
     const header = getBatch(conn, id);
     if (!header) throw notFound('Opening stock batch');
+    const lines = loadLines(conn, id);
+    // R9: a void is judged on the batch's own date, in the book of each product.
+    assertDayOpen(conn, lines.map((l) => getProduct(conn, l.productId)?.book ?? 'shop'), header.businessDate);
     if (header.status === 'void') throw alreadyVoid('opening stock batch');
     const before = toDetail(conn, header);
-    const lines = loadLines(conn, id);
 
     // Quantity check first, so the message can name the short products.
     const short: Fields = {};

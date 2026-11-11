@@ -4,6 +4,7 @@
  * (600 bp = 6.00 %). The server calculates every figure; the screens only display them (and preview commission).
  */
 import type { PostedStatus } from './api';
+import type { CashWarning } from './cashbooks';
 
 /** A reload provider. `commissionBp` is the EFFECTIVE rate (own rate, else the shop default); `ownCommissionBp` null = default. */
 export interface ReloadProvider { id: number; name: string; commissionBp: number; ownCommissionBp: number | null; active: boolean }
@@ -52,7 +53,8 @@ export interface TopupQuery {
 export interface TopupList {
   items: Topup[]; total: number; totals: { providerTopupCents: number; walletTopupCents: number; totalCents: number };
 }
-export interface TopupOne { item: Topup }
+/** `warnings` (R13, shared negative-cash warnings) comes with a CREATE; a void answers without it. */
+export interface TopupOne { item: Topup; warnings?: CashWarning[] }
 
 /** Posted figures of one provider for the period. */
 export interface ProviderSummary {

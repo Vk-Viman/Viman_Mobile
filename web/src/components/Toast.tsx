@@ -1,18 +1,18 @@
 /**
- * Toast: small pop-up notices in the bottom-right corner ("Product saved", error messages).
+ * Toast: small pop-up notices in the bottom-right corner ("Product saved", error messages, amber warnings).
  * ToastProvider is mounted once in main.tsx; any component then calls `useToast().success(...)` or `.error(...)`.
  * Notices disappear by themselves (errors stay longer so they can be read) or when dismissed.
  */
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { CheckCircle2, XCircle, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, XCircle, X } from 'lucide-react';
 
-type Kind = 'success' | 'error';
+type Kind = 'success' | 'error' | 'warning';
 interface ToastItem { id: number; kind: Kind; message: string }
 /** What components receive from useToast(). */
-interface ToastApi { success: (m: string) => void; error: (m: string) => void }
+interface ToastApi { success: (m: string) => void; error: (m: string) => void; warning: (m: string) => void }
 
-/** How long (ms) a notice stays before disappearing on its own. Errors get longer: they need more reading time. */
+/** How long (ms) a notice stays before disappearing on its own. Errors and warnings get longer: they need more reading time. */
 const SUCCESS_TOAST_MS = 5000;
 const ERROR_TOAST_MS = 10000;
 
@@ -29,12 +29,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (kind: Kind, message: string) => {
       const id = nextId.current++;
       setItems((l) => [...l, { id, kind, message }]);
-      window.setTimeout(() => dismiss(id), kind === 'error' ? ERROR_TOAST_MS : SUCCESS_TOAST_MS);
+      window.setTimeout(() => dismiss(id), kind === 'success' ? SUCCESS_TOAST_MS : ERROR_TOAST_MS);
     },
     [dismiss],
   );
   // useMemo gives a stable object, so components using useToast() do not re-render whenever a notice appears.
-  const api = useMemo<ToastApi>(() => ({ success: (m) => push('success', m), error: (m) => push('error', m) }), [push]);
+  const api = useMemo<ToastApi>(
+    () => ({ success: (m) => push('success', m), error: (m) => push('error', m), warning: (m) => push('warning', m) }),
+    [push],
+  );
 
   return (
     <Ctx.Provider value={api}>
@@ -45,10 +48,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role={t.kind === 'error' ? 'alert' : 'status'}
-            className="pointer-events-auto flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+            className={`pointer-events-auto flex items-start gap-3 rounded-lg border p-3 shadow-lg ${t.kind === 'warning' ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white'}`}
           >
             {t.kind === 'success' ? (
               <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-brand-600" aria-hidden="true" />
+            ) : t.kind === 'warning' ? (
+              <AlertTriangle size={20} className="mt-0.5 shrink-0 text-amber-600" aria-hidden="true" />
             ) : (
               <XCircle size={20} className="mt-0.5 shrink-0 text-red-600" aria-hidden="true" />
             )}
@@ -63,7 +68,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/** Returns `{ success(message), error(message) }`. Throws if used outside ToastProvider (a programming mistake). */
+/** Returns `{ success(message), error(message), warning(message) }`. Throws if used outside ToastProvider (a programming mistake). */
 // eslint-disable-next-line react-refresh/only-export-components
 export function useToast(): ToastApi {
   const v = useContext(Ctx);
