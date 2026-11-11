@@ -18,6 +18,7 @@ Migrations live in `server/src/db/migrations/NNN_name.sql`. Each phase adds its 
 | `004_purchases_inventory.sql` | 3 | **implemented** — stock_movements (+cache trigger), cash_entries, purchases, purchase_items, purchase_returns(+items), audit_logs columns |
 | `005_stocktake_losses_drawings.sql` | 4 | **implemented** — stocktakes(+items), stock_losses, owner_drawings (goods only in Phase 4) |
 | `006_sales_returns.sql` | 5 | **implemented** — sales, sale_items, sales_returns(+items), stock_losses.sales_return_id |
+| `008_sale_extra_cost.sql` | 5 amendment | sale_items/sales_returns/sales_return_items extra-cost columns (BUSINESS_RULES C13) |
 | `007_no_hard_deletes.sql` | 5 | BEFORE DELETE triggers (`RECORD_DELETE_FORBIDDEN`) on purchases(+items), stocktakes, stock_losses, owner_drawings, sales(+items) — BUSINESS_RULES §12 |
 
 ---
@@ -104,6 +105,13 @@ Same common rules as Phases 3–4 (business date + immutable `posted_at`, strict
 - **`sales_return_items`** (`id, sales_return_id FK NOT NULL, sale_item_id FK NOT NULL, qty >= 1, resalable CHECK IN (0,1), revenue_cents >= 0, cogs_cents >= 0`) — trigger `RETURN_ITEM_MISMATCH` (the item must belong to the return's sale); a trigger rejects a return quantity above `sold − returned` (`RETURN_EXCEEDS_SOLD`) as a backstop; append-only.
 - **`stock_losses`** (additive): `ALTER TABLE stock_losses ADD COLUMN sales_return_id INTEGER REFERENCES sales_returns(id)`; triggers: `BEFORE INSERT` abort `DAMAGED_RETURN_LINK` unless `(source = 'damaged_return') = (sales_return_id IS NOT NULL)`; for `damaged_return` rows `business_date` must equal the return's (`DAMAGED_RETURN_DATE`) and `reason = 'damaged'`; index `(sales_return_id)`. Phase 4's `STOCK_LOSS_IMMUTABLE` is unchanged.
 - Movements used: `sale` (`ref_table = 'sales'`), `sale_return` (`ref_table = 'sales_returns'`). Cash types used: `sale_goods`, `card_sale`, `sale_refund`, `card_refund`. Restore validation (`REQUIRED_TABLES`) stays Phase 1 only.
+
+### Phase 5 amendment — extra cost on sales (migration `008_sale_extra_cost.sql`, detail)
+Implements BUSINESS_RULES C13. Additive only (`ALTER TABLE … ADD COLUMN`); migrations 001–007 are not edited.
+- `sale_items.extra_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (extra_cost_cents >= 0)` — cost charged above the automatic cost (`cogs_cents`). Trigger: `UPDATE OF extra_cost_cents` aborts `SALE_ITEM_IMMUTABLE` (the existing immutability trigger predates the column and must be extended by a new trigger).
+- `sales_return_items.extra_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (extra_cost_cents >= 0)` and `sales_returns.extra_cost_reversed_cents INTEGER NOT NULL DEFAULT 0 CHECK (extra_cost_reversed_cents >= 0)`. Backstop trigger on `sales_return_items` insert: the cumulative reversed extra of a line may not exceed the line's `extra_cost_cents` (`RETURN_EXCEEDS_EXTRA_COST`). Return tables stay append-only.
+- No change to stock movements, cash entries or the stock cache: the extra cost never touches stock or cash.
+- Migration table row: `008_sale_extra_cost.sql` — Phase 5 amendment.
 
 ### Phase 5 — sales (planned columns; the Phase 5 detail above supersedes where it differs)
 - `sales(id, business_date, book, total_cents, status, client_ref, notes, created_at, voided_at, void_reason)` — `UNIQUE(client_ref, book)` (one cart may split into a shop sale and a telecom sale).
