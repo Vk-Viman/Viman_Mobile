@@ -61,3 +61,7 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 - [x] Phase 13 Opening stock + Excel template/preview/import (migration 011)
 - [x] Integrate, full tests (1,127 pass)
 - [ ] PR/merge; launcher browser verification in Phase 14
+
+## Wave 2 — Phase 8 (built and integrated 2026-11-11)
+- [x] Phase 8 expenses, cash books, closings, DAY_CLOSED, fund ledger table (migration 012)
+- [ ] PR/merge
