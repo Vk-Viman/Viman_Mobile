@@ -489,7 +489,11 @@ describe('POST /printing-supplies', () => {
     const s = await setup();
     const neg = await supNew(s, { amountCents: 1000 });
     expect(neg.status).toBe(201);
-    expect(neg.body.warnings).toEqual(['NEGATIVE_CASH_BALANCE']);
+    // Phase 8: the one shared warning shape (cash-warnings.ts). -1000 cents = -Rs. 10.00.
+    expect(neg.body.warnings).toEqual([{
+      code: 'NEGATIVE_CASH_BALANCE', book: 'shop', balanceCents: -1000,
+      message: 'The Shop cash book is now below zero (-Rs. 10.00). Check that the opening balance and sales are recorded.',
+    }]);
     expect(shopBalance(s)).toBe(-1000);
     await psNew(s, { qty: 100 }); // +150000
     const ok = await supNew(s, { amountCents: 50000 });

@@ -74,7 +74,7 @@ describe('POST /purchases - create', () => {
       businessDate: today(), items: [line(p.id, 1, 10, 132000)], clientRef: 'create-ref-0001',
     });
     expect(r.status).toBe(201);
-    expect(Object.keys(r.body)).toEqual(['item']);
+    expect(Object.keys(r.body)).toEqual(['item', 'warnings']); // Phase 8: shared negative-cash warnings
     const it = r.body.item;
     expect(Object.keys(it).sort()).toEqual(PURCHASE_KEYS);
     expect(it).toMatchObject({
@@ -767,7 +767,7 @@ describe('POST /purchases/:id/returns', () => {
 
     const r1 = await ret(s, A.id, [{ purchaseItemId: itemId, units: 3 }], { note: '  damaged  ' });
     expect(r1.status).toBe(201);
-    expect(Object.keys(r1.body).sort()).toEqual(['item', 'purchase']);
+    expect(Object.keys(r1.body).sort()).toEqual(['item', 'purchase', 'warnings']);
     expect(Object.keys(r1.body.item).sort()).toEqual(['backdated', 'businessDate', 'clientRef', 'id', 'items', 'note', 'postedAt', 'purchaseId', 'refundCents']);
     expect(r1.body.item).toMatchObject({ purchaseId: A.id, businessDate: today(), backdated: false, refundCents: 39600, note: 'damaged' });
     expect(Object.keys(r1.body.item.items[0]).sort()).toEqual(['id', 'productId', 'productName', 'purchaseItemId', 'units', 'valueCents']);

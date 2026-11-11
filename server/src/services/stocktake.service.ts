@@ -31,6 +31,7 @@ import type {
 } from '../repositories/stocktakes.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { gainValue, getPool, issueStock, receiveStock, reverseMovements } from './inventory.service.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -262,6 +263,7 @@ export function completeStocktake(ctx: AppContext, id: number): Stocktake {
   return runWrite(ctx, (conn) => {
     const header = getStocktakeRow(conn, id);
     if (!header) throw notFound('Stocktake');
+    assertDayOpen(conn, [header.book], header.businessDate); // R9: completing is the moment stock is posted
     if (header.status !== 'draft') {
       throw new AppError(409, 'NOT_DRAFT', 'Only a draft stocktake can be completed.');
     }
@@ -297,6 +299,8 @@ export function voidStocktake(ctx: AppContext, id: number, body: { reason: strin
   return runWrite(ctx, (conn) => {
     const header = getStocktakeRow(conn, id);
     if (!header) throw notFound('Stocktake');
+    // R9: a draft has posted nothing, so only a completed stocktake's void touches a (closed) day.
+    if (header.status === 'completed') assertDayOpen(conn, [header.book], header.businessDate);
     if (header.status === 'void') throw alreadyVoid('stocktake');
     const before = toStocktake(conn, header);
 

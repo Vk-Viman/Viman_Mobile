@@ -10,6 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
+import { mapCashAbort } from './day-closing.ts';
 import { futureDateError, validationError } from './validation.ts';
 
 export {
@@ -25,6 +26,7 @@ export type { Fields } from './validation.ts';
 function mapDbAbort(err: unknown): never {
   const msg = err instanceof Error ? err.message : '';
   if (msg.includes('FUTURE_DATE_NOT_ALLOWED')) throw futureDateError(); // R-FD trigger
+  mapCashAbort(err); // R9 DAY_CLOSED backstop and INVALID_BUSINESS_DATE (migration 012)
   if (msg.includes('PRODUCT_NOT_IN_BOOK')) {
     throw new AppError(400, 'PRODUCT_NOT_IN_BOOK', 'A product does not belong to this stocktake\'s book.');
   }

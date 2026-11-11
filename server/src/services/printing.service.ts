@@ -10,7 +10,8 @@
  *         -amount out of the SHOP book (type `printing_supplies`) with NO profit effect: it is compared with the
  *         standard cost only in the later variance report.
  *  - R13  warnings never block: price below standard cost (`PRICE_BELOW_COST`), cash-out that leaves the shop
- *         book negative (`NEGATIVE_CASH_BALANCE`).
+ *         book negative (the shared `CashWarning` object of cash-warnings.ts, same shape as every other cash-out).
+ *  - R9   a closed shop day refuses create and void (`assertDayOpen`, day-closing.ts).
  *  - R-FD no future dates. Sec 12: idempotent by `clientRef`; every write is audited with its business date and
  *         `backdated` flag; one database transaction holds the business row, its cash entry and its audit row.
  *  - R1   a void never edits or deletes: a reversing cash entry (`reverses_entry_id`) is added and the record is
@@ -20,7 +21,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
 import { mulDivRound } from '../lib/money.ts';
-import { cashBalance, findCashEntriesByRef, insertCashEntry } from '../repositories/cash-entries.repo.ts';
+import { findCashEntriesByRef, insertCashEntry } from '../repositories/cash-entries.repo.ts';
 import {
   getPrintSale as getPrintSaleRow, getPrintSaleByClientRef, getServiceType as getServiceTypeRow, getServiceTypeByCode,
   getSupply as getSupplyRow, getSupplyByClientRef, insertPrintSale, insertServiceType, insertSupply,
@@ -29,6 +30,9 @@ import {
 } from '../repositories/printing.repo.ts';
 import type { PrintSaleRow, PrintStatus, ServiceTypeRow, SupplyRow } from '../repositories/printing.repo.ts';
 import { logAudit } from './audit.service.ts';
+import { negativeCashWarnings } from './cash-warnings.ts';
+import type { CashWarning } from './cash-warnings.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -41,8 +45,8 @@ export const NAME_MAX_LENGTH = 100;
 /** The code of a service type: capital letters, digits and underscore, 2-20 characters. */
 const CODE_RE = /^[A-Z0-9_]{2,20}$/;
 
-/** R13 warning codes returned (never blocking) by the create endpoints. */
-export type PrintWarning = 'PRICE_BELOW_COST' | 'NEGATIVE_CASH_BALANCE';
+/** R13 warning code returned (never blocking) by the print sale endpoint (negative cash uses `CashWarning`). */
+export type PrintWarning = 'PRICE_BELOW_COST';
 
 // ---------------------------------------------------------------------------------------------
 // pure math (unit-tested with hand-calculated values)
@@ -199,6 +203,7 @@ export function createPrintSale(ctx: AppContext, body: PrintSaleCreate): { item:
     const existing = getPrintSaleByClientRef(conn, body.clientRef);
     if (existing) return { item: toPrintSale(existing), warnings: [], created: false };
 
+    assertDayOpen(conn, ['shop'], body.businessDate); // R9 (printing is a shop-book service)
     const type = getServiceTypeRow(conn, body.serviceTypeId);
     if (!type) throw validationError({ serviceTypeId: 'Service type not found.' });
     if (!type.active) {
@@ -242,6 +247,7 @@ export function voidPrintSale(ctx: AppContext, id: number, body: { reason: strin
   return runWrite(ctx, (conn) => {
     const row = getPrintSaleRow(conn, id);
     if (!row) throw notFound('Print sale');
+    assertDayOpen(conn, ['shop'], row.businessDate); // R9: a void is judged on the sale's own date
     if (row.status === 'void') throw alreadyVoid('print sale');
     const before = toPrintSale(row);
 
@@ -308,7 +314,7 @@ export function listSupplies(ctx: AppContext, q: {
  */
 export function createSupply(
   ctx: AppContext, body: { businessDate: string; amountCents: number; description: string; clientRef: string },
-): { item: PrintingSupply; warnings: PrintWarning[]; created: boolean } {
+): { item: PrintingSupply; warnings: CashWarning[]; created: boolean } {
   const fields: Fields = {};
   const description = trimmed(fields, 'description', 'Description', body.description, 1, NAME_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -318,6 +324,7 @@ export function createSupply(
     const existing = getSupplyByClientRef(conn, body.clientRef);
     if (existing) return { item: toSupply(existing), warnings: [], created: false };
 
+    assertDayOpen(conn, ['shop'], body.businessDate); // R9
     const id = insertSupply(conn, { businessDate: body.businessDate, amountCents: body.amountCents, description, clientRef: body.clientRef });
     insertCashEntry(conn, {
       book: 'shop', businessDate: body.businessDate, type: 'printing_supplies', amountCents: -body.amountCents,
@@ -326,8 +333,7 @@ export function createSupply(
     const item = loadSupply(conn, id);
     logAudit(conn, 'printing_supply', String(id), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    const warnings: PrintWarning[] = cashBalance(conn, 'shop') < 0 ? ['NEGATIVE_CASH_BALANCE'] : [];
-    return { item, warnings, created: true };
+    return { item, warnings: negativeCashWarnings(conn, ['shop']), created: true }; // R13: warn, never block
   });
 }
 
@@ -345,6 +351,7 @@ export function voidSupply(ctx: AppContext, id: number, body: { reason: string }
   return runWrite(ctx, (conn) => {
     const row = getSupplyRow(conn, id);
     if (!row) throw notFound('Printing supply');
+    assertDayOpen(conn, ['shop'], row.businessDate); // R9
     if (row.status === 'void') throw alreadyVoid('supplies purchase');
     const before = toSupply(row);
 

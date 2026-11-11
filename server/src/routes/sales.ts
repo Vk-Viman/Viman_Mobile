@@ -130,7 +130,7 @@ export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void 
   }));
 
   app.post('/sales/:id/returns', { schema: { params: idParamsSchema, body: returnBody } }, async (request, reply) => {
-    const { item, sale, created } = createSaleReturn(ctx, parseId(request.params), request.body as SaleReturnCreate);
-    return reply.code(created ? 201 : 200).send({ item, sale });
+    const { item, sale, warnings, created } = createSaleReturn(ctx, parseId(request.params), request.body as SaleReturnCreate);
+    return reply.code(created ? 201 : 200).send({ item, sale, warnings });
   });
 }

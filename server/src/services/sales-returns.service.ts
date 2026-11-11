@@ -13,8 +13,10 @@
  *         revenue and COGS reversal alone would otherwise hide it.
  *  - Section 2: one cash refund entry (`sale_refund` Shop / `card_refund` Telecom) dated the return's date.
  *  - R-FD: no future dates. R-RD: a return may not be dated before its sale. A voided sale cannot be returned.
+ *  - R9: a closed day of the sale's book refuses the return (judged on the RETURN's date); R13: the refund is a
+ *         cash-out, so it returns the shared negative-cash warning.
  *  - Section 12: `clientRef` makes a repeat return the saved return; the whole return is audited.
- * Validation order (contract): schema -> R-FD -> sale lookup 404 -> R-RD -> SALE_VOID -> quantities.
+ * Validation order (contract): schema -> R-FD -> sale lookup 404 -> R-RD -> DAY_CLOSED -> SALE_VOID -> quantities.
  * Write order (the DB trigger RETURN_EXCEEDS_SOLD compares against `returned_qty` at insert time): return header,
  * return lines, `addReturnedQty` per line, then stock/loss effects, cash, audit - all in one transaction.
  */
@@ -30,6 +32,9 @@ import {
 import type { SaleItemRow, SaleRow } from '../repositories/sales.repo.ts';
 import { insertStockLoss } from '../repositories/stock-losses.repo.ts';
 import { logAudit } from './audit.service.ts';
+import { negativeCashWarnings } from './cash-warnings.ts';
+import type { CashWarning } from './cash-warnings.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { receiveStock } from './inventory.service.ts';
 import { returnBeforeOriginalError, returnPortion } from './return-rules.ts';
 import { REFUND_CASH_TYPE, loadSale, runSalesWrite, toSaleReturn } from './sales-common.ts';
@@ -172,7 +177,7 @@ function writeReturn(
  */
 export function createSaleReturn(
   ctx: AppContext, saleId: number, body: SaleReturnCreate,
-): { item: SaleReturn; sale: Sale; created: boolean } {
+): { item: SaleReturn; sale: Sale; warnings: CashWarning[]; created: boolean } {
   const fields: Fields = {};
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -186,13 +191,14 @@ export function createSaleReturn(
       if (existing.saleId !== saleId) {
         throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different sale.');
       }
-      return { item: toSaleReturn(conn, existing), sale: loadSale(conn, saleId), created: false };
+      return { item: toSaleReturn(conn, existing), sale: loadSale(conn, saleId), warnings: [], created: false };
     }
 
     const sale = getSaleRow(conn, saleId);
     if (!sale) throw notFound('Sale');
     originalDate = sale.businessDate;
     if (body.businessDate < sale.businessDate) throw returnBeforeOriginalError('sale', sale.businessDate); // R-RD
+    assertDayOpen(conn, [sale.book], body.businessDate); // R9: judged on the RETURN's date
     if (sale.status === 'void') {
       throw new AppError(409, 'SALE_VOID', 'This sale has been voided, so it cannot be returned.');
     }
@@ -205,6 +211,6 @@ export function createSaleReturn(
     const item = toSaleReturn(conn, getSaleReturn(conn, returnId) as NonNullable<ReturnType<typeof getSaleReturn>>);
     logAudit(conn, 'sale_return', String(returnId), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, sale: loadSale(conn, saleId), created: true };
+    return { item, sale: loadSale(conn, saleId), warnings: item.refundCents > 0 ? negativeCashWarnings(conn, [sale.book]) : [], created: true };
   }, () => originalDate);
 }

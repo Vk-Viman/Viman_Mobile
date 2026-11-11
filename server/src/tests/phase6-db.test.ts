@@ -105,8 +105,9 @@ describe('reload_sales - constraints', () => {
   it('refuses non-dates and impossible dates', () => {
     const c = db();
     for (const d of ['2026-02-30', '2026-13-01', '26-01-01', 'yesterday', '2026-1-1', '']) {
-      // Triggers run before CHECKs, so a far-future-looking text such as '2026-13-01' is stopped by the R-FD trigger first.
-      expect(() => reload(c, { business_date: d }), d).toThrow(/CHECK|FUTURE_DATE_NOT_ALLOWED/);
+      // Triggers run before CHECKs, so a far-future-looking text such as '2026-13-01' is stopped by a trigger first:
+      // R-FD, or (migration 012) INVALID_BUSINESS_DATE for a well-shaped impossible date.
+      expect(() => reload(c, { business_date: d }), d).toThrow(/CHECK|FUTURE_DATE_NOT_ALLOWED|INVALID_BUSINESS_DATE/);
     }
   });
 

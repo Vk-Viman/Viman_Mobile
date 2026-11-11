@@ -24,6 +24,7 @@ import {
 import type { LossBook, LossReason, LossSource, LossStatus, StockLossRow } from '../repositories/stock-losses.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { issueStock, outflowValue, reverseMovements } from './inventory.service.ts';
+import { assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -93,6 +94,7 @@ export function createStockLoss(ctx: AppContext, body: StockLossCreate): { item:
 
     const product = getProduct(conn, body.productId);
     if (!product) throw validationError({ productId: 'Product not found.' });
+    assertDayOpen(conn, [product.book], body.businessDate); // R9: the product's book
     if (product.kind !== 'stock') {
       throw new AppError(400, 'PRODUCT_NOT_STOCKABLE', 'Only stock products can be written off.',
         { productId: 'Only stock products can be written off.' });
@@ -134,6 +136,7 @@ export function voidStockLoss(ctx: AppContext, id: number, body: { reason: strin
   return runWrite(ctx, (conn) => {
     const row = getStockLossRow(conn, id);
     if (!row) throw notFound('Stock loss');
+    assertDayOpen(conn, [row.book], row.businessDate); // R9: a void is judged on the loss's own date
     // A damaged-return loss has no stock movement of its own and is part of its return; undoing it alone would
     // leave the return's COGS reversal without its write-off.
     if (row.source === 'damaged_return') {
