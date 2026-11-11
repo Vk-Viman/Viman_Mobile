@@ -350,6 +350,34 @@ Web: the **Sales** section (sidebar, now built): *POS* (product search by name/c
 - Warnings: `PRICE_BELOW_COST` still compares the price with the **automatic** unit cost.
 - Web: the POS cart line shows **Cost per unit**, filled from the product's current average cost and editable upward; the server's rules above are authoritative (the UI sends `unitCostCents` only when the cashier changed it).
 
+### Wave 1 contracts — Phases 6, 7, 13 (final; supersedes the "Planned endpoints" lines for these phases)
+Conventions as Phase 3–5: `/api/v1`, `clientRef` idempotency (201 created / 200 repeated original), `businessDate` required on create, future date → `400 FUTURE_DATE_NOT_ALLOWED` (exact R-FD message), unknown properties rejected, list endpoints paged `limit/offset` (default 50, max 200) with `{ items, total, totals }`, void = `POST /<resource>/:id/void` with `{ reason }` (409 `ALREADY_VOID` on a second void), audit row for every write (with `business_date` and `backdated`), all writes in one `ctx.database.tx()`.
+
+**Phase 6 — Telecom** (route file `routes/telecom.ts`)
+- `GET /reload-providers` → `{ items: [{ id, name, commissionBp (effective = own or shop default), ownCommissionBp (null = default), active }] }`; `PUT /reload-providers/:id` `{ commissionBp: int 0–10000 | null, active: bool }` (audited; never changes existing sales).
+- `POST /reload-sales` `{ businessDate, providerId, salesCents (int ≥1), extraCents? (int ≥0, default 0), notes?, clientRef }` → `{ item }`: commission = `mulDivRound(salesCents, rateBp, 10000) + extraCents`; rate snapshotted; cash +salesCents (`reload_collection`, book telecom). Inactive provider → `409 PROVIDER_INACTIVE`.
+- `GET /reload-sales` filters `from,to,providerId,status`; `totals`: `salesCents, commissionCents, extraCents` (posted rows only). `GET /reload-sales/:id`; `POST /reload-sales/:id/void`.
+- `POST /ezcash-sales` `{ businessDate, billTotalCents (≥1), notes?, clientRef }` (provider = Dialog automatically) → commission = `mulDivRound(billTotalCents, ezcashBp, 10000)`; cash +billTotal (`ezcash_collection`). `GET /ezcash-sales` (+`totals`: `billTotalCents, commissionCents`), `GET /ezcash-sales/:id`, `POST /ezcash-sales/:id/void`.
+- `POST /telecom/topups` `{ businessDate, kind: 'provider_topup'|'wallet_topup', providerId? (required for provider_topup, forbidden for wallet_topup), amountCents (≥1), notes?, clientRef }` → cash −amount. `GET /telecom/topups` (+`totals` by kind), `GET /telecom/topups/:id`, `POST /telecom/topups/:id/void`.
+- `GET /telecom/summary?from&to` → per-provider and total: `reloadSalesCents, reloadCommissionCents, ezcashBillCents, ezcashCommissionCents, topupsCents (provider/wallet), commissionRevenueCents` (posted rows; **revenue = commission only**).
+- Scratch cards are ordinary stock products in the POS (Phase 5) — no Phase 6 endpoint.
+- Web: `/telecom` tabs Reloads / EZCash / Top-ups (+ summary header and provider-rate editor inside the Reloads tab). Commission is previewed live with the same integer formula; the server value is authoritative.
+
+**Phase 7 — Printing** (route file `routes/printing.ts`)
+- `GET /print-service-types` (`?active=true`), `POST /print-service-types` `{ code (^[A-Z0-9_]{2,20}$), name, priceCents, costCents }` (`409 DUPLICATE_CODE`), `PUT /print-service-types/:id` `{ name, priceCents, costCents, active }` (audited; never changes past sales).
+- `POST /print-sales` `{ businessDate, serviceTypeId, qty (int 1–1 000 000), unitPriceCents? (default = type price; may be changed), notes?, clientRef }` → snapshot cost = type cost; revenue = qty×unitPrice; cash +revenue (`sale_service`, book shop). Warning (not block, R13): `unitPriceCents < unitCostCents` → response `warnings: ['PRICE_BELOW_COST']`. Inactive type → `409 SERVICE_TYPE_INACTIVE`.
+- `GET /print-sales` filters `from,to,serviceTypeId,status` + `totals { revenueCents, cogsCents, grossProfitCents }`; `GET /print-sales/:id`; `POST /print-sales/:id/void`.
+- `POST /printing-supplies` `{ businessDate, amountCents, description, clientRef }` (cash −amount, `printing_supplies`, book shop; **no P&L**); `GET /printing-supplies` (+`totals`), `GET /printing-supplies/:id`, `POST /printing-supplies/:id/void`.
+- Web: `/printing` tabs Print sales (quick entry buttons per service type + history) / Service types / Supplies.
+
+**Phase 13 — Opening stock & Excel import** (route file `routes/opening-stock.ts`)
+- `POST /opening-stock` `{ businessDate, items: [{ productId, qty (int ≥1), unitCostCents? | totalValueCents? (exactly one; value = exact entered total, or qty×unitCost) }], notes?, clientRef }` → creates one batch + one `opening` movement per line via the inventory engine (`receiveStock`, type opening) in one transaction. Unknown/inactive product → 422 with `fields["items.N.productId"]`. Duplicate product lines in one batch → 422 `DUPLICATE_PRODUCT`. Stock products only (shop/telecom cards); services have no stock.
+- `GET /opening-stock` (batches, paged; `?from,to,status`), `GET /opening-stock/:id` (with lines), `POST /opening-stock/:id/void` `{ reason }` (R1 reversal; `409 OPENING_BATCH_IN_USE` per schema doc).
+- `GET /excel/opening-stock-template` → `.xlsx` download (ExcelJS): sheet "Opening stock" with header row `SKU | Product name | Quantity | Unit cost (Rs) | Total value (Rs) | Notes`, sample row, data validation notes, plus sheet "Products" listing every active stock product (SKU, name, category, unit). Header names are the contract for the import.
+- `POST /excel/opening-stock/preview` multipart (`file` ≤ 5 MB, `.xlsx` only, `businessDate` field, default today) → `{ importRunId, rows: [{ rowNo, sku, productId, productName, qty, unitCostCents, totalValueCents, status 'ok'|'error', issues: [{ code, message }] }], summary { total, ok, failed, totalValueCents }, fileSha256 }`. **Nothing is written to stock.** Row validation codes: `MISSING_SKU`, `UNKNOWN_SKU`, `INACTIVE_PRODUCT`, `BAD_QTY`, `BAD_COST` (cost/total both missing or both present and inconsistent beyond the exact integer rule), `DUPLICATE_SKU_IN_FILE`, `FUTURE_DATE_NOT_ALLOWED` (per R-FD if a row/date is in the future). Money cells parsed as exact decimals (Rs with up to 2 dp, no float math; thousands commas allowed).
+- `POST /excel/opening-stock/import` same multipart + `clientRef` field → **all-or-nothing**: if any row has an error → `422 IMPORT_HAS_ERRORS` with the row list and **nothing is saved**; else one batch (source excel) is committed atomically; `409 IMPORT_ALREADY_COMMITTED` for the same file hash. Returns `{ batch, importRunId, summary }`.
+- Excel **export** of reports is Phase 11/12 (not here). Web: `/opening-stock` tabs Manual entry / Excel import (download template → upload → preview table with per-row issues → confirm).
+
 ---
 
 ## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
