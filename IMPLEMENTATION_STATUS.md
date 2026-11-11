@@ -89,3 +89,8 @@
 - **Web:** POS cart "Cost per unit" field (auto-filled, raise only), extra cost shown on the result, history, detail and returns.
 - **Tests:** 38 files, **798 passing** (47 new). Typecheck clean; production build OK.
 - **Browser (Playwright, launcher cold start):** charger with automatic Rs 37.40: cost field auto-filled; Rs 37 refused ("can only be increased", Save disabled); Rs 38 on 5 units → extra Rs 3.00, cost Rs 190.00 (automatic Rs 187.00 + extra Rs 3.00), profit Rs 310; stock left at Rs 187.00; return of 2 reversed extra Rs 1.20 and restocked at the automatic Rs 74.80; reconciliation OK; 0 console errors.
+
+## Wave 1 — Phases 6, 7, 13 (started 2026-11-11, owner authorised Phases 6–14 in waves)
+- Branch `feature/wave1-telecom-printing-opening-stock`; baseline commit `5acfe73` (ExcelJS 4.4.0, stubs, contracts).
+- Parallel agents, each in its own git worktree with exclusive files: Phase 6 telecom (migration 009), Phase 7 printing (010), Phase 13 opening stock/Excel (011). Orchestrator owns all `.md` docs, `app.ts`, `App.tsx`, `navItems.ts`.
+- Status: **in progress** — agents building; results, test counts and browser verification are recorded here when each phase is integrated.
