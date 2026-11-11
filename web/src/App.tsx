@@ -12,6 +12,7 @@ import { AuditTab } from './pages/settings/AuditTab';
 import { ProductsPage } from './pages/products/ProductsPage';
 import { ProductsTab } from './pages/products/ProductsTab';
 import { CategoriesTab } from './pages/products/CategoriesTab';
+import { PurchasesPage } from './pages/purchases/PurchasesPage';
 import { SuppliersTab } from './pages/products/SuppliersTab';
 
 export function App() {
@@ -27,6 +28,7 @@ export function App() {
           <Route path="categories" element={<CategoriesTab />} />
           <Route path="suppliers" element={<SuppliersTab />} />
         </Route>
+        <Route path="purchases" element={<PurchasesPage />} />
         <Route path="settings" element={<SettingsPage />}>
           <Route index element={<GeneralTab />} />
           <Route path="rates" element={<RatesTab />} />

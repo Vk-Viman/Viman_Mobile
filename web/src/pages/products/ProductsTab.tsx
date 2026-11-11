@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pencil, Plus, Search } from 'lucide-react';
+import { History, Pencil, Plus, Search } from 'lucide-react';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -14,6 +14,7 @@ import { TextField } from '../../components/TextField';
 import { useCategories, useProducts } from '../../api/catalog';
 import type { Book, Product, ProductQuery } from '../../types/api';
 import { ProductDialog } from './ProductDialog';
+import { MovementsDialog } from '../purchases/MovementsDialog';
 import { BOOK_LABEL, CHECKBOX_CLASS, useDebounced } from './shared';
 
 const LIMIT = 50;
@@ -27,6 +28,7 @@ export function ProductsTab() {
   const [lowOnly, setLowOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [dialog, setDialog] = useState<{ product: Product | null } | null>(null);
+  const [history, setHistory] = useState<Product | null>(null);
 
   const q = useDebounced(search.trim(), 300);
   const cats = useCategories();
@@ -82,14 +84,26 @@ export function ProductsTab() {
       key: 'actions',
       header: 'Actions',
       render: (p) => (
-        <Button
-          variant="ghost"
-          className="!min-h-8 !px-2"
-          aria-label={`Edit ${p.name}`}
-          onClick={(e) => { e.stopPropagation(); setDialog({ product: p }); }}
-        >
-          <Pencil size={16} aria-hidden="true" /> Edit
-        </Button>
+        <span className="inline-flex gap-1">
+          <Button
+            variant="ghost"
+            className="!min-h-8 !px-2"
+            aria-label={`Edit ${p.name}`}
+            onClick={(e) => { e.stopPropagation(); setDialog({ product: p }); }}
+          >
+            <Pencil size={16} aria-hidden="true" /> Edit
+          </Button>
+          {p.kind === 'stock' && (
+            <Button
+              variant="ghost"
+              className="!min-h-8 !px-2"
+              aria-label={`Stock history for ${p.name}`}
+              onClick={(e) => { e.stopPropagation(); setHistory(p); }}
+            >
+              <History size={16} aria-hidden="true" /> History
+            </Button>
+          )}
+        </span>
       ),
     },
   ];
@@ -174,6 +188,7 @@ export function ProductsTab() {
           </>
         )}
       </Card>
+      {history && <MovementsDialog product={history} onClose={() => setHistory(null)} />}
       {dialog && <ProductDialog key={dialog.product?.id ?? 'new'} product={dialog.product} onClose={() => setDialog(null)} />}
     </>
   );
