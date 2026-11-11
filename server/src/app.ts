@@ -37,6 +37,9 @@ import { registerPrintingRoutes } from './routes/printing.ts';
 import { registerOpeningStockRoutes } from './routes/opening-stock.ts';
 import { registerExpenseRoutes } from './routes/expenses.ts';
 import { registerCashbookRoutes } from './routes/cashbooks.ts';
+import { registerCashTransferRoutes } from './routes/cash-transfers.ts';
+import { registerCapitalRoutes } from './routes/capital.ts';
+import { registerIceCreamRoutes } from './routes/icecream.ts';
 
 /** Options of `buildApp`. */
 export interface AppOptions {
@@ -238,6 +241,9 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerOpeningStockRoutes(api, ctx);
     registerExpenseRoutes(api, ctx);
     registerCashbookRoutes(api, ctx);
+    registerCashTransferRoutes(api, ctx);
+    registerCapitalRoutes(api, ctx);
+    registerIceCreamRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;
