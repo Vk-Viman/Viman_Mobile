@@ -5,7 +5,8 @@
 | **1** | Foundation: DB + migrations, settings, audit log, backup/restore, web shell, launcher, docs | **☑ Complete (2026-11-10) — awaiting owner approval for Phase 2** |
 | **2** | Catalog: categories, products, suppliers (migration 003, API, screens) | **☑ Complete (2026-11-10) — awaiting owner approval for Phase 3** |
 | **3** | Purchases, stock movements, inventory engine, cash ledger table (migration 004) | **☑ Complete (2026-11-11) — awaiting owner approval for Phase 4** |
-| 4–14 | See TASKS.md | not started |
+| **4** | Stocktake, stock losses, personal-use drawings (goods), inventory valuation (migration 005) | **☑ Complete (2026-11-11) — awaiting owner approval for Phase 5** |
+| 5–14 | See TASKS.md | not started |
 
 ## Phase 1 — what exists
 - **Server** (`server/src`): Fastify on `127.0.0.1:4300`; SQLite via `node:sqlite` (WAL, foreign keys); migration runner with LF-normalised checksums; `001_foundation.sql` (`schema_migrations`, `settings`, `audit_logs`).
@@ -54,3 +55,14 @@
 - **Weighted-average demonstration (owner request):** purchase 10 @ Rs 3,000 then 10 @ Rs 4,000 → 20 units / Rs 7,000, avg Rs 350; sale of 2 → COGS Rs 700.00, pool 18 / Rs 6,300; purchase 5 @ Rs 420 → 23 / Rs 8,400 (avg 365.2174); sale of 3 → COGS Rs 1,095.65 (8,400×3÷23 = 1,095.652), pool 20 / Rs 7,304.35; selling the rest empties the pool to exactly 0/0. Sales are exercised through the engine only (sale endpoints arrive in Phase 5).
 - **Browser (Playwright, cold start via launcher):** two purchases created through the screens (1×10 for Rs 3,000; 2×5 for Rs 4,000) → 20 units, Rs 7,000, avg Rs 350; partial return of 3 → refund Rs 900, pool 17/Rs 6,100; void with typed VOID → pool 7/Rs 2,100; reconciliation OK throughout; exact R-FD / R-RD messages returned by the API; stock history dialog; audit rows carry business date and backdated; 0 console errors. Test data moved out afterwards.
 - **Outstanding / notes:** DAY_CLOSED and the negative-cash-balance warning arrive with the cash books (Phase 8); no screen shows the cash ledger yet (purchase payments/refunds are recorded in it); no sale/loss/stocktake/opening-stock endpoints until Phases 4–5/13; the product filter in the purchase form is a text box + select, not a combobox; a v3 database edited by hand to contain cached stock without movements would show as a reconciliation mismatch.
+
+## Phase 4 — Stocktake, stock losses, personal use, valuation (2026-11-11)
+- **Database (migration 005, schema v5):** `stocktakes` (+items), `stock_losses`, `owner_drawings` (created now; only goods drawings written until Phase 9) with date/R-FD guards, status-transition and immutability triggers. All stock changes still go through the Phase 3 movement ledger and cache trigger.
+- **Stocktake:** draft count sheet (live system quantities) → complete posts differences: loss at weighted average, gain at the average (C10: entered unit cost required when the pool has no quantity or value). Voiding a completed stocktake writes exact negations on the original business date; blocked if gained stock was already used.
+- **Stock losses:** damaged / lost / expired / other at average cost; one loss row ↔ exactly one movement; idempotent; void restores stock and value exactly.
+- **Personal use:** goods drawing at cost (not selling price), no cash, no revenue/COGS/expense, never in stock losses; void restores stock.
+- **Valuation:** `GET /inventory/valuation` (live or as of a business date, Shop and Telecom separate).
+- **Web:** Stock section — Stock on hand (valuation + reconciliation check), Stocktake (count sheet), Stock losses, Personal use.
+- **Tests:** 27 files, **607 passing** (136 new, incl. a seeded 1,200-operation model check against an independent BigInt model). QA found a real DB bug (NULL quantity slipped through a goods-drawing CHECK) — fixed in migration 005 before release. Typecheck clean, production build OK.
+- **Browser (Playwright, cold start via launcher):** valuation screen (Shop vs Telecom separate); count sheet counted 17 vs system 20 → loss Rs 1,050 at average, pool 17 / Rs 5,950; damaged loss of 2 → Rs 700; personal use of 1 → drawing Rs 350 (not Rs 1,000), not in losses; void stocktake → exact reversal; exact R-FD message; over-removal blocked; backdated loss accepted and audited; reconciliation OK; 0 console errors. Test data moved out afterwards.
+- **Outstanding / notes:** valuation as of a date before any purchase can show negative quantity when a loss was backdated before the stock existed (a plain sum of movements by business date — allowed by the backdating rule); no opening-stock entry yet (Phase 13), so existing inventory is entered via purchases; stock-adjustment totals (losses + stocktake differences) are derivable from movements and appear in the Phase 11 reports; unknown product ids return 400 (as in Phase 3).

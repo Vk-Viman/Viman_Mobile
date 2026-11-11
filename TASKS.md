@@ -33,5 +33,14 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 | Purchases screens, stock history | Frontend | ☑ |
 | 172 new tests incl. weighted-average demo | QA | ☑ |
 
+## Phase 4 — Stocktake, losses, personal use, valuation (complete — awaiting owner approval for Phase 5)
+| Task | Owner | Status |
+|---|---|---|
+| Contract + schema detail | Orchestrator | ☑ |
+| Migration 005 + repositories | DB Architect | ☑ |
+| Stocktake / losses / drawings / valuation services + routes | Backend | ☑ |
+| Stock section screens | Frontend | ☑ |
+| 136 new tests incl. model check | QA | ☑ |
+
 ## Later phases (not started — require owner approval)
 2 Catalog · 3 Purchases & movements · 4 Costing/stocktake/valuation · 5 POS/returns/voids · 6 Telecom · 7 Printing · 8 Expenses (electricity blocked, §7) + 3 cash books (Ice Cream entries carry a fund) · 9 Transfers/drawings/capital/losses · 10 Ice cream three-fund system (BUSINESS_RULES §10) · 11 Reports · 12 Dashboard + exports · 13 Opening-stock Excel · 14 Full QA + docs.

@@ -248,9 +248,63 @@ Web: `web/src/types/api.ts` mirrors the shapes above; purchases UI uses the Phas
 
 ---
 
+## Phase 4 endpoints — Stocktake, stock losses, personal use (goods drawings), valuation
+
+Rules in force (BUSINESS_RULES): §3 (weighted-average pool, outflows at average, C10 gains), §9 (goods drawing at cost; no revenue/COGS/expense), §11 + R2/R3 (stock losses and stocktake differences form the *Stock adjustments (net)* line of the product's segment; goods drawings are **not** in it), C6/C9 (voids = exact negation, original business date), R-FD, §12 (business date vs posting time, audit). **No cash effect** in Phase 4. All writes: JSON schema (no coercion, `additionalProperties:false`) → R-FD → lookups (404) → business rules; one `database.tx()` containing the record(s), the stock movement(s) (via the Phase 3 inventory engine only — never write the product cache) and the audit row; `clientRef` (string 8–64 chars `[A-Za-z0-9_-]`) makes a repeat return the original with `200`.
+
+**Reversal convention (C6):** voiding a stocktake, loss or goods drawing writes new movements with the **same type**, exactly **negated** `qtyDelta`/`valueDeltaCents` of the originals, `businessDate` copied from the original, posting time = the void time, `reason` = "Void of <record> #id". Original rows are never edited (append-only).
+
+### Stocktake
+`Stocktake` = `{ id, businessDate, postedAt, backdated, book, status: "draft"|"completed"|"void", notes, completedAt|null, voidedAt|null, voidReason|null, clientRef, items: StocktakeItem[] }`.
+`StocktakeItem` = `{ id, productId, productName, productCode, countedQty, expectedQty, differenceQty, valueDeltaCents|null, gainUnitCostCents|null }`. In a **draft**, `expectedQty` is the product's *current* quantity (live) and `differenceQty = countedQty − expectedQty`, `valueDeltaCents` is `null`; in a **completed** stocktake they are the stored values at completion.
+
+- `POST /api/v1/stocktakes` `{ businessDate, book: "shop"|"telecom", notes?, items?: [{ productId, countedQty, gainUnitCostCents? }], clientRef }` → `201 { item }` (status `draft`, no stock effect). `items`: ≤ 500, each product must exist, be `kind = "stock"` and belong to `book` (`400 PRODUCT_NOT_IN_BOOK`), no duplicates; `countedQty` integer 0–1 000 000 000; `gainUnitCostCents` integer 0–99 999 999 999.
+- `PUT /api/v1/stocktakes/:id` `{ notes?, items? }` (`minProperties: 1`) → `200 { item }` — draft only (`409 NOT_DRAFT`); `items`, when present, **replaces** the whole list.
+- `GET /api/v1/stocktakes?from=&to=&book=&status=&limit=&offset=` → `{ items: Stocktake[] (with items), total }` (`limit` 1–100, default 50; order `businessDate DESC, id DESC`); `GET /api/v1/stocktakes/:id` → `{ item }`.
+- `POST /api/v1/stocktakes/:id/complete` `{}` → `200 { item }`. For every counted item, inside one transaction, in item order, against the **live** pool at that moment: `differenceQty = countedQty − pool.qty`.
+  - `< 0` → `issueStock` type **`stocktake_loss`** (qty = |difference|, at the weighted average; whole value if the whole pool leaves).
+  - `> 0` → `receiveStock` type **`stocktake_gain`**: value = `mulDivRound(pool.value, gain, pool.qty)` when pool `qty > 0` **and** `value > 0`; otherwise (C10) `gain × gainUnitCostCents` and `gainUnitCostCents` is **required** → `422 UNIT_COST_REQUIRED` with `fields["items.N.gainUnitCostCents"]` (nothing is posted). A supplied `gainUnitCostCents` is ignored when the average can be used.
+  - `= 0` → no movement. Movements carry the stocktake's `businessDate`, `refTable = "stocktakes"`, reason "Stocktake #id".
+  - Stores per item `expectedQty`, `differenceQty`, `valueDeltaCents` (signed: gain +, loss −), `gainUnitCostCents` (when used); sets `completedAt`; status `completed`. Errors: `409 NOT_DRAFT`; `400 VALIDATION_ERROR` when the draft has no items.
+- `POST /api/v1/stocktakes/:id/void` `{ reason }` (1–200) → `200 { item }`. A **draft** is simply cancelled (status `void`, no movements). A **completed** stocktake is reversed per the reversal convention; `422 INSUFFICIENT_STOCK` ("Some of the stock added by this stocktake has already been used.") if a gain can no longer be removed; `409 ALREADY_VOID`.
+- Audit: entity `stocktake`, actions `create` / `update` / `complete` / `void` (financial: `businessDate`, `backdated`).
+
+### Stock losses
+`StockLoss` = `{ id, businessDate, postedAt, backdated, productId, productName, book, qty, costCents, unitCostCents, reason: "damaged"|"lost"|"expired"|"other", note, source: "manual", status: "posted"|"void", voidedAt|null, voidReason|null, clientRef }` (`costCents` = value removed from the pool; `unitCostCents = mulDivRound(costCents, 1, qty)`).
+- `POST /api/v1/stock-losses` `{ businessDate, productId, qty, reason, note?, clientRef }` → `201 { item }`. `qty` integer ≥ 1; `note` ≤ 500; product must exist and be `kind = "stock"` (`400 PRODUCT_NOT_STOCKABLE`; inactive products are allowed); `422 INSUFFICIENT_STOCK` when `qty` exceeds the quantity on hand. Effect: `issueStock` type **`loss`** at the weighted average (`refTable = "stock_losses"`), one `stock_losses` row (`costCents` = the value removed), audit (entity `stock_loss`). **Exactly once:** one loss row ↔ exactly one movement; repeating `clientRef` returns the original.
+- `GET /api/v1/stock-losses?from=&to=&productId=&book=&reason=&status=&limit=&offset=` → `{ items: StockLoss[], total, totalCostCents }` (`totalCostCents` = Σ `costCents` of **posted** rows matching the filter). `GET /api/v1/stock-losses/:id` → `{ item }`.
+- `POST /api/v1/stock-losses/:id/void` `{ reason }` → `200 { item }`: status `void`; reversal movement (type `loss`, `+qty`, `+costCents`, original business date); `409 ALREADY_VOID`.
+- Damaged *sales returns* (`source = "damaged_return"`) are Phase 5.
+
+### Personal use — goods drawings
+`Drawing` = `{ id, businessDate, postedAt, backdated, book: "shop"|"telecom", kind: "goods"|"cash", amountCents, productId|null, productName|null, qty|null, note, status: "posted"|"void", voidedAt|null, voidReason|null, clientRef }` (`amountCents` for goods = the stock **cost** removed — never the selling price).
+- `POST /api/v1/drawings` `{ kind: "goods", businessDate, productId, qty, note?, clientRef }` → `201 { item }`. `kind: "cash"` → `400 NOT_AVAILABLE_YET` (cash drawings arrive with the cash books, Phases 8–9). Same product/quantity checks as stock losses. Effect: `issueStock` type **`personal_use`** (`refTable = "owner_drawings"`), one `owner_drawings` row (`amountCents` = value removed, `book` = product's book), audit (entity `drawing`). No revenue, no COGS, no expense, no cash entry, **not** a stock loss.
+- `GET /api/v1/drawings?kind=&from=&to=&book=&productId=&status=&limit=&offset=` → `{ items: Drawing[], total, totalAmountCents }` (posted only in the total); `GET /api/v1/drawings/:id`.
+- `POST /api/v1/drawings/:id/void` `{ reason }` → reversal movement (type `personal_use`, `+qty`, `+amountCents`, original business date); `409 ALREADY_VOID`.
+
+### Inventory valuation
+- `GET /api/v1/inventory/valuation?book=&categoryId=&asOf=&includeZero=&includeInactive=` → `{ asOf: string|null, items: [{ productId, code, name, categoryId, categoryName, book, active, qty, valueCents, avgUnitCostCents|null }], totals: { qty, valueCents, byBook: { shop: { qty, valueCents }, telecom: { qty, valueCents } } } }`.
+  - `asOf` is a **business date** (never rejected): quantities/values are Σ of movements with `business_date <= asOf`; omitted, or later than today (Asia/Colombo), the live pool is used (the same figures). `includeZero` default `false` (hides products with qty 0 and value 0); `includeInactive` default `true`. `avgUnitCostCents = mulDivRound(valueCents, 1, qty)` when `qty > 0` else `null`. Items ordered by `name` (case-insensitive). Telecom stock (scratch cards) is reported separately from Shop stock (`byBook`).
+
+### Internal module contracts (Phase 4, server)
+`services/inventory.service.ts` gains (Backend):
+```ts
+// Σ movements dated <= asOf per product (business-date basis), for valuation.
+export function poolsAsOf(conn, asOf: string): Map<number, PoolState>;
+// Value for a stocktake/opening gain per C10; throws AppError(422,'UNIT_COST_REQUIRED') when the pool cannot price it and no unit cost is given.
+export function gainValue(pool: PoolState, gainQty: number, gainUnitCostCents: number | null): number;
+// Reversal helper: inserts the exact negation of the given movements (same type, same business date), returning ids. Blocks (422 INSUFFICIENT_STOCK) when a negated inflow would drive qty or value below 0.
+export function reverseMovements(conn, movementIds: number[], reason: string): number[];
+```
+Repositories (DB Architect): `stocktakes.repo.ts` (`insertStocktake`, `getStocktake`, `getStocktakeByClientRef`, `listStocktakes`, `replaceStocktakeItems`, `listStocktakeItems`, `completeStocktakeItem(conn, itemId, {expectedQty, differenceQty, valueDeltaCents, gainUnitCostCents})`, `markStocktakeCompleted`, `markStocktakeVoid`), `stock-losses.repo.ts` (`insertStockLoss`, `getStockLoss`, `getStockLossByClientRef`, `listStockLosses` with `totalCostCents`, `markStockLossVoid`), `drawings.repo.ts` (`insertDrawing`, `getDrawing`, `getDrawingByClientRef`, `listDrawings` with `totalAmountCents`, `markDrawingVoid`), and in `stock-movements.repo.ts` `listMovementsByRef(conn, refTable, refId): MovementRow[]` and `sumMovementsAsOf(conn, asOf)`; same conventions as Phase 3.
+
+Web: `web/src/types/api.ts` mirrors the shapes above. The **Stock** section (sidebar) becomes real with tabs *Stock on hand* (valuation), *Stocktake*, *Stock losses*, *Personal use*; money/quantity inputs use the existing integer converters; the date picker defaults to `GET /health` `today` with `max = today`.
+
+---
+
 ## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
 - **P2 Catalog**: specified above (Phase 2 endpoints).
-- **P3 Inventory**: specified above (purchases, movements, reconciliation). **P4/P13**: `POST /opening-stock` · `POST /stocktakes`, `GET /stocktakes`, `POST /stocktakes/:id/complete` · `POST /stock-losses`, `GET /stock-losses` · `GET /inventory/valuation`
+- **P3 Inventory**: specified above (purchases, movements, reconciliation). **P4**: specified above (stocktake, stock losses, goods drawings, valuation). **P13**: `POST /opening-stock` (opening stock entry/import).
 - **P5 Sales**: `POST /sales` (server splits a mixed cart by book), `GET /sales`, `GET /sales/:id`, `POST /sales/:id/void`, `POST /sales/:id/returns` (R-RD)
 - **P6 Telecom**: `GET/PUT /reload-providers` · `POST/GET /reload-sales` · `POST/GET /ezcash-sales` · `POST/GET /telecom/topups`
 - **P7 Printing**: `GET/POST /print-service-types`, `PUT /print-service-types/:id` · `POST /printing-supplies`
