@@ -417,6 +417,10 @@ export interface SaleItem {
   unitCostCents: number;
   revenueCents: number;
   cogsCents: number;
+  /** C13: extra cost the cashier added on top of the automatic cost (0 when unchanged). */
+  extraCostCents: number;
+  /** cogsCents + extraCostCents: the cost charged to this line. */
+  chargedCostCents: number;
   returnedQty: number;
 }
 export interface SaleReturnItem {
@@ -429,6 +433,8 @@ export interface SaleReturnItem {
   resalable: boolean;
   revenueCents: number;
   cogsCents: number;
+  /** C13: this item's share of the line's extra cost that the return reverses. */
+  extraCostCents: number;
 }
 export interface SaleReturn {
   id: number;
@@ -437,7 +443,10 @@ export interface SaleReturn {
   postedAt: string;
   backdated: boolean;
   refundCents: number;
+  /** Automatic cost reversed (stock restored/lost at this amount). */
   cogsReversedCents: number;
+  /** C13: extra cost reversed by this return (0 when none). */
+  extraCostReversedCents: number;
   note: string;
   clientRef: string;
   items: SaleReturnItem[];
@@ -449,8 +458,13 @@ export interface Sale {
   backdated: boolean;
   book: Book;
   totalCents: number;
+  /** Automatic (weighted-average) cost. */
   cogsCents: number;
-  /** totalCents - cogsCents, before returns (returns are shown on their own). */
+  /** C13: sum of the lines' extra cost. */
+  extraCostCents: number;
+  /** cogsCents + extraCostCents. */
+  chargedCostCents: number;
+  /** totalCents - chargedCostCents, before returns (returns are shown on their own). */
   grossProfitCents: number;
   status: PostedStatus;
   notes: string;
@@ -463,13 +477,27 @@ export interface Sale {
 /** Non-blocking server warnings on a sale line (rule R13). */
 export type WarningCode = 'PRICE_BELOW_MINIMUM' | 'PRICE_BELOW_COST' | 'ZERO_COST';
 export interface Warning { code: WarningCode; message: string; lineIndex: number }
-export interface SaleTotals { revenueCents: number; cogsCents: number; refundsCents: number }
+export interface SaleTotals {
+  revenueCents: number;
+  cogsCents: number;
+  /** C13: extra cost over posted sales. */
+  extraCostCents: number;
+  /** Automatic + extra cost over posted sales. */
+  costCents: number;
+  refundsCents: number;
+}
 export interface SaleList { items: Sale[]; total: number; totals: SaleTotals }
 export interface SaleOne { item: Sale }
 export interface SaleQuery {
   from?: string; to?: string; book?: Book; status?: PostedStatus; productId?: number; limit?: number; offset?: number;
 }
-export interface SaleCreateLine { productId: number; qty: number; unitPriceCents: number }
+export interface SaleCreateLine {
+  productId: number;
+  qty: number;
+  unitPriceCents: number;
+  /** C13: cost per unit to charge; send ONLY when the cashier changed it (the server then enforces >= automatic). */
+  unitCostCents?: number;
+}
 export interface SaleCreate { businessDate: string; items: SaleCreateLine[]; notes?: string; clientRef: string }
 export interface SaleCreateResult { sales: Sale[]; warnings: Warning[] }
 export interface SaleVoidBody { reason: string }

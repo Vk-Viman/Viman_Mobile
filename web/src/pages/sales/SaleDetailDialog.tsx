@@ -4,7 +4,8 @@
  * API: GET /sales/:id (api/sales.ts); the actions open VoidSaleDialog / SaleReturnDialog.
  * Rules shown: a sale with returns cannot be voided (the server says HAS_RETURNS), a void sale accepts no actions
  * (ALREADY_VOID / SALE_VOID), and "Return items" is unavailable once everything has been returned. Unit cost is the
- * snapshot taken at sale time and never changes afterwards. All amounts are the server's integer cents.
+ * snapshot of the AUTOMATIC cost taken at sale time and never changes afterwards; C13 adds the extra cost the cashier
+ * charged and the resulting charged cost (shown per line and in the header). All amounts are the server's integer cents.
  */
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -46,7 +47,10 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
               <Row k="Book" v={<BookBadge book={s.book} />} />
               <Row k="Status" v={<PostedStatusBadge status={s.status} />} />
               <Row k="Total" v={<Money cents={s.totalCents} className="font-semibold" />} />
-              <Row k="Cost (COGS)" v={<Money cents={s.cogsCents} />} />
+              <Row k="Cost" v={<Money cents={s.chargedCostCents} />} />
+              {s.extraCostCents > 0 && (
+                <Row k="Cost breakdown" v={<>automatic <Money cents={s.cogsCents} /> + extra <Money cents={s.extraCostCents} /></>} />
+              )}
               <Row k="Profit (before returns)" v={<Money cents={s.grossProfitCents} />} />
               <Row k="Notes" v={s.notes || '—'} />
               {s.status === 'void' && (
@@ -66,7 +70,9 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
                       <th scope="col" className="px-2 py-2 text-left">Product</th>
                       <th scope="col" className="px-2 py-2 text-right">Qty</th>
                       <th scope="col" className="px-2 py-2 text-right">Unit price</th>
-                      <th scope="col" className="px-2 py-2 text-right">Unit cost (at sale)</th>
+                      <th scope="col" className="px-2 py-2 text-right">Unit cost (automatic)</th>
+                      <th scope="col" className="px-2 py-2 text-right">Extra cost</th>
+                      <th scope="col" className="px-2 py-2 text-right">Charged cost</th>
                       <th scope="col" className="px-2 py-2 text-right">Line total</th>
                       <th scope="col" className="px-2 py-2 text-right">Returned qty</th>
                     </tr>
@@ -78,6 +84,8 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
                         <td className="num px-2 py-2 text-right">{it.qty}</td>
                         <td className="px-2 py-2 text-right"><Money cents={it.unitPriceCents} /></td>
                         <td className="px-2 py-2 text-right"><Money cents={it.unitCostCents} /></td>
+                        <td className="px-2 py-2 text-right"><Money cents={it.extraCostCents} /></td>
+                        <td className="px-2 py-2 text-right"><Money cents={it.chargedCostCents} /></td>
                         <td className="px-2 py-2 text-right"><Money cents={it.revenueCents} /></td>
                         <td className="num px-2 py-2 text-right">{it.returnedQty}</td>
                       </tr>
@@ -100,7 +108,10 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
                           {r.businessDate} {r.backdated && <Badge tone="amber">Backdated</Badge>}
                           <span className="ml-2 text-xs text-slate-500">posted {formatDateTime(r.postedAt)}</span>
                         </span>
-                        <span>Refund <Money cents={r.refundCents} className="font-semibold" /></span>
+                        <span>
+                          Refund <Money cents={r.refundCents} className="font-semibold" />
+                          {r.extraCostReversedCents > 0 && <span className="ml-2 text-xs text-slate-500">(extra cost reversed <Money cents={r.extraCostReversedCents} />)</span>}
+                        </span>
                       </div>
                       <ul className="mt-1 space-y-0.5 text-slate-600">
                         {r.items.map((i) => (

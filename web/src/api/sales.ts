@@ -6,7 +6,8 @@
  * business rules §4, R5/C5, R13, R-FD, R-RD in BUSINESS_RULES.md).
  *
  * Money is integer cents everywhere. The server is authoritative for totals, COGS, profit and refunds; the web
- * only sends quantities and unit prices.
+ * only sends quantities and unit prices (and, since C13, a unit cost only when the cashier raised it above the
+ * automatic cost; the server enforces cost >= automatic and returns extra/charged cost fields).
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';

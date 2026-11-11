@@ -4,6 +4,8 @@
  * Data: the `POST /sales` response (api/sales.ts): one sale per book plus the server's non-blocking warnings
  * (R13: PRICE_BELOW_MINIMUM, PRICE_BELOW_COST, ZERO_COST). Each warning names the cart line it refers to via
  * `lineIndex`, which we resolve against the cart snapshot that was submitted.
+ * C13: when a sale carries extra cost the panel shows the cost as "charged (automatic + extra)"; figures are the
+ * server's integer cents.
  */
 import { CheckCircle2 } from 'lucide-react';
 import { Button } from '../../components/Button';
@@ -31,13 +33,20 @@ export function SaleResult({ sales, warnings, submitted, onNewSale }: Props) {
 
       <ul className="space-y-2">
         {sales.map((s) => (
-          <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-3 text-sm">
-            <span className="flex items-center gap-2">
-              <span className="font-medium">Sale #{s.id}</span>
-              <BookBadge book={s.book} />
-              <span className="text-slate-500">{s.items.length} item{s.items.length === 1 ? '' : 's'}</span>
-            </span>
-            <Money cents={s.totalCents} className="font-semibold" />
+          <li key={s.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <span className="font-medium">Sale #{s.id}</span>
+                <BookBadge book={s.book} />
+                <span className="text-slate-500">{s.items.length} item{s.items.length === 1 ? '' : 's'}</span>
+              </span>
+              <Money cents={s.totalCents} className="font-semibold" />
+            </div>
+            {s.extraCostCents > 0 && (
+              <p className="mt-1 text-xs text-slate-600">
+                Cost <Money cents={s.chargedCostCents} /> (automatic <Money cents={s.cogsCents} /> + extra <Money cents={s.extraCostCents} />)
+              </p>
+            )}
           </li>
         ))}
       </ul>

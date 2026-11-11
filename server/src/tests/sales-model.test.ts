@@ -11,6 +11,11 @@
 //   * the cash ledger of sales and refunds equals that net revenue, per book;
 //   * damaged-return losses (count and cost) and resalable restock movements equal the model;
 //   * a blocked operation leaves every table and the model unchanged.
+// C13 (extra cost) is part of the model: about a third of the cart lines carry a cost per unit entered by the cashier (at or above the
+// automatic cost, so extra = qty x unit - cogs >= 0; sometimes BELOW it, which must refuse the whole cart with COST_BELOW_AUTOMATIC and
+// write nothing). The model tracks each line's extra and the part of it every return reversed (same exact-remainder split), and the
+// database sums, the sale/return fields and the GET /sales totals (extra, cost = automatic + extra) are compared after every step. The
+// extra never reaches stock or cash, which the existing pool / ledger / cash checks prove (they use the automatic cost only).
 // WHY a seeded PRNG (mulberry32): the sequence looks random and finds odd combinations nobody would write by hand, yet the same seed
 // always produces the same run, so a failure can be replayed exactly. Three seeds x 300 operations; a final test makes sure every kind of
 // operation and every refused path was exercised (the run cannot pass by accident while doing nothing).
@@ -58,7 +63,7 @@ class Pools {
 }
 
 /** One sold line as the model remembers it (frozen revenue/COGS and what returns already took back). */
-interface Line { itemId: number; pid: number; qty: number; rev: number; cogs: number; rq: number; rrev: number; rcogs: number }
+interface Line { itemId: number; pid: number; qty: number; rev: number; cogs: number; ex: number; rq: number; rrev: number; rcogs: number; rex: number }
 /** A sale as the model remembers it. */
 interface SaleRec { id: number; book: 'shop' | 'telecom'; age: number; lines: Line[]; voided: boolean; returns: number }
 interface PurchaseRec { id: number; pid: number; units: number; total: number; age: number; voided: boolean }
@@ -91,6 +96,7 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
   const randDay = (): number => (chance(0.5) ? 0 : ri(1, 15));
   // Model totals that the aggregate checks compare with SQL sums.
   const agg = { resalableCogs: 0, damagedLines: 0, damagedCogs: 0 };
+  const ceilDiv = (a: number, b: number): number => Math.floor((a + b - 1) / b);
 
   // Opening stock so that sales are possible from the start (a purchase through the API, mirrored in the model).
   for (const pid of all) {
@@ -101,13 +107,13 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
   }
 
   /** Net revenue / COGS of the posted sales according to the model (sold minus returned), per book. */
-  const modelNet = (): { rev: Record<string, number>; cogs: number } => {
-    const rev: Record<string, number> = { shop: 0, telecom: 0 }; let cogs = 0;
+  const modelNet = (): { rev: Record<string, number>; cogs: number; extra: number } => {
+    const rev: Record<string, number> = { shop: 0, telecom: 0 }; let cogs = 0; let extra = 0;
     for (const sa of sales) {
       if (sa.voided) continue;
-      for (const l of sa.lines) { rev[sa.book] = (rev[sa.book] ?? 0) + l.rev - l.rrev; cogs += l.cogs - l.rcogs; }
+      for (const l of sa.lines) { rev[sa.book] = (rev[sa.book] ?? 0) + l.rev - l.rrev; cogs += l.cogs - l.rcogs; extra += l.ex - l.rex; }
     }
-    return { rev, cogs };
+    return { rev, cogs, extra };
   };
 
   // The per-step comparison (see the file header).
@@ -130,6 +136,10 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
     expect(num(s, `SELECT COALESCE(SUM(i.cogs_cents),0) FROM sale_items i JOIN sales x ON x.id = i.sale_id WHERE x.status = 'posted'`)
       - num(s, `SELECT COALESCE(SUM(r.cogs_cents),0) FROM sales_return_items r JOIN sale_items i ON i.id = r.sale_item_id JOIN sales x ON x.id = i.sale_id WHERE x.status = 'posted'`),
     `${label}: net cogs`).toBe(net.cogs);
+    // C13: extra cost of posted sales minus the extra reversed by returns
+    expect(num(s, `SELECT COALESCE(SUM(i.extra_cost_cents),0) FROM sale_items i JOIN sales x ON x.id = i.sale_id WHERE x.status = 'posted'`)
+      - num(s, `SELECT COALESCE(SUM(r.extra_cost_cents),0) FROM sales_return_items r JOIN sale_items i ON i.id = r.sale_item_id JOIN sales x ON x.id = i.sale_id WHERE x.status = 'posted'`),
+    `${label}: net extra cost`).toBe(net.extra);
     // cash of sales and refunds per book (a void adds its own reversal, so voided sales net to 0)
     expect(num(s, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE type IN ('sale_goods','sale_refund')`), `${label}: shop cash`).toBe(net.rev.shop);
     expect(num(s, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE type IN ('card_sale','card_refund')`), `${label}: telecom cash`).toBe(net.rev.telecom);
@@ -222,10 +232,16 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
       // ---- sale: a cart of 1..4 lines over any products (so carts are often MIXED across the two books) ----
       label += ' sale';
       const n = ri(1, 4);
-      const cart = Array.from({ length: n }, () => ({ pid: pick(all), qty: chance(0.08) ? ri(15, 30) : ri(1, 5), price: chance(0.1) ? 0 : ri(1, 4000) }));
+      const cart = Array.from({ length: n }, () => ({
+        pid: pick(all), qty: chance(0.08) ? ri(15, 30) : ri(1, 5), price: chance(0.1) ? 0 : ri(1, 4000),
+        // C13 mode of this line: none (default) / raise (cost at or above the automatic) / below (refused)
+        costMode: chance(0.65) ? 'none' : chance(0.85) ? 'raise' : 'below', extraUnits: ri(0, 3),
+      }));
       const age = randDay();
       const work = new Map<number, Pool>();
-      const cogs: bigint[] = []; let failIdx = -1; let onHand = 0n;
+      const cogs: bigint[] = []; let failIdx = -1; let onHand = 0n; let costFail = false; let minUnit = 0;
+      const unitCost: Array<number | undefined> = [];
+      const extras: number[] = [];
       cart.forEach((l, idx) => {
         if (failIdx >= 0) return;
         const base = m.pool(l.pid);
@@ -233,9 +249,24 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
         if (BigInt(l.qty) > p.q) { failIdx = idx; onHand = p.q; return; }
         const out = outValue(p, BigInt(l.qty));
         p.q -= BigInt(l.qty); p.v -= out; work.set(l.pid, p); cogs.push(out);
+        // C13: the entered cost per unit, derived from the automatic cost of THIS line (known only now)
+        const c = Number(out);
+        const lo = ceilDiv(c, l.qty);
+        let u: number | undefined;
+        if (l.costMode === 'raise') u = lo + l.extraUnits;
+        else if (l.costMode === 'below' && lo > 0) u = lo - 1;      // (lo-1) x qty < cogs always, so this must be refused
+        unitCost[idx] = u;
+        if (u !== undefined && l.qty * u < c) { failIdx = idx; costFail = true; minUnit = lo; return; }
+        extras.push(u === undefined ? 0 : l.qty * u - c);
       });
-      const res = await sellNew(s, cart.map((l) => cl(l.pid, l.qty, l.price)), { businessDate: daysAgo(age) });
-      if (failIdx >= 0) {
+      const res = await sellNew(s, cart.map((l, idx) => (unitCost[idx] === undefined ? cl(l.pid, l.qty, l.price) : { ...cl(l.pid, l.qty, l.price), unitCostCents: unitCost[idx] })), { businessDate: daysAgo(age) });
+      if (failIdx >= 0 && costFail) {
+        expect(res.status, label + JSON.stringify(res.body)).toBe(422);
+        expect(res.body.error.code).toBe('COST_BELOW_AUTOMATIC');
+        expect(Object.keys(res.body.error.fields), label).toEqual([`items.${failIdx}.unitCostCents`]);
+        expect(res.body.error.minUnitCostCents, label).toBe(minUnit);
+        expectUnchanged = true; hit('sale-cost-blocked');
+      } else if (failIdx >= 0) {
         expect(res.status, label + JSON.stringify(res.body)).toBe(422);
         expect(res.body.error.code).toBe('INSUFFICIENT_STOCK');
         expect(Object.keys(res.body.error.fields), label).toEqual([`items.${failIdx}.qty`]);
@@ -259,11 +290,18 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
           const rec: SaleRec = { id: sale.id, book: sale.book, age, lines: [], voided: false, returns: 0 };
           idxs.forEach((ci, k) => {
             const l = cart[ci]!; const it = sale.items[k];
-            expect(it, label).toMatchObject({ lineNo: k + 1, productId: l.pid, qty: l.qty, unitPriceCents: l.price, revenueCents: l.qty * l.price, cogsCents: Number(cogs[ci]) });
-            rec.lines.push({ itemId: it.id, pid: l.pid, qty: l.qty, rev: l.qty * l.price, cogs: Number(cogs[ci]), rq: 0, rrev: 0, rcogs: 0 });
+            expect(it, label).toMatchObject({
+              lineNo: k + 1, productId: l.pid, qty: l.qty, unitPriceCents: l.price, revenueCents: l.qty * l.price, cogsCents: Number(cogs[ci]),
+              extraCostCents: extras[ci], chargedCostCents: Number(cogs[ci]) + extras[ci]!,
+            });
+            rec.lines.push({ itemId: it.id, pid: l.pid, qty: l.qty, rev: l.qty * l.price, cogs: Number(cogs[ci]), ex: extras[ci]!, rq: 0, rrev: 0, rcogs: 0, rex: 0 });
+            if (extras[ci]! > 0) hit('sale-extra');
           });
           expect(sale.totalCents, label).toBe(rec.lines.reduce((a, l) => a + l.rev, 0));
           expect(sale.cogsCents, label).toBe(rec.lines.reduce((a, l) => a + l.cogs, 0));
+          expect(sale.extraCostCents, label).toBe(rec.lines.reduce((a, l) => a + l.ex, 0));
+          expect(sale.chargedCostCents, label).toBe(sale.cogsCents + sale.extraCostCents);
+          expect(sale.grossProfitCents, label).toBe(sale.totalCents - sale.chargedCostCents);
           sales.push(rec);
         }
         hit('sale'); if (expectedBooks.length === 2) hit('sale-mixed'); if (n > 1) hit('sale-multiline');
@@ -290,21 +328,25 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
         expectUnchanged = true; hit('return-over');
       } else {
         expect(res.status, label + JSON.stringify(res.body)).toBe(201);
-        let refund = 0; let cogsBack = 0;
+        let refund = 0; let cogsBack = 0; let exBack = 0;
         req.forEach((x, k) => {
           const l = x.l;
           const finalPart = l.rq + x.qty === l.qty;
           const remRev = l.rev - l.rrev; const remCogs = l.cogs - l.rcogs;
           const rev = finalPart ? remRev : Math.min(Number(mdr(BigInt(l.rev), BigInt(x.qty), BigInt(l.qty))), remRev);
           const cg = finalPart ? remCogs : Math.min(Number(mdr(BigInt(l.cogs), BigInt(x.qty), BigInt(l.qty))), remCogs);
-          expect(res.body.item.items[k], label).toMatchObject({ saleItemId: l.itemId, qty: x.qty, resalable: x.resalable, revenueCents: rev, cogsCents: cg });
-          l.rq += x.qty; l.rrev += rev; l.rcogs += cg; refund += rev; cogsBack += cg;
+          const remEx = l.ex - l.rex;
+          const ex = finalPart ? remEx : Math.min(Number(mdr(BigInt(l.ex), BigInt(x.qty), BigInt(l.qty))), remEx);
+          expect(res.body.item.items[k], label).toMatchObject({ saleItemId: l.itemId, qty: x.qty, resalable: x.resalable, revenueCents: rev, cogsCents: cg, extraCostCents: ex });
+          l.rq += x.qty; l.rrev += rev; l.rcogs += cg; l.rex += ex; refund += rev; cogsBack += cg; exBack += ex;
+          if (ex > 0) hit('return-extra');
           if (x.resalable) { m.add(l.pid, BigInt(x.qty), BigInt(cg)); agg.resalableCogs += cg; hit('return-resalable'); }
           else { agg.damagedLines += 1; agg.damagedCogs += cg; hit('return-damaged'); }
           hit(finalPart ? 'return-final' : 'return-partial');
         });
         expect(res.body.item.refundCents, label).toBe(refund);
         expect(res.body.item.cogsReversedCents, label).toBe(cogsBack);
+        expect(res.body.item.extraCostReversedCents, label).toBe(exBack);
         S.returns += 1; hit('return');
       }
     } else if (r < 0.88) {
@@ -350,10 +392,13 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
     expect(list.total).toBe(sales.length);
     expect(list.totals.revenueCents).toBe(posted.reduce((a, x) => a + x.lines.reduce((b, l) => b + l.rev, 0), 0));
     expect(list.totals.cogsCents).toBe(posted.reduce((a, x) => a + x.lines.reduce((b, l) => b + l.cogs, 0), 0));
+    // C13: GET /sales totals carry the extra and cost = automatic + extra (sold amounts; returns are listed separately)
+    expect(list.totals.extraCostCents).toBe(posted.reduce((a, x) => a + x.lines.reduce((b, l) => b + l.ex, 0), 0));
+    expect(list.totals.costCents).toBe(list.totals.cogsCents + list.totals.extraCostCents);
   }
   for (const x of sales) {
     for (const l of x.lines) {
-      if (l.rq === l.qty) { expect(l.rrev).toBe(l.rev); expect(l.rcogs).toBe(l.cogs); }   // fully returned lines add up EXACTLY
+      if (l.rq === l.qty) { expect(l.rrev).toBe(l.rev); expect(l.rcogs).toBe(l.cogs); expect(l.rex).toBe(l.ex); }   // fully returned lines add up EXACTLY
       expect(num(s, 'SELECT returned_qty FROM sale_items WHERE id = ?', l.itemId)).toBe(l.rq);
     }
   }
@@ -377,7 +422,7 @@ describe('randomized model check (seeded)', () => {
   // Coverage guard: every kind of operation and every refused path happened at least once across the seeds.
   it('across the seeds every operation kind and every refused path was exercised', () => {
     for (const k of ['purchase', 'pvoid', 'loss', 'loss-void', 'stocktake', 'sale', 'sale-mixed', 'sale-multiline', 'sale-blocked',
-      'return', 'return-resalable', 'return-damaged', 'return-partial', 'return-final', 'return-over', 'return-early',
+      'sale-extra', 'sale-cost-blocked', 'return-extra', 'return', 'return-resalable', 'return-damaged', 'return-partial', 'return-final', 'return-over', 'return-early',
       'void', 'void-already', 'void-has-returns', 'return-on-void']) {
       expect(total[k], `kind ${k} never exercised: ${JSON.stringify(total)}`).toBeGreaterThan(0);
     }

@@ -19,20 +19,23 @@ import { num, sql } from './phase4.ts';
 // ---------------------------------------------------------------------------------------------
 /** Sorted keys of a Sale in API responses. */
 export const SALE_KEYS = [
-  'backdated', 'book', 'businessDate', 'clientRef', 'cogsCents', 'grossProfitCents', 'id', 'items', 'notes', 'postedAt',
-  'returns', 'status', 'totalCents', 'voidReason', 'voidedAt',
+  'backdated', 'book', 'businessDate', 'chargedCostCents', 'clientRef', 'cogsCents', 'extraCostCents', 'grossProfitCents', 'id',
+  'items', 'notes', 'postedAt', 'returns', 'status', 'totalCents', 'voidReason', 'voidedAt',
 ].sort();
 /** Sorted keys of a SaleItem (one sold line). */
 export const SALE_ITEM_KEYS = [
-  'cogsCents', 'id', 'lineNo', 'lineType', 'productCode', 'productId', 'productName', 'qty', 'returnedQty', 'revenueCents',
-  'unitCostCents', 'unitPriceCents',
+  'chargedCostCents', 'cogsCents', 'extraCostCents', 'id', 'lineNo', 'lineType', 'productCode', 'productId', 'productName', 'qty',
+  'returnedQty', 'revenueCents', 'unitCostCents', 'unitPriceCents',
 ].sort();
 /** Sorted keys of a SaleReturn. */
 export const RETURN_KEYS = [
-  'backdated', 'businessDate', 'clientRef', 'cogsReversedCents', 'id', 'items', 'note', 'postedAt', 'refundCents', 'saleId',
+  'backdated', 'businessDate', 'clientRef', 'cogsReversedCents', 'extraCostReversedCents', 'id', 'items', 'note', 'postedAt',
+  'refundCents', 'saleId',
 ].sort();
 /** Sorted keys of one returned line. */
-export const RETURN_ITEM_KEYS = ['cogsCents', 'id', 'productId', 'productName', 'qty', 'resalable', 'revenueCents', 'saleItemId'].sort();
+export const RETURN_ITEM_KEYS = ['cogsCents', 'extraCostCents', 'id', 'productId', 'productName', 'qty', 'resalable', 'revenueCents', 'saleItemId'].sort();
+/** Sorted keys of the `totals` object of GET /sales (C13 adds extraCostCents and costCents). */
+export const SALE_TOTALS_KEYS = ['cogsCents', 'costCents', 'extraCostCents', 'refundsCents', 'revenueCents'].sort();
 /** Sorted keys of a StockLoss (Phase 5 adds `salesReturnId`). */
 export const LOSS_KEYS = [
   'backdated', 'book', 'businessDate', 'clientRef', 'costCents', 'id', 'note', 'postedAt', 'productId', 'productName', 'qty',
@@ -62,42 +65,52 @@ export function sqlSale(c: DatabaseSync, o: Record<string, any> = {}): number {
 /**
  * Inserts a sale line directly. Defaults: line number 1, qty 3, unit price 100000, cogs 70000, unit cost 23333,
  * revenue = qty x price, line type goods (shop sale) or card (telecom sale), returned_qty 0.
- * @param o lineNo, qty, price, cost, cogs, revenue, type, returned, description
+ * @param o lineNo, qty, price, cost, cogs, revenue, type, returned, description, extra (C13 extra cost; column only written when given,
+ *          so the helper also works on a database older than migration 008)
  * @returns the new sale item id
  */
 export function sqlSaleItem(c: DatabaseSync, saleId: number, productId: number, o: Record<string, any> = {}): number {
   const book = (c.prepare('SELECT book FROM sales WHERE id = ?').get(saleId) as { book: string } | undefined)?.book ?? 'shop';
   const qty = o.qty ?? 3;
   const price = o.price ?? 100000;
+  const extraCol = o.extra === undefined ? '' : ', extra_cost_cents';
+  const extraVal = o.extra === undefined ? '' : ', ?';
+  const extraArg = o.extra === undefined ? [] : [o.extra];
   return Number(c.prepare(
     `INSERT INTO sale_items (sale_id, line_no, line_type, product_id, description, qty, unit_price_cents, unit_cost_cents,
-                             revenue_cents, cogs_cents, returned_qty)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                             revenue_cents, cogs_cents, returned_qty${extraCol})
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${extraVal})`,
   ).run(saleId, o.lineNo ?? 1, o.type ?? (book === 'shop' ? 'goods' : 'card'), productId, o.description ?? 'Item', qty, price,
-    o.cost ?? 23333, o.revenue ?? qty * price, o.cogs ?? 70000, o.returned ?? 0).lastInsertRowid);
+    o.cost ?? 23333, o.revenue ?? qty * price, o.cogs ?? 70000, o.returned ?? 0, ...extraArg).lastInsertRowid);
 }
 
 /**
  * Inserts a sales_returns header directly. Defaults: today, refund 100000, cogs 23333, fresh client_ref.
- * @param o date, refund, cogs, note, ref
+ * @param o date, refund, cogs, note, ref, extra (C13 extra cost reversed; column only written when given)
  * @returns the new return id
  */
 export function sqlReturn(c: DatabaseSync, saleId: number, o: Record<string, any> = {}): number {
+  const extraCol = o.extra === undefined ? '' : ', extra_cost_reversed_cents';
+  const extraVal = o.extra === undefined ? '' : ', ?';
+  const extraArg = o.extra === undefined ? [] : [o.extra];
   return Number(c.prepare(
-    `INSERT INTO sales_returns (sale_id, business_date, refund_cents, cogs_reversed_cents, note, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(saleId, o.date ?? today(), o.refund ?? 100000, o.cogs ?? 23333, o.note ?? '', o.ref ?? uniq5()).lastInsertRowid);
+    `INSERT INTO sales_returns (sale_id, business_date, refund_cents, cogs_reversed_cents, note, client_ref${extraCol})
+     VALUES (?, ?, ?, ?, ?, ?${extraVal})`,
+  ).run(saleId, o.date ?? today(), o.refund ?? 100000, o.cogs ?? 23333, o.note ?? '', o.ref ?? uniq5(), ...extraArg).lastInsertRowid);
 }
 
 /**
- * Inserts a sales_return_items row directly. Defaults: resalable, revenue 100000, cogs 23333.
+ * Inserts a sales_return_items row directly. Defaults: resalable, revenue 100000, cogs 23333; `extra` (C13) only written when given.
  * @returns the new row id
  */
 export function sqlReturnItem(c: DatabaseSync, returnId: number, saleItemId: number, qty: number, o: Record<string, any> = {}): number {
+  const extraCol = o.extra === undefined ? '' : ', extra_cost_cents';
+  const extraVal = o.extra === undefined ? '' : ', ?';
+  const extraArg = o.extra === undefined ? [] : [o.extra];
   return Number(c.prepare(
-    `INSERT INTO sales_return_items (sales_return_id, sale_item_id, qty, resalable, revenue_cents, cogs_cents)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(returnId, saleItemId, qty, o.resalable ?? 1, o.revenue ?? 100000, o.cogs ?? 23333).lastInsertRowid);
+    `INSERT INTO sales_return_items (sales_return_id, sale_item_id, qty, resalable, revenue_cents, cogs_cents${extraCol})
+     VALUES (?, ?, ?, ?, ?, ?${extraVal})`,
+  ).run(returnId, saleItemId, qty, o.resalable ?? 1, o.revenue ?? 100000, o.cogs ?? 23333, ...extraArg).lastInsertRowid);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -105,6 +118,10 @@ export function sqlReturnItem(c: DatabaseSync, returnId: number, saleItemId: num
 // ---------------------------------------------------------------------------------------------
 /** One cart line of POST /sales. */
 export const cl = (productId: number, qty: number, unitPriceCents: number) => ({ productId, qty, unitPriceCents });
+
+/** One cart line with a cost per unit entered by the cashier (C13): `unitCostCents` is the cost to CHARGE, at or above the automatic cost. */
+export const clc = (productId: number, qty: number, unitPriceCents: number, unitCostCents: unknown) =>
+  ({ productId, qty, unitPriceCents, unitCostCents });
 
 /**
  * POST /sales (raw response). Defaults: dated today, fresh clientRef. `over` can replace or add any body field.

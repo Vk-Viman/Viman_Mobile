@@ -15,7 +15,7 @@ import { apiBase, buy, daysAgo, daysAhead, mkProduct, mkTelecom, productOf, ref,
 import type { ApiBase } from './helpers/inventory.ts';
 import { err, FUTURE_MSG, mvs, mvsByRef, num, poolOf, productsSnap, reconOk, sql } from './helpers/phase4.ts';
 import {
-  breakCash, cashBal, cashOfRef, cl, returnOk, rl, sellNew, sellOk, SALE_ITEM_KEYS, SALE_KEYS, snap5, stocked, stocked20, voidSaleNew,
+  breakCash, cashBal, cashOfRef, cl, returnOk, rl, sellNew, sellOk, SALE_ITEM_KEYS, SALE_KEYS, SALE_TOTALS_KEYS, snap5, stocked, stocked20, voidSaleNew,
 } from './helpers/phase5.ts';
 
 const env = new TestEnv();
@@ -43,7 +43,7 @@ describe('POST /sales - create', () => {
     const sale = r.body.sales[0];
     expect(Object.keys(sale).sort()).toEqual(SALE_KEYS);
     expect(sale).toMatchObject({
-      businessDate: today(), backdated: false, book: 'shop', totalCents: 200000, cogsCents: 70000, grossProfitCents: 130000,
+      businessDate: today(), backdated: false, book: 'shop', totalCents: 200000, cogsCents: 70000, extraCostCents: 0, chargedCostCents: 70000, grossProfitCents: 130000,
       status: 'posted', notes: 'walk-in', voidedAt: null, voidReason: null, clientRef: 'shop-sale-0001', returns: [],
     });
     expect(sale.postedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
@@ -51,7 +51,7 @@ describe('POST /sales - create', () => {
     expect(Object.keys(sale.items[0]).sort()).toEqual(SALE_ITEM_KEYS);
     expect(sale.items[0]).toMatchObject({
       lineNo: 1, lineType: 'goods', productId: P.id, productName: 'Charger', productCode: 'CH-1', qty: 2, unitPriceCents: 100000,
-      unitCostCents: 35000, revenueCents: 200000, cogsCents: 70000, returnedQty: 0,
+      unitCostCents: 35000, revenueCents: 200000, cogsCents: 70000, extraCostCents: 0, chargedCostCents: 70000, returnedQty: 0,
     });
     expect(poolOf(s, P.id)).toEqual({ qty: 18, value: 630000 });
     const m = mvsByRef(s, 'sales', sale.id);
@@ -334,8 +334,9 @@ describe('POST /sales - validation', () => {
     expect(err(r2).fields.book).toBe('Unknown field.');
     const r3 = await post(s.app, '/sales', { businessDate: today(), items: [{ ...cl(P.id, 1, 100), cogsCents: 1 }], clientRef: ref() });
     expect(err(r3).fields['items.0.cogsCents']).toBe('Unknown field.');
-    const r4 = await post(s.app, '/sales', { businessDate: today(), items: [{ ...cl(P.id, 1, 100), unitCostCents: 1 }], clientRef: ref() });
+    const r4 = await post(s.app, '/sales', { businessDate: today(), items: [{ ...cl(P.id, 1, 100), markupCents: 1 }], clientRef: ref() });
     expect(r4.status).toBe(400);
+    expect(err(r4).fields['items.0.markupCents']).toBe('Unknown field.');   // unitCostCents is now a VALID field (C13)
     for (const k of ['status', 'totalCents', 'id', 'paid']) {
       const r = await post(s.app, '/sales', { businessDate: today(), items: [cl(P.id, 1, 100)], clientRef: ref(), [k]: 1 });
       expect(r.status, k).toBe(400);
@@ -565,7 +566,7 @@ describe('GET /sales - list, filters and totals', () => {
     const r = await get(s.app, '/sales');
     expect(r.status).toBe(200);
     expect(Object.keys(r.body).sort()).toEqual(['items', 'total', 'totals']);
-    expect(Object.keys(r.body.totals).sort()).toEqual(['cogsCents', 'refundsCents', 'revenueCents']);
+    expect(Object.keys(r.body.totals).sort()).toEqual(SALE_TOTALS_KEYS);
     expect(ids(r.body.items)).toEqual([s5.id, s4.id, s3.id, s2.id, s1.id]);
     expect(r.body.total).toBe(5);
     expect(Object.keys(r.body.items[0]).sort()).toEqual(SALE_KEYS);
@@ -613,18 +614,19 @@ describe('GET /sales - list, filters and totals', () => {
 
   // Hand calculation (posted sales only; s5 is void and excluded):
   //  all:        revenue 2,000 + 2,000 + 500 + 6,000 = 10,500; COGS 1,000 + 1,000 + 500 + 3,000 = 5,500; refunds 0.
+  //  C13: no line has an override, so extra = 0 everywhere and cost (automatic + extra) = COGS in every total below.
   //  to day-5:   s1 + s2 + s3 -> revenue 4,500, COGS 2,500.   telecom: 500 / 500.   status=void: nothing posted -> 0 / 0 / 0.
   //  After a return of 1 unit of s4 (resalable, 2,000 each): refunds 2,000 for the unfiltered and shop lists, 0 for telecom.
   it('totals cover POSTED sales matching the filter only; voided excluded; refunds come from returns', async () => {
     const { s, s3, s4 } = await fixture();
-    expect((await list(s)).totals).toEqual({ revenueCents: 10500, cogsCents: 5500, refundsCents: 0 });
-    expect((await list(s, `?to=${daysAgo(5)}`)).totals).toEqual({ revenueCents: 4500, cogsCents: 2500, refundsCents: 0 });
-    expect((await list(s, '?book=telecom')).totals).toEqual({ revenueCents: 500, cogsCents: 500, refundsCents: 0 });
-    expect((await list(s, '?status=void')).totals).toEqual({ revenueCents: 0, cogsCents: 0, refundsCents: 0 });
+    expect((await list(s)).totals).toEqual({ revenueCents: 10500, cogsCents: 5500, extraCostCents: 0, costCents: 5500, refundsCents: 0 });
+    expect((await list(s, `?to=${daysAgo(5)}`)).totals).toEqual({ revenueCents: 4500, cogsCents: 2500, extraCostCents: 0, costCents: 2500, refundsCents: 0 });
+    expect((await list(s, '?book=telecom')).totals).toEqual({ revenueCents: 500, cogsCents: 500, extraCostCents: 0, costCents: 500, refundsCents: 0 });
+    expect((await list(s, '?status=void')).totals).toEqual({ revenueCents: 0, cogsCents: 0, extraCostCents: 0, costCents: 0, refundsCents: 0 });
     // paging does not change totals
-    expect((await list(s, '?limit=1')).totals).toEqual({ revenueCents: 10500, cogsCents: 5500, refundsCents: 0 });
+    expect((await list(s, '?limit=1')).totals).toEqual({ revenueCents: 10500, cogsCents: 5500, extraCostCents: 0, costCents: 5500, refundsCents: 0 });
     await returnOk(s, s4.id, [rl(s4.items[0].id, 1, true)]);
-    expect((await list(s)).totals).toEqual({ revenueCents: 10500, cogsCents: 5500, refundsCents: 2000 });
+    expect((await list(s)).totals).toEqual({ revenueCents: 10500, cogsCents: 5500, extraCostCents: 0, costCents: 5500, refundsCents: 2000 });
     expect((await list(s, '?book=shop')).totals.refundsCents).toBe(2000);
     expect((await list(s, '?book=telecom')).totals.refundsCents).toBe(0);
     expect((await list(s, `?to=${daysAgo(5)}`)).totals.refundsCents).toBe(0);

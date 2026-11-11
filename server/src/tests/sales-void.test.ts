@@ -256,7 +256,7 @@ describe('POST /sales/:id/void - later activity and mixed carts', () => {
     expect(cashOfRef(s, 'sales', tel.id)).toHaveLength(1);
     const list = (await get(s.app, '/sales')).body;
     expect(list.total).toBe(2);                                                    // the void sale is still listed ...
-    expect(list.totals).toEqual({ revenueCents: 2800, cogsCents: 2000, refundsCents: 0 });   // ... but never summed
+    expect(list.totals).toEqual({ revenueCents: 2800, cogsCents: 2000, extraCostCents: 0, costCents: 2000, refundsCents: 0 });   // ... but never summed (C13: no extra, cost = COGS)
     expect((await get(s.app, '/sales?status=void')).body.items.map((x: any) => x.id)).toEqual([shop.id]);
     expect((await get(s.app, '/sales?status=posted')).body.items.map((x: any) => x.id)).toEqual([tel.id]);
     // the telecom sale can still be returned after the shop sale was voided

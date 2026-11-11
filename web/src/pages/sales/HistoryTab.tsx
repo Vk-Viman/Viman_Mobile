@@ -2,6 +2,7 @@
  * History tab (route "/sales/history"): filterable, paged list of past sales; a row opens the sale details dialog
  * (lines, returns, Return items, Void sale).
  * API: GET /sales (api/sales.ts); product filter via GET /products (ProductFilter).
+ * C13: the cost column and totals show the CHARGED cost (automatic + extra); the extra is listed separately when > 0.
  * Figures (total, cost of goods sold, profit, the totals line) are the server's integer cents; nothing is
  * recalculated here. The totals line covers ALL matching posted sales, not just the visible page.
  * Voided sales stay in the list (status "Void") for the audit trail.
@@ -68,7 +69,7 @@ export function HistoryTab() {
     { key: 'book', header: 'Book', render: (s) => <BookBadge book={s.book} /> },
     { key: 'items', header: 'Items', align: 'right', render: (s) => s.items.length },
     { key: 'total', header: 'Total (Rs.)', align: 'right', render: (s) => <Money cents={s.totalCents} /> },
-    { key: 'cogs', header: 'Cost (COGS)', align: 'right', render: (s) => <Money cents={s.cogsCents} /> },
+    { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (s) => <Money cents={s.chargedCostCents} /> },
     { key: 'profit', header: 'Profit', align: 'right', render: (s) => <Money cents={s.grossProfitCents} /> },
     { key: 'status', header: 'Status', render: (s) => <PostedStatusBadge status={s.status} /> },
     {
@@ -99,7 +100,10 @@ export function HistoryTab() {
             {/* Totals over every matching POSTED sale (server-calculated), not only this page. */}
             <dl className="mb-4 flex flex-wrap gap-x-8 gap-y-1 rounded-lg bg-slate-50 px-4 py-3 text-sm">
               <div className="flex gap-2"><dt className="text-slate-500">Revenue</dt><dd><Money cents={list.data.totals.revenueCents} className="font-semibold" /></dd></div>
-              <div className="flex gap-2"><dt className="text-slate-500">Cost of goods sold</dt><dd><Money cents={list.data.totals.cogsCents} className="font-semibold" /></dd></div>
+              <div className="flex gap-2"><dt className="text-slate-500">Cost</dt><dd><Money cents={list.data.totals.costCents} className="font-semibold" /></dd></div>
+              {list.data.totals.extraCostCents > 0 && (
+                <div className="flex gap-2"><dt className="text-slate-500">of which extra cost</dt><dd><Money cents={list.data.totals.extraCostCents} className="font-semibold" /></dd></div>
+              )}
               <div className="flex gap-2"><dt className="text-slate-500">Refunds</dt><dd><Money cents={list.data.totals.refundsCents} className="font-semibold" /></dd></div>
               <p className="w-full text-xs text-slate-500">Totals cover all matching posted sales (voided sales are left out).</p>
             </dl>

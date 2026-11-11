@@ -92,3 +92,10 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 | Frontend | sonnet | web/src/pages/sales/*, api/sales.ts | Accepted — reused the shared hooks/components; browser-verified |
 | QA | sonnet | 7 test files + helper; 2 existing tests updated | Accepted — found the missing DELETE guards; 751/751 after migration 007 |
 | Quality pass (3 agents) | sonnet | comments + safe refactors across server/web/tests | Accepted — behaviour identical (607 tests, migrations 001-005 byte-identical, UI regression-tested in browser) |
+
+## Phase 5 amendment — editable sale cost C13 (2026-11-11)
+| Agent | Files | Orchestrator review |
+|---|---|---|
+| DB + Backend (one agent, DB first) | migration 008, sales repo/services/routes | Accepted — numbers re-derived by hand (extra 300; rounding min 3334; 33/33/34 split) |
+| Frontend | POS cart cost field, result/history/detail | Accepted — browser-verified |
+| QA | 3 new test files, 6 contract-driven updates, model test extended | Accepted — 798/798 |
