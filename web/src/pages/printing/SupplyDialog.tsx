@@ -13,9 +13,10 @@ import { useToast } from '../../components/Toast';
 import { useCreatePrintingSupply } from '../../api/printing';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner, fieldError } from '../../lib/errors';
 import { rupeesToCents } from '../../lib/units';
-import { MAX_NAME, MAX_SUPPLY_CENTS, warningsText } from './shared';
+import { MAX_NAME, MAX_SUPPLY_CENTS } from './shared';
 
 /** The purchase form: date, what was bought, amount paid. */
 export function SupplyDialog({ onClose }: { onClose: () => void }) {
@@ -38,8 +39,8 @@ export function SupplyDialog({ onClose }: { onClose: () => void }) {
       { businessDate: date, amountCents: amountC, description: description.trim(), clientRef },
       {
         onSuccess: (r) => {
-          const w = warningsText(r.warnings);
-          toast.success(w ? `Supplies purchase recorded. ${w}` : 'Supplies purchase recorded.');
+          toast.success('Supplies purchase recorded.');
+          notifyCashWarnings(toast, r.warnings); // R13: the shared negative-cash warning
           onClose();
         },
       },

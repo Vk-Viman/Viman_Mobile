@@ -15,6 +15,7 @@ import { useToast } from '../../components/Toast';
 import { useCreateTopup, useReloadProviders } from '../../api/telecom';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner, fieldError } from '../../lib/errors';
 import type { TopupKind } from '../../types/telecom';
 import { MAX_NOTE, parseAmount } from './shared';
@@ -44,7 +45,7 @@ export function TopupDialog({ onClose }: { onClose: () => void }) {
         businessDate: date, kind, providerId: kind === 'provider_topup' ? Number(providerId) : undefined, amountCents,
         notes: notes.trim() || undefined, clientRef,
       },
-      { onSuccess: () => { toast.success('Top-up recorded.'); onClose(); } },
+      { onSuccess: (r) => { toast.success('Top-up recorded.'); notifyCashWarnings(toast, r.warnings); onClose(); } },
     );
   };
 

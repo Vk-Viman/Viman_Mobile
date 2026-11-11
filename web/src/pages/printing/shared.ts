@@ -15,10 +15,12 @@ export const MAX_UNIT_CENTS = 1_000_000_000;
 /** Largest single supplies purchase in cents (matches the server's limit). */
 export const MAX_SUPPLY_CENTS = 1_000_000_000_000;
 
-/** Plain-English text of the advisory notices (R13) the server may return with a saved record. */
+/**
+ * Plain-English text of the advisory notice (R13) a print sale may return. A negative cash book is NOT here any more: all
+ * cash-out writes return the shared `CashWarning` objects shown by `notifyCashWarnings` (lib/cashWarnings.ts).
+ */
 export const WARNING_TEXT: Record<PrintWarning, string> = {
   PRICE_BELOW_COST: 'The price is below the standard cost, so this sale makes a loss.',
-  NEGATIVE_CASH_BALANCE: 'The Shop cash book is now below zero. Check that the opening balance and sales are recorded.',
 };
 
 /** Joins the texts of several warnings into one sentence block ('' when none). */

@@ -6,6 +6,7 @@
  * "Wave 1 contracts - Phase 7".
  */
 import type { PostedStatus } from './api';
+import type { CashWarning } from './cashbooks';
 
 /** One entry of the print price list. `costCents` is the standard cost per page (snapshotted on each sale, R12). */
 export interface PrintServiceType {
@@ -23,8 +24,8 @@ export interface PrintServiceTypeOne { item: PrintServiceType }
 export interface PrintServiceTypeCreate { code: string; name: string; priceCents: number; costCents: number }
 export interface PrintServiceTypeUpdate { name: string; priceCents: number; costCents: number; active: boolean }
 
-/** Advisory notices (R13) that never block a save. */
-export type PrintWarning = 'PRICE_BELOW_COST' | 'NEGATIVE_CASH_BALANCE';
+/** The advisory notice (R13) of a print sale; a negative cash book uses the shared `CashWarning` object instead. */
+export type PrintWarning = 'PRICE_BELOW_COST';
 
 /** One print sale with its frozen price, standard cost and the figures derived from them. */
 export interface PrintSale {
@@ -74,7 +75,7 @@ export interface PrintingSupply {
   clientRef: string;
 }
 export interface PrintingSupplyList { items: PrintingSupply[]; total: number; totals: { amountCents: number } }
-export interface PrintingSupplyOne { item: PrintingSupply; warnings: PrintWarning[] }
+export interface PrintingSupplyOne { item: PrintingSupply; warnings: CashWarning[] }
 export interface PrintingSupplyVoidOne { item: PrintingSupply }
 export interface PrintingSupplyQuery { from?: string; to?: string; status?: PostedStatus; limit?: number; offset?: number }
 export interface PrintingSupplyCreate { businessDate: string; amountCents: number; description: string; clientRef: string }

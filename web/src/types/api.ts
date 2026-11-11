@@ -17,6 +17,7 @@
  *    retried/double-submitted request is recognised by the server and does not post twice (idempotency).
  *  - `backdated` is set by the server when the business date is earlier than the day it was posted.
  */
+import type { CashWarning } from './cashbooks';
 
 /** Reply of GET /health. `today` is the server's business date (Asia/Colombo) and is the date-picker maximum (R-FD). */
 export interface Health { status: 'ok'; appVersion: string; schemaVersion: number; time: string; today: string }
@@ -217,7 +218,8 @@ export interface Purchase {
   returns: PurchaseReturn[];
 }
 export interface PurchaseList { items: Purchase[]; total: number }
-export interface PurchaseOne { item: Purchase }
+/** `warnings` (R13, shared negative-cash warnings) comes with a CREATE; a void answers without it. */
+export interface PurchaseOne { item: Purchase; warnings?: CashWarning[] }
 export interface PurchaseQuery {
   from?: string;
   to?: string;
@@ -244,7 +246,7 @@ export interface PurchaseReturnCreate {
   note?: string;
   clientRef: string;
 }
-export interface PurchaseReturnResult { item: PurchaseReturn; purchase: Purchase }
+export interface PurchaseReturnResult { item: PurchaseReturn; purchase: Purchase; warnings?: CashWarning[] }
 
 /** Why a stock quantity changed; every change in stock is recorded as one movement of one of these types. */
 export type MovementType =
@@ -507,4 +509,4 @@ export interface SaleReturnCreate {
   note?: string;
   clientRef: string;
 }
-export interface SaleReturnResult { item: SaleReturn; sale: Sale }
+export interface SaleReturnResult { item: SaleReturn; sale: Sale; warnings?: CashWarning[] }
