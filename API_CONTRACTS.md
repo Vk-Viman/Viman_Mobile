@@ -10,7 +10,7 @@ Base path: `/api/v1`. JSON in/out (UTF-8). Money fields end in `Cents` and are *
   - Unexpected → `500 INTERNAL_ERROR` (message generic; details only in server log).
 - **Idempotency** (from Phase 2+): every create of a financial record accepts `clientRef` (UUID from the browser). A repeat with the same `clientRef` returns the original record with `200` instead of creating a duplicate.
 - **Validation** uses Fastify's native JSON Schema (`additionalProperties: false` on bodies). **No type coercion**: a money/rate field sent as `null` or `"600"` is a 400, never silently converted. Numeric query-string params are digit strings validated in the route.
-- **Business date vs posting time** (Phase 2+): every financial record in any response carries `businessDate` (owner-entered) and `postedAt` (server timestamp, read-only, never accepted in a request body) plus `backdated: boolean`. Reports group by `businessDate`; posting-order rules (Ice Cream limits, D4, D2, costing) use `postedAt`. `asOf`, `from`, `to` query parameters are business dates. Reversal rows carry the business date of the row they reverse. From Phase 8, `GET /audit-logs` items add `postedAt` (= `at`), `businessDate` (null for non-financial entries) and `backdated`.
+- **Business date vs posting time** (Phase 2+): every financial record in any response carries `businessDate` (owner-entered) and `postedAt` (server timestamp, read-only, never accepted in a request body) plus `backdated: boolean`. Reports group by `businessDate`; posting-order rules (Ice Cream limits, D4, D2, costing) use `postedAt`. `asOf`, `from`, `to` query parameters are business dates. Reversal rows carry the business date of the row they reverse. From Phase 3, `GET /audit-logs` items add `postedAt` (= `at`), `businessDate` (null for non-financial entries) and `backdated`.
 - **Future-dated transactions** (R-FD, Phase 2+): every financial write whose body contains a business date (`businessDate`, or the date field of that record) is validated **on the server**: a date later than today in Asia/Colombo → `400 FUTURE_DATE_NOT_ALLOWED` with `message: "Future-dated transactions are not allowed. Please select today or an earlier date."` and `fields: { businessDate: "Future-dated transactions are not allowed. Please select today or an earlier date." }` (field name = the request's date field). Applies to all P2–P13 write endpoints that create financial records (sales, sales returns, purchases, purchase returns, opening stock, stocktakes, losses, drawings, reloads, EZCash, top-ups, printing supplies, expenses, opening balances, capital, transfers, cash counts, daily closings, Ice Cream days/payments/fund moves — incl. the replacement row of `PUT /icecream/days/:date` — and opening-stock import rows). Earlier dates are accepted. `postedAt` is read-only: a request body containing `postedAt` → `400 VALIDATION_ERROR` with `fields.postedAt` (`additionalProperties: false`). The web date pickers use `max = today` (from `GET /health` `today`), but the server is authoritative. **Validation order:** JSON schema → R-FD → (returns only: original lookup `404 NOT_FOUND`, then R-RD) → `DAY_CLOSED` → `SPLIT_CONFIRMATION_REQUIRED` / void guards / other business rules. **Scope:** report and query dates (`asOf`, `from`, `to`) are never rejected. Write paths always call `todayBusinessDate()` without an injected clock (the database trigger uses the real clock); tests fake time only for read/report logic.
 - **Return date** (R-RD, Phase 3/5): `POST /sales/:id/returns` and `POST /purchases/:id/returns` with a `businessDate` earlier than the original sale's / purchase's business date → `400 RETURN_BEFORE_ORIGINAL_DATE` with `message: "The return date cannot be earlier than the original sale date (2026-11-05). Please select 2026-11-05 or a later date (not after today)."` (`purchase` for purchase returns; the date is the original's business date), `fields: { businessDate: <same message> }` and `originalDate: "YYYY-MM-DD"` in the error body. On-or-after dates (incl. backdated) are accepted, subject to R-FD. The web return form sets the date picker range to *original date … today*, but the server is authoritative. **Validation order** for returns: JSON schema → R-FD (`FUTURE_DATE_NOT_ALLOWED`) → original lookup (`404 NOT_FOUND`) → R-RD (`RETURN_BEFORE_ORIGINAL_DATE`) → `DAY_CLOSED` (judged on the **return's** business date) → quantity/void/business rules. The original date is returned as `error.originalDate`.
 - While a restore is running every other `/api` request gets `503 RESTORE_IN_PROGRESS`.
@@ -107,9 +107,150 @@ Backup name pattern: `^viman-\d{8}-\d{6}-(startup|manual|pre-restore)(-\d{1,3})?
 
 ---
 
+## Phase 2 endpoints — Catalog (categories, products, suppliers)
+
+Catalog data is **not financial**: no `clientRef`, no business date, no R-FD/R-RD. All writes are audited (`audit_logs`: entity `category` | `product` | `supplier`, `entityId` = id as text, action `create`/`update`, before/after = the full item JSON). No hard deletes — retire with `active: false`. Unchanged values in a PUT write no audit row. Stock fields are **read-only** here (always 0 in Phase 2); stock arrives with Phases 3/4/13.
+
+Numeric/boolean **query** params are strings validated in the route (no coercion): integers `^[0-9]{1,9}$`, booleans exactly `true` | `false`. Unknown query params → `400 VALIDATION_ERROR`. Path `:id` must be digits, else `400`; unknown id → `404 NOT_FOUND`.
+
+Common errors: `400 VALIDATION_ERROR` (fields keyed by JSON path), `404 NOT_FOUND`, `409 DUPLICATE_NAME` (`fields.name`, "Another … already uses this name." — comparison is case-insensitive, after trimming), `409 DUPLICATE_CODE` (`fields.code`).
+
+### Categories
+`Category` = `{ id, name, book: "shop"|"telecom", isDefault, active, productCount, createdAt, updatedAt }` (`productCount` = all products incl. inactive).
+
+- `GET /api/v1/categories?active=&book=` → `{ items: Category[] }` ordered by `book` (shop first), then `name`.
+- `POST /api/v1/categories` `{ name, book }` → `201 { item }`. `name` 1–60 trimmed; `book` required.
+- `PUT /api/v1/categories/:id` — any of `{ name, book, active }`, `minProperties: 1` → `200 { item }`.
+  - The 12 **default** categories (seeded by migration `003`) have `isDefault: true`: their `name` and `book` can never change → `409 DEFAULT_CATEGORY_LOCKED`. They may be deactivated/reactivated.
+  - `book` of an owner-created category can change only while `productCount = 0` → `409 CATEGORY_HAS_PRODUCTS`.
+  - Deactivating a category keeps its products; new products (or a product moved) cannot use an inactive category (`400 CATEGORY_INACTIVE`, `fields.categoryId`).
+
+Default categories (shop): Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other · (telecom): Scratch Cards.
+
+### Products
+`Product` = `{ id, code: string|null, name, description, categoryId, categoryName, kind: "stock"|"service", book: "shop"|"telecom", sellPriceCents, minPriceCents, reorderLevel, active, qtyOnHand, stockValueCents, avgUnitCostCents: number|null, lowStock, createdAt, updatedAt }`.
+- `book` is derived from the category (never sent by the client).
+- `avgUnitCostCents` = `mulDivRound(stockValueCents, 1, qtyOnHand)` when `qtyOnHand > 0`, else `null` (display only — BUSINESS_RULES §3).
+- `lowStock` = `kind = "stock" AND active AND reorderLevel > 0 AND qtyOnHand <= reorderLevel`.
+
+- `GET /api/v1/products?q=&book=&categoryId=&lowStock=&active=&limit=&offset=` → `{ items: Product[], total }`. `q`: case-insensitive substring of name **or** code (LIKE wildcards in `q` are escaped). `limit` 1–500 (default 100), `offset` ≥ 0. Order: `name` (case-insensitive), then `id`.
+- `GET /api/v1/products/:id` → `{ item }`.
+- `POST /api/v1/products` `{ code?, name, description?, categoryId, kind, sellPriceCents, minPriceCents, reorderLevel? }` → `201 { item }` (qty and value start at 0).
+  - `code`: optional, trimmed; empty string = no code; 1–30 chars; unique case-insensitively (`409 DUPLICATE_CODE`). `name` 1–120 trimmed. `description` 0–500 (default ""). `reorderLevel` integer ≥ 0 (default 0).
+  - `sellPriceCents`, `minPriceCents`: integers 0–`999999999`; **`minPriceCents ≤ sellPriceCents`** else `400` with `fields.minPriceCents` = "Minimum price cannot be higher than the selling price."
+  - `kind = "service"`: `reorderLevel` must be 0 (`fields.reorderLevel`); services never hold stock.
+  - `categoryId` must exist (`400 VALIDATION_ERROR` `fields.categoryId` "Choose a category.") and be active (`400 CATEGORY_INACTIVE`).
+- `PUT /api/v1/products/:id` — any of `{ code, name, description, categoryId, sellPriceCents, minPriceCents, reorderLevel, active }`, `minProperties: 1` → `200 { item }`. `code: null` or `""` clears the code.
+  - `kind` is **immutable** (sending it → `400`, `additionalProperties: false`). The category may change **only within the same book** (`400 CATEGORY_BOOK_MISMATCH`, `fields.categoryId`) — so `book` never changes.
+  - Price and `reorderLevel` rules are validated against the **merged** (existing + patch) values.
+  - Setting `active: false` is always allowed (stock history is never lost).
+
+### Suppliers
+`Supplier` = `{ id, name, phone, notes, active, createdAt, updatedAt }`.
+- `GET /api/v1/suppliers?q=&active=` → `{ items: Supplier[] }` (name order; `q` substring of name or phone).
+- `POST /api/v1/suppliers` `{ name, phone?, notes? }` → `201 { item }`. `name` 1–120; `phone` 0–30; `notes` 0–500.
+- `PUT /api/v1/suppliers/:id` — any of `{ name, phone, notes, active }`, `minProperties: 1` → `200 { item }`.
+
+### Internal module contracts (Phase 2, server)
+Repositories take the connection first, contain SQL only, map snake_case → camelCase, return plain numbers (convert bigint) and booleans (0/1 → boolean). Time stamps via SQL default / `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.
+
+`server/src/repositories/categories.repo.ts`
+```ts
+export interface CategoryRow { id: number; name: string; book: 'shop'|'telecom'; isDefault: boolean; active: boolean; productCount: number; createdAt: string; updatedAt: string }
+export function listCategories(conn, q: { active?: boolean; book?: 'shop'|'telecom' }): CategoryRow[];
+export function getCategory(conn, id: number): CategoryRow | undefined;
+export function findCategoryByName(conn, name: string): CategoryRow | undefined;      // case-insensitive
+export function insertCategory(conn, c: { name: string; book: 'shop'|'telecom' }): number;
+export function updateCategory(conn, id: number, patch: { name?: string; book?: 'shop'|'telecom'; active?: boolean }): void; // sets updated_at
+```
+`server/src/repositories/products.repo.ts`
+```ts
+export interface ProductRow { id; code: string|null; name; description; categoryId; categoryName; kind: 'stock'|'service'; book: 'shop'|'telecom'; sellPriceCents; minPriceCents; reorderLevel; active: boolean; qtyOnHand; stockValueCents; createdAt; updatedAt }
+export interface ProductQuery { q?: string; book?; categoryId?: number; lowStock?: boolean; active?: boolean; limit: number; offset: number }
+export function listProducts(conn, q: ProductQuery): { items: ProductRow[]; total: number };
+export function getProduct(conn, id: number): ProductRow | undefined;
+export function findProductByName(conn, name: string): ProductRow | undefined;       // case-insensitive
+export function findProductByCode(conn, code: string): ProductRow | undefined;       // case-insensitive
+export function insertProduct(conn, p: { code: string|null; name; description; categoryId; kind; book; sellPriceCents; minPriceCents; reorderLevel }): number;
+export function updateProduct(conn, id: number, patch: { code?: string|null; name?; description?; categoryId?; book?; sellPriceCents?; minPriceCents?; reorderLevel?; active?: boolean }): void; // sets updated_at
+```
+`server/src/repositories/suppliers.repo.ts` — `SupplierRow`, `listSuppliers(conn,{q?,active?})`, `getSupplier`, `findSupplierByName`, `insertSupplier(conn,{name,phone,notes})`, `updateSupplier(conn,id,patch)` (same conventions).
+
+Services (`server/src/services/catalog.service.ts` or one per entity) own validation, trimming, case-insensitive uniqueness checks, derived fields (`book`, `avgUnitCostCents`, `lowStock`), error codes and audit rows; each write runs inside one `database.tx()` together with its audit row. Routes are thin (JSON schema + call service). The database triggers/constraints in `003_catalog.sql` are the backstop: SQLite aborts surface as `INTERNAL_ERROR` only if the service missed a rule.
+
+Web types (`web/src/types/api.ts`) mirror the shapes above; money in the UI uses the Phase 1 converters (`rupeesToCents`, `formatLKR`).
+
+---
+
+## Phase 3 endpoints — Purchases, stock movements, inventory
+
+Rules in force (BUSINESS_RULES): §3 weighted-average pool, R4/C7 (purchase return & void), R11 (purchases are fully paid in cash from their book, book derived from the products, never mixed), R1/C6 (voids = reversal rows), R-FD, R-RD, §12 (business date vs posting time, audit), E-/R-rules unchanged. **DAY_CLOSED** and the negative-cash-balance warning arrive with the cash books (Phase 8) — Phase 3 does not enforce them. The cash ledger table is created now (owner decision 2026-11-10); only `purchase_payment` / `purchase_refund` entries are written until Phase 8.
+
+All Phase 3 writes: JSON schema (no coercion, `additionalProperties:false`) → R-FD → lookups (404) → R-RD (returns) → business rules; one `database.tx()` for the whole write; audit row in the same transaction. `clientRef` (string 8–64 chars `[A-Za-z0-9_-]`) makes a repeat return the original result with `200` (create is `201`).
+
+### Purchases
+`PurchaseItem` = `{ id, productId, productName, packs, packSize, units, lineTotalCents, unitCostCents, returnedUnits }` (`units = packs × packSize`; `unitCostCents = mulDivRound(lineTotalCents, 1, units)` — display only).
+`Purchase` = `{ id, businessDate, postedAt, backdated, supplierId|null, supplierName|null, billNo, book: "shop"|"telecom", totalCents, status: "posted"|"void", notes, voidedAt|null, voidReason|null, clientRef, items: PurchaseItem[], returns: PurchaseReturn[] }`.
+`PurchaseReturn` = `{ id, purchaseId, businessDate, postedAt, backdated, refundCents, note, clientRef, items: [{ id, purchaseItemId, productId, productName, units, valueCents }] }` (`valueCents` = purchase-cost value refunded for those units).
+`backdated` = `businessDate` earlier than today (Asia/Colombo) at posting.
+
+- `POST /api/v1/purchases` `{ businessDate, supplierId?, billNo?, items: [{ productId, packs, packSize, lineTotalCents }], notes?, clientRef }` → `201 { item }`.
+  - `items` 1–100. `packs`, `packSize` integers 1–1 000 000; `lineTotalCents` integer 0–99 999 999 999; `billNo` ≤ 40; `notes` ≤ 500.
+  - Each product must exist (`400 VALIDATION_ERROR` `fields["items.N.productId"]`), be **active** and `kind = "stock"` (`400 PRODUCT_NOT_STOCKABLE`), all of **one book** else `400 MIXED_BOOKS` "Shop and Telecom items cannot be on one bill — please split into two bills." (R11). Same product on two lines is allowed (processed in order). `supplierId` must exist and be active.
+  - `businessDate`: valid date, R-FD (`400 FUTURE_DATE_NOT_ALLOWED`, exact message in the conventions above). Backdating allowed.
+  - Effects (one transaction): `purchases` + `purchase_items` rows; per line a **`purchase` stock movement** (`qtyDelta = +units`, `valueDeltaCents = +lineTotalCents`) via the inventory engine; one **`purchase_payment` cash entry** (`amountCents = −totalCents`, `book` = purchase book, `refTable='purchases'`) when `totalCents > 0`; audit row (entity `purchase`, action `create`, after = the Purchase JSON).
+- `GET /api/v1/purchases?from=&to=&book=&supplierId=&status=&q=&limit=&offset=` → `{ items: Purchase[], total }` (items include their lines and returns). `from`/`to` are business dates (inclusive); `q` = case-insensitive substring of `billNo`; order `businessDate DESC, id DESC`; `limit` 1–200 default 50.
+- `GET /api/v1/purchases/:id` → `{ item }`.
+- `POST /api/v1/purchases/:id/void` `{ reason }` (reason 1–200 trimmed) → `200 { item }`.
+  - `409 ALREADY_VOID`; `409 HAS_RETURNS` ("This purchase has returns, so it cannot be voided."); `422 INSUFFICIENT_STOCK` when any line's units are no longer all on hand ("Some of this purchase has already been sold or removed.", `fields["items.N"]` lists the line, with `onHand`).
+  - Effects: status `void`, `voidedAt`/`voidReason` set; per line a **`purchase_void` movement** removing `units` at `min(lineTotalCents, pool value)` (R4) plus a value-only **`adjustment` residual-sweep movement** when the pool quantity reaches 0 with leftover value; a **reversal cash entry** (`+totalCents`, same type `purchase_payment`, `reversesEntryId` = the original entry, **business date copied from the purchase**, posting time = now). Audit row (action `void`).
+- `POST /api/v1/purchases/:id/returns` `{ businessDate, items: [{ purchaseItemId, units }], note?, clientRef }` → `201 { item: PurchaseReturn, purchase: Purchase }`.
+  - Validation order: schema → R-FD → purchase lookup `404` → **R-RD** (`400 RETURN_BEFORE_ORIGINAL_DATE`, message names the original date, `originalDate` in the error body) → `409 PURCHASE_VOID` → quantity rules → stock. `units` ≥ 1 and ≤ item `units − returnedUnits` (`422 RETURN_EXCEEDS_PURCHASED`, `fields["items.N.units"]`); each `purchaseItemId` must belong to this purchase (`400`). Each item at most once per request. Pool quantity must cover the units (`422 INSUFFICIENT_STOCK`).
+  - Refund value per item (C7): `mulDivRound(lineTotalCents, units, item.units)`, except the return that brings the cumulative returned units to the item's full `units` takes the **remaining** value (`lineTotalCents − Σ earlier returned values`). `refundCents` = Σ values.
+  - Effects: `purchase_returns` + items; item `returnedUnits` increased; per item a **`purchase_return` movement** removing `units` at `min(purchase-cost value, pool value)` (R4) with the residual sweep as above; one **`purchase_refund` cash entry** (`+refundCents`, book = purchase book, dated the return's business date); audit (entity `purchase_return`, action `create`). If `refundCents = 0` no cash entry.
+  - The difference `refundCents − Σ value removed from stock` is not stored: it is derivable (cash entry vs movements) and is reported as a *Stock adjustment* in the P&L (BUSINESS_RULES R2/R4).
+
+### Stock movements & inventory
+`StockMovement` = `{ id, productId, businessDate, postedAt, type, qtyDelta, valueDeltaCents, unitCostCents|null, refTable|null, refId|null, reason }` — `type` ∈ `opening|purchase|purchase_return|purchase_void|sale|sale_return|sale_void|personal_use|loss|stocktake_gain|stocktake_loss|adjustment`.
+- `GET /api/v1/products/:id/movements?from=&to=&type=&limit=&offset=` → `{ items: StockMovement[], total, product: Product }`; order `postedAt DESC, id DESC` (posting order); `limit` 1–200 default 50; `404` unknown product.
+- `GET /api/v1/inventory/reconciliation` → `{ ok: boolean, checkedProducts, mismatches: [{ productId, name, cacheQty, movementQty, cacheValueCents, movementValueCents }] }` — compares each product's cached quantity/value with the sums of its movements (must always be `ok: true`).
+- **No sale / loss / stocktake endpoints in Phase 3.** The engine functions below exist and are exercised by tests (including a `sale`-type removal that demonstrates average-cost COGS); public endpoints arrive in Phases 4–5.
+
+### Internal module contracts (Phase 3, server)
+**Stock cache is maintained by the database:** `AFTER INSERT ON stock_movements` adds `qty_delta` / `value_delta_cents` to `products.qty_on_hand` / `stock_value_cents` (existing CHECKs block negative stock/value). Application code **never writes the product cache** — it only inserts movements.
+
+`server/src/services/inventory.service.ts` (Backend)
+```ts
+export type MovementType = 'opening'|'purchase'|'purchase_return'|'purchase_void'|'sale'|'sale_return'|'sale_void'|'personal_use'|'loss'|'stocktake_gain'|'stocktake_loss'|'adjustment';
+export interface PoolState { qty: number; valueCents: number }
+export function getPool(conn, productId: number): PoolState;                       // throws NOT_FOUND
+// Inflow: adds qty and exact value (BUSINESS_RULES §3). qty ≥ 1, valueCents ≥ 0.
+export function receiveStock(conn, p: { productId; businessDate: string; type: MovementType; qty: number; valueCents: number; refTable: string|null; refId: number|null; reason: string }): { movementId: number; unitCostCents: number };
+// Outflow at weighted average: value = (qty === pool.qty) ? pool.valueCents : mulDivRound(pool.valueCents, qty, pool.qty). Blocks qty > pool.qty with AppError(422,'INSUFFICIENT_STOCK',…, details {onHand}).
+export function issueStock(conn, p: { productId; businessDate; type: MovementType; qty: number; refTable; refId; reason }): { movementId: number; valueRemovedCents: number; unitCostCents: number };
+// R4 removal for purchase return/void: removes qty at min(maxValueCents, pool.valueCents); if the pool quantity reaches 0 with value left, writes a value-only 'adjustment' sweep movement (qty 0, negative value) BEFORE the removal so every intermediate state is valid.
+export function issueStockCapped(conn, p: { productId; businessDate; type: 'purchase_return'|'purchase_void'; qty: number; maxValueCents: number; refTable; refId; reason }): { movementId: number; valueRemovedCents: number; sweepMovementId: number|null; sweptCents: number };
+export function reconcileStock(conn): { ok: boolean; checkedProducts: number; mismatches: Array<{ productId: number; name: string; cacheQty: number; movementQty: number; cacheValueCents: number; movementValueCents: number }> };
+```
+All amounts via `lib/money.ts` (`mulDivRound`); balances never computed in floating point.
+
+`server/src/services/purchases.service.ts` (Backend): `createPurchase`, `listPurchases`, `getPurchase`, `voidPurchase`, `createPurchaseReturn` — validation, idempotency (`client_ref`), derived fields (`unitCostCents`, `backdated`), audit rows (before/after JSON incl. `businessDate`, `postedAt`, `backdated`).
+
+Repositories (DB Architect; `conn` first, SQL only, camelCase rows, numbers/booleans converted):
+- `stock-movements.repo.ts`: `insertMovement(conn, m: { productId; businessDate; type; qtyDelta; valueDeltaCents; unitCostCents: number|null; refTable; refId; reason }): number`; `listMovements(conn, q: { productId; from?; to?; type?; limit; offset }): { items: MovementRow[]; total: number }`; `sumMovements(conn): Array<{ productId; qty; valueCents }>`.
+- `cash-entries.repo.ts`: `insertCashEntry(conn, e: { book; businessDate; type; amountCents; refTable; refId; reversesEntryId?: number|null; note?: string|null }): number`; `getCashEntry(conn, id)`; `findCashEntriesByRef(conn, refTable, refId)`; `cashBalance(conn, book): number`.
+- `purchases.repo.ts`: `insertPurchase(conn, p: { businessDate; supplierId; billNo; book; totalCents; notes; clientRef }): number`; `insertPurchaseItem(conn, i): number`; `getPurchase(conn, id)` / `getPurchaseByClientRef(conn, ref)` (header rows); `listPurchaseItems(conn, purchaseId)`; `listPurchases(conn, q): { items: PurchaseHeaderRow[]; total }`; `markPurchaseVoid(conn, id, reason)`; `addReturnedUnits(conn, itemId, units)`; `insertPurchaseReturn(conn, r)`; `insertPurchaseReturnItem(conn, i)`; `getPurchaseReturnByClientRef`; `listPurchaseReturns(conn, purchaseId)`; `returnedValueSoFar(conn, purchaseItemId): number`.
+- `audit.repo.ts` gains optional `businessDate?: string|null; backdated?: boolean` on `AuditInsert` and the same on `AuditRow`.
+
+Audit rows: `audit_logs.business_date` (nullable) and `backdated` (0/1) columns exist from migration 004; `GET /audit-logs` items add `postedAt` (= `at`), `businessDate`, `backdated`. (Moved forward from Phase 8 because financial records now exist — BUSINESS_RULES §12.)
+
+Web: `web/src/types/api.ts` mirrors the shapes above; purchases UI uses the Phase 1/2 converters; the purchase date picker defaults to `GET /health` `today` and has `max = today`; return forms limit the date range to *original date … today* (the server stays authoritative).
+
+---
+
 ## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
-- **P2 Catalog**: `GET/POST /categories`, `PUT /categories/:id` · `GET /products?q=&book=&categoryId=&lowStock=&active=`, `POST /products`, `PUT /products/:id` · `GET/POST /suppliers`, `PUT /suppliers/:id`
-- **P3/P4 Inventory**: `POST /opening-stock` · `GET /products/:id/movements` · `POST /purchases`, `GET /purchases`, `GET /purchases/:id`, `POST /purchases/:id/void`, `POST /purchases/:id/returns` (R-RD) · `POST /stocktakes`, `GET /stocktakes`, `POST /stocktakes/:id/complete` · `POST /stock-losses`, `GET /stock-losses` · `GET /inventory/valuation`
+- **P2 Catalog**: specified above (Phase 2 endpoints).
+- **P3 Inventory**: specified above (purchases, movements, reconciliation). **P4/P13**: `POST /opening-stock` · `POST /stocktakes`, `GET /stocktakes`, `POST /stocktakes/:id/complete` · `POST /stock-losses`, `GET /stock-losses` · `GET /inventory/valuation`
 - **P5 Sales**: `POST /sales` (server splits a mixed cart by book), `GET /sales`, `GET /sales/:id`, `POST /sales/:id/void`, `POST /sales/:id/returns` (R-RD)
 - **P6 Telecom**: `GET/PUT /reload-providers` · `POST/GET /reload-sales` · `POST/GET /ezcash-sales` · `POST/GET /telecom/topups`
 - **P7 Printing**: `GET/POST /print-service-types`, `PUT /print-service-types/:id` · `POST /printing-supplies`

@@ -15,5 +15,23 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 | 1.8 | Tests: migrations, db, settings API, audit, backups (create/rotate/restore/corrupt/too-new/persistence), health, SPA/static | QA | D | ☑ |
 | 1.9 | Review & integrate, `npm test`, `npm run build`, launcher cold start, browser verification, status report | Orchestrator | — | ☑ |
 
+## Phase 2 — Catalog (complete — awaiting owner approval for Phase 3)
+| Task | Owner | Status |
+|---|---|---|
+| Contract detail (endpoints, repos) | Orchestrator | ☑ |
+| Migration 003 + repositories | DB Architect | ☑ |
+| Services + routes | Backend | ☑ |
+| Products/Categories/Suppliers screens | Frontend | ☑ |
+| Tests (86 new; startup test fixed) | QA | ☑ |
+
+## Phase 3 — Purchases, stock movements, inventory (complete — awaiting owner approval for Phase 4)
+| Task | Owner | Status |
+|---|---|---|
+| Contract + design (engine, cash ledger early) | Orchestrator | ☑ |
+| Migration 004 + repositories | DB Architect | ☑ |
+| Inventory engine, purchases service/routes | Backend | ☑ |
+| Purchases screens, stock history | Frontend | ☑ |
+| 172 new tests incl. weighted-average demo | QA | ☑ |
+
 ## Later phases (not started — require owner approval)
 2 Catalog · 3 Purchases & movements · 4 Costing/stocktake/valuation · 5 POS/returns/voids · 6 Telecom · 7 Printing · 8 Expenses (electricity blocked, §7) + 3 cash books (Ice Cream entries carry a fund) · 9 Transfers/drawings/capital/losses · 10 Ice cream three-fund system (BUSINESS_RULES §10) · 11 Reports · 12 Dashboard + exports · 13 Opening-stock Excel · 14 Full QA + docs.

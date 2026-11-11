@@ -58,3 +58,20 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 | 2026-11-10 | Financial Logic | claude-sonnet-5-5 | FINAL review incl. R-FD | CONSISTENT WITH MINOR FIXES — message/code identical across docs; trigger timing correct (can only be more lenient than the service at midnight); no conflict with reversals, void-and-replace, reopen, backdating, D4 near midnight. Orchestrator applied 11 doc fixes: opening-stock import date rule (#1); `daily_closings.posted_at` immutable first-close time (#2); `POSTED_AT_IMMUTABLE` triggers on non-ledger financial tables (#3); strict date-format CHECK (#4); ABORT→400 mapping (#5); reports never rejected (#6); validation order (#7); explicit return/replacement scope (#8, #9); write paths use the real clock (#10); DAY_CLOSED all books (#11). Not applied (new rule): "return not dated before its sale/purchase" → recorded as optional suggestion for the owner. |
 | 2026-11-10 | Orchestrator | claude-opus-5-5 | Owner approved **R-RD** (return date ≥ original sale/purchase date; backdated returns allowed on/after original; backend + DB enforcement; clear message) → BUSINESS_RULES §3/§4/§12/§14, DATABASE_SCHEMA (service check + `sales_returns`/`purchase_returns` BEFORE INSERT/UPDATE triggers reading the original header — CHECK cannot read another table), API_CONTRACTS (`400 RETURN_BEFORE_ORIGINAL_DATE` naming the original date, `originalDate` in body; validation order schema → R-FD → R-RD → DAY_CLOSED → rules) | Done — final consistency review requested |
 | 2026-11-10 | Financial Logic | claude-sonnet-5-5 | Final documentation review incl. R-RD | CONSISTENT WITH MINOR FIXES, no owner decisions. Orchestrator applied all 8: original sale/purchase business_date immutable in DB (`BUSINESS_DATE_IMMUTABLE`); NOT NULL return FKs + `RETURN_ITEM_MISMATCH` triggers; trigger-vs-CHECK ordering note; residual-sweep dates; `stock_losses.sales_return_id` link; validation order incl. original lookup (404) and DAY_CLOSED on the return's date; message "…or a later date (not after today)" identical in all docs; R-RD own heading in §14 |
+
+## Phase 2 — Catalog (2026-11-10)
+| Agent | Model | Files | Orchestrator review |
+|---|---|---|---|
+| DB Architect | sonnet | 003_catalog.sql, 3 repositories | Accepted — matches contract; all constraints/triggers verified by agent and by tests |
+| Frontend | sonnet | web/src/pages/products/*, api/catalog.ts, 2 components | Accepted — integer-only money handling checked; browser-verified |
+| Backend | sonnet | catalog.service.ts, 4 route files, app.ts registration | Accepted — one tx per write with audit row; avg cost via mulDivRound |
+| QA | sonnet | 4 catalog test files + helper; startup.test fix | Accepted — no skipped tests; 299/299 |
+
+## Phase 3 — Purchases, inventory (2026-11-11)
+| Agent | Model | Files | Orchestrator review |
+|---|---|---|---|
+| DB Architect | sonnet | 004 migration, 3 repos, audit.repo | Accepted — trigger-driven stock cache; 83 agent checks |
+| Frontend | sonnet | web/src/pages/purchases/*, api/purchases.ts, Modal | Accepted — integer-only math; browser-verified |
+| Backend | sonnet | inventory.service, purchases.service, 2 route files, audit/errors/app edits | Accepted — engine read line by line; demo numbers re-derived by hand (all match to the cent) |
+| QA | sonnet | 4 test files + helper (+2 fixed tests) | Accepted — QA connection dropped mid-run; resumed; 4 failures were test mistakes (hand-verified), no code bugs |
+| Orchestrator | opus/sonnet | contract + schema detail, review | Cash ledger created early (owner decision); audit columns moved to Phase 3 (documented) |
