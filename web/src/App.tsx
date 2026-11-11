@@ -2,7 +2,7 @@
  * Route table of the whole application: which screen appears at which address (URL).
  *
  * Everything sits inside <AppLayout/> (sidebar + page area); the matching page renders where AppLayout shows its
- * <Outlet/>. Screens with tabs (Products, Stock, Settings) are "parent" routes: the parent page draws the tab
+ * <Outlet/>. Screens with tabs (Sales, Products, Stock, Settings) are "parent" routes: the parent page draws the tab
  * strip and the active tab renders as its child route.
  *
  * Sidebar entries that are not built yet (`built: false` in layout/navItems.ts) get a "Coming soon" placeholder
@@ -29,6 +29,9 @@ import { StocktakeTab } from './pages/stock/StocktakeTab';
 import { StocktakeSheet } from './pages/stock/StocktakeSheet';
 import { StockLossesTab } from './pages/stock/StockLossesTab';
 import { PersonalUseTab } from './pages/stock/PersonalUseTab';
+import { SalesPage } from './pages/sales/SalesPage';
+import { PosTab } from './pages/sales/PosTab';
+import { HistoryTab } from './pages/sales/HistoryTab';
 import { SuppliersTab } from './pages/products/SuppliersTab';
 
 /** Root component: declares every route. Renders no markup of its own. */
@@ -41,6 +44,10 @@ export function App() {
         {NAV_ITEMS.filter((n) => !n.built).map((n) => (
           <Route key={n.to} path={n.to.slice(1)} element={<ComingSoon title={n.label} icon={n.icon} phase={n.phase} description={n.description} />} />
         ))}
+        <Route path="sales" element={<SalesPage />}>
+          <Route index element={<PosTab />} />
+          <Route path="history" element={<HistoryTab />} />
+        </Route>
         <Route path="products" element={<ProductsPage />}>
           <Route index element={<ProductsTab />} />
           <Route path="categories" element={<CategoriesTab />} />

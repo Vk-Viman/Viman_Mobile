@@ -96,8 +96,9 @@ export function StockLossesTab() {
     {
       key: 'act',
       header: 'Actions',
-      // Only live (posted) entries can be voided.
-      render: (l) => (l.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(l)} aria-label={`Void loss #${l.id}`}>Void</Button> : null),
+      // Only live (posted) manual entries can be voided; a damaged sales-return loss belongs to its return
+      // (the server answers 409 DAMAGED_RETURN_LOSS), so it is labelled instead of offering a Void button.
+      render: (l) => (l.status === 'posted' && l.source === 'damaged_return' ? <span className="text-xs text-slate-500">From sale return #{l.salesReturnId}</span> : l.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(l)} aria-label={`Void loss #${l.id}`}>Void</Button> : null),
     },
   ];
 

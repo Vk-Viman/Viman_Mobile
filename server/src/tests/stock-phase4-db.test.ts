@@ -16,6 +16,7 @@ import { currentVersion, latestVersion, loadMigrations, migrate, MIGRATIONS_DIR 
 import { receiveStock, issueStock } from '../services/inventory.service.ts';
 import { TestEnv } from './helpers/tmp.ts';
 import { daysAgo, daysAhead, memDb, msgOf, pool, scalar, sqlProduct, today } from './helpers/inventory.ts';
+import { sqlReturn, sqlSale, sqlSaleItem } from './helpers/phase5.ts';
 
 const env = new TestEnv();
 const conns: DatabaseSync[] = [];
@@ -42,13 +43,14 @@ const complete = (c: DatabaseSync, st: number) =>
   c.prepare("UPDATE stocktakes SET status = 'completed', completed_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(st);
 const NOW = '2026-01-01T00:00:00.000Z';
 
-// Raw-SQL helper: insert a stock loss row with sensible defaults (1 unit, cost 100, 'damaged').
+// Raw-SQL helper: insert a stock loss row with sensible defaults (1 unit, cost 100, 'damaged', manual, no return link).
+// Phase 5: o.salesReturnId links the loss to a sales return (required exactly when source = 'damaged_return').
 function addLoss(c: DatabaseSync, product: number, o: Record<string, any> = {}): number {
   return Number(c.prepare(
-    `INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, source, status, client_ref, voided_at, void_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, source, status, client_ref, voided_at, void_reason, sales_return_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(o.date ?? today(), product, o.book ?? 'shop', o.qty ?? 1, o.cost ?? 100, o.reason ?? 'damaged', o.source ?? 'manual',
-    o.status ?? 'posted', o.ref ?? uniq(), o.voidedAt ?? null, o.voidReason ?? null).lastInsertRowid);
+    o.status ?? 'posted', o.ref ?? uniq(), o.voidedAt ?? null, o.voidReason ?? null, o.salesReturnId ?? null).lastInsertRowid);
 }
 // Raw-SQL helper: insert an owner drawing row (goods by default, shop book, amount 100).
 function addDrawing(c: DatabaseSync, o: Record<string, any> = {}): number {
@@ -299,7 +301,11 @@ describe('stock_losses table', () => {
     expect(r).toMatchObject({ status: 'posted', source: 'manual', note: '' });
     expect(r.posted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     for (const reason of ['damaged', 'lost', 'expired', 'other']) addLoss(c, p, { reason });
-    addLoss(c, p, { source: 'damaged_return' });
+    // Phase 5: a damaged-return loss must point at a real return (trigger DAMAGED_RETURN_LINK), so build a sale + return first.
+    const sale = sqlSale(c);
+    sqlSaleItem(c, sale, p);
+    const ret = sqlReturn(c, sale);
+    addLoss(c, p, { source: 'damaged_return', salesReturnId: ret });
     addLoss(c, p, { book: 'telecom' });
     addLoss(c, p, { cost: 0 });
     expect(msgOf(() => addLoss(c, p, { reason: 'stolen' }))).toMatch(/CHECK/);
@@ -313,6 +319,34 @@ describe('stock_losses table', () => {
     const dup = uniq();
     addLoss(c, p, { ref: dup });
     expect(msgOf(() => addLoss(c, p, { ref: dup }))).toMatch(/UNIQUE/);
+  });
+
+  // Phase 5 link rules (migration 006): a loss carries a sales_return_id if and only if its source is 'damaged_return',
+  // and a damaged-return loss must use the return's own date and the reason 'damaged'.
+  it('damaged_return link rules: DAMAGED_RETURN_LINK, DAMAGED_RETURN_DATE, DAMAGED_RETURN_REASON', () => {
+    const c = memDb(conns);
+    const p = sqlProduct(c);
+    const sale = sqlSale(c, { date: daysAgo(3) });
+    sqlSaleItem(c, sale, p);
+    const ret = sqlReturn(c, sale, { date: daysAgo(1) });
+    // damaged_return WITHOUT a return link
+    expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', date: daysAgo(1) }))).toMatch(/DAMAGED_RETURN_LINK/);
+    // manual loss WITH a link
+    expect(msgOf(() => addLoss(c, p, { source: 'manual', salesReturnId: ret, date: daysAgo(1) }))).toMatch(/DAMAGED_RETURN_LINK/);
+    // right link but another date than the return's
+    expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', salesReturnId: ret, date: today() }))).toMatch(/DAMAGED_RETURN_DATE/);
+    // right link and date but a reason other than 'damaged'
+    for (const reason of ['lost', 'expired', 'other']) {
+      expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', salesReturnId: ret, date: daysAgo(1), reason })), reason).toMatch(/DAMAGED_RETURN_REASON/);
+    }
+    // a link to a return that does not exist is a foreign-key error
+    expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', salesReturnId: 9999, date: daysAgo(1) }))).toMatch(/DAMAGED_RETURN_DATE|FOREIGN KEY/);
+    expect(scalar(c, 'SELECT COUNT(*) FROM stock_losses')).toBe(0);
+    // the valid combination works and the link can never change afterwards
+    const id = addLoss(c, p, { source: 'damaged_return', salesReturnId: ret, date: daysAgo(1) });
+    expect(scalar(c, 'SELECT sales_return_id FROM stock_losses WHERE id = ?', id)).toBe(ret);
+    const ret2 = sqlReturn(c, sale, { date: daysAgo(1) });
+    expect(msgOf(() => c.prepare('UPDATE stock_losses SET sales_return_id = ? WHERE id = ?').run(ret2, id))).toMatch(/STOCK_LOSS_IMMUTABLE/);
   });
 
   it('dates: future refused, malformed refused, backdated accepted; business_date / posted_at immutable', () => {

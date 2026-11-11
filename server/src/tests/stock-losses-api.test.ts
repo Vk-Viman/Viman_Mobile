@@ -38,7 +38,7 @@ async function pUnits(s: ApiBase, units: number, value: number, mk = mkProduct):
 
 // Exact field list of a stock loss in API responses.
 const KEYS = ['backdated', 'book', 'businessDate', 'clientRef', 'costCents', 'id', 'note', 'postedAt', 'productId', 'productName', 'qty',
-  'reason', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt'];
+  'reason', 'salesReturnId', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt'];
 
 // Recording a loss: costing, rounding, validation, idempotency, book, dates.
 describe('POST /stock-losses - create', () => {
@@ -56,7 +56,7 @@ describe('POST /stock-losses - create', () => {
     expect(Object.keys(r.body.item).sort()).toEqual(KEYS);
     expect(r.body.item).toMatchObject({
       businessDate: today(), backdated: false, productId: P.id, productName: 'Speaker', book: 'shop', qty: 3,
-      costCents: 105000, unitCostCents: 35000, reason: 'damaged', note: 'fell off the shelf', source: 'manual',
+      costCents: 105000, unitCostCents: 35000, reason: 'damaged', note: 'fell off the shelf', source: 'manual', salesReturnId: null,
       status: 'posted', voidedAt: null, voidReason: null, clientRef: 'loss-create-001',
     });
     expect(r.body.item.postedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);

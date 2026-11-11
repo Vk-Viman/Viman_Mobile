@@ -28,7 +28,7 @@ export interface NavItem {
 /** Menu order, top to bottom. To add a screen: add it here, then (when built) set `built: true` and add its route. */
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, phase: 12, description: 'Today at a glance: sales, profit, cash in each book and stock alerts.', built: true },
-  { to: '/sales', label: 'Sales', icon: ShoppingCart, phase: 5, description: 'Record cash sales of goods and services, with returns and voids.' },
+  { to: '/sales', label: 'Sales', icon: ShoppingCart, phase: 5, description: 'Record cash sales of goods and services, with returns and voids.', built: true },
   { to: '/products', label: 'Products', icon: Package, phase: 2, description: 'Manage the product catalogue, prices and categories.', built: true },
   { to: '/purchases', label: 'Purchases', icon: Truck, phase: 3, description: 'Record stock bought from suppliers and what you paid.', built: true },
   { to: '/stock', label: 'Stock', icon: Boxes, phase: 4, description: 'See stock on hand, movements, adjustments and losses.', built: true },

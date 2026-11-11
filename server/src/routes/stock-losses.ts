@@ -6,6 +6,8 @@
  *
  *   POST /stock-losses          create (201; 200 on a repeated `clientRef`)   GET /stock-losses   list
  *   GET  /stock-losses/:id      one loss                                      POST /stock-losses/:id/void   void
+ * Items carry `source` ('manual' | 'damaged_return') and `salesReturnId`; voiding a damaged-return loss is
+ * refused by the service (409 DAMAGED_RETURN_LOSS).
  */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';

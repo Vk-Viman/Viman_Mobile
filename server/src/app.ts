@@ -31,6 +31,7 @@ import { registerInventoryRoutes } from './routes/inventory.ts';
 import { registerStocktakeRoutes } from './routes/stocktakes.ts';
 import { registerStockLossRoutes } from './routes/stock-losses.ts';
 import { registerDrawingRoutes } from './routes/drawings.ts';
+import { registerSaleRoutes } from './routes/sales.ts';
 
 /** Options of `buildApp`. */
 export interface AppOptions {
@@ -226,6 +227,7 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerStocktakeRoutes(api, ctx);
     registerStockLossRoutes(api, ctx);
     registerDrawingRoutes(api, ctx);
+    registerSaleRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;

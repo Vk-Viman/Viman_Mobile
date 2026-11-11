@@ -17,7 +17,8 @@ Migrations live in `server/src/db/migrations/NNN_name.sql`. Each phase adds its 
 | `003_catalog.sql` | 2 | **implemented** — categories (+12 seeded defaults), products, suppliers + triggers |
 | `004_purchases_inventory.sql` | 3 | **implemented** — stock_movements (+cache trigger), cash_entries, purchases, purchase_items, purchase_returns(+items), audit_logs columns |
 | `005_stocktake_losses_drawings.sql` | 4 | **implemented** — stocktakes(+items), stock_losses, owner_drawings (goods only in Phase 4) |
-| `006_sales_returns.sql` | 5 | sales, sale_items, sales_returns(+items), stock_losses.sales_return_id (in progress) |
+| `006_sales_returns.sql` | 5 | **implemented** — sales, sale_items, sales_returns(+items), stock_losses.sales_return_id |
+| `007_no_hard_deletes.sql` | 5 | BEFORE DELETE triggers (`RECORD_DELETE_FORBIDDEN`) on purchases(+items), stocktakes, stock_losses, owner_drawings, sales(+items) — BUSINESS_RULES §12 |
 
 ---
 

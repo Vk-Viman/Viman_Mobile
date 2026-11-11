@@ -8,6 +8,8 @@
  *  - Outflows larger than the quantity on hand are blocked (422 INSUFFICIENT_STOCK).
  *  - R-FD: no future dates. Section 12: idempotent by `clientRef`; every write is audited.
  *  - R1 / C6: a void writes the exact negation of the movement and marks the loss `void`; nothing is deleted.
+ *  - A `damaged_return` loss belongs to its sales return (Phase 5, section 4): it is written by the return and
+ *    can never be voided on its own (409 DAMAGED_RETURN_LOSS).
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
@@ -34,6 +36,8 @@ export interface StockLoss {
   id: number; businessDate: string; postedAt: string; backdated: boolean; productId: number; productName: string;
   book: LossBook; qty: number; costCents: number; unitCostCents: number; reason: LossReason; note: string;
   source: LossSource; status: LossStatus; voidedAt: string | null; voidReason: string | null; clientRef: string;
+  /** The sales return that caused a `damaged_return` loss; null for manual losses. */
+  salesReturnId: number | null;
 }
 
 function toLoss(r: StockLossRow): StockLoss {
@@ -42,6 +46,7 @@ function toLoss(r: StockLossRow): StockLoss {
     productId: r.productId, productName: r.productName, book: r.book, qty: r.qty, costCents: r.costCents,
     unitCostCents: mulDivRound(r.costCents, 1, r.qty), reason: r.reason, note: r.note, source: r.source,
     status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
+    salesReturnId: r.salesReturnId,
   };
 }
 
@@ -118,7 +123,8 @@ export function createStockLoss(ctx: AppContext, body: StockLossCreate): { item:
  * Voids a stock loss (R1, C6): negates the stock movement (units return at the original cost) and marks the
  * loss `void`. The reversal keeps the loss's business date so it lands in the same report period.
  *
- * @throws AppError 400 VALIDATION_ERROR (reason), 404 NOT_FOUND, 409 ALREADY_VOID.
+ * @throws AppError 400 VALIDATION_ERROR (reason), 404 NOT_FOUND, 409 DAMAGED_RETURN_LOSS (the loss belongs to a
+ *   sales return), 409 ALREADY_VOID.
  */
 export function voidStockLoss(ctx: AppContext, id: number, body: { reason: string }): StockLoss {
   const fields: Fields = {};
@@ -128,6 +134,11 @@ export function voidStockLoss(ctx: AppContext, id: number, body: { reason: strin
   return runWrite(ctx, (conn) => {
     const row = getStockLossRow(conn, id);
     if (!row) throw notFound('Stock loss');
+    // A damaged-return loss has no stock movement of its own and is part of its return; undoing it alone would
+    // leave the return's COGS reversal without its write-off.
+    if (row.source === 'damaged_return') {
+      throw new AppError(409, 'DAMAGED_RETURN_LOSS', 'This loss comes from a damaged sales return and cannot be voided here.');
+    }
     if (row.status === 'void') throw alreadyVoid('stock loss');
     const before = toLoss(row);
 

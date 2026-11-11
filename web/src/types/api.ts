@@ -331,7 +331,10 @@ export interface StockLoss {
   unitCostCents: number;
   reason: StockLossReason;
   note: string;
-  source: 'manual';
+  /** Id of the sales return that created this loss (damaged returns); null for manual write-offs. */
+  salesReturnId: number | null;
+  /** 'manual' = written off by hand; 'damaged_return' = created by a damaged sales return (cannot be voided here). */
+  source: 'manual' | 'damaged_return';
   status: PostedStatus;
   voidedAt: string | null;
   voidReason: string | null;
@@ -394,3 +397,86 @@ export interface Valuation {
   totals: { qty: number; valueCents: number; byBook: { shop: BookTotals; telecom: BookTotals } };
 }
 export interface ValuationQuery { book?: Book; categoryId?: number; asOf?: string; includeZero?: boolean; includeInactive?: boolean }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Phase 5: sales (POS), sales returns, voids. Money is integer cents; the server computes every total, COGS and refund.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** goods = Shop product, card = Telecom scratch card. */
+export type SaleLineType = 'goods' | 'card';
+export interface SaleItem {
+  id: number;
+  lineNo: number;
+  lineType: SaleLineType;
+  productId: number;
+  productName: string;
+  productCode: string | null;
+  qty: number;
+  unitPriceCents: number;
+  /** Snapshot of the unit cost at sale time (display only; never changes afterwards). */
+  unitCostCents: number;
+  revenueCents: number;
+  cogsCents: number;
+  returnedQty: number;
+}
+export interface SaleReturnItem {
+  id: number;
+  saleItemId: number;
+  productId: number;
+  productName: string;
+  qty: number;
+  /** true = back into stock; false = damaged (written off once as a stock loss). */
+  resalable: boolean;
+  revenueCents: number;
+  cogsCents: number;
+}
+export interface SaleReturn {
+  id: number;
+  saleId: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  refundCents: number;
+  cogsReversedCents: number;
+  note: string;
+  clientRef: string;
+  items: SaleReturnItem[];
+}
+export interface Sale {
+  id: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  book: Book;
+  totalCents: number;
+  cogsCents: number;
+  /** totalCents - cogsCents, before returns (returns are shown on their own). */
+  grossProfitCents: number;
+  status: PostedStatus;
+  notes: string;
+  voidedAt: string | null;
+  voidReason: string | null;
+  clientRef: string;
+  items: SaleItem[];
+  returns: SaleReturn[];
+}
+/** Non-blocking server warnings on a sale line (rule R13). */
+export type WarningCode = 'PRICE_BELOW_MINIMUM' | 'PRICE_BELOW_COST' | 'ZERO_COST';
+export interface Warning { code: WarningCode; message: string; lineIndex: number }
+export interface SaleTotals { revenueCents: number; cogsCents: number; refundsCents: number }
+export interface SaleList { items: Sale[]; total: number; totals: SaleTotals }
+export interface SaleOne { item: Sale }
+export interface SaleQuery {
+  from?: string; to?: string; book?: Book; status?: PostedStatus; productId?: number; limit?: number; offset?: number;
+}
+export interface SaleCreateLine { productId: number; qty: number; unitPriceCents: number }
+export interface SaleCreate { businessDate: string; items: SaleCreateLine[]; notes?: string; clientRef: string }
+export interface SaleCreateResult { sales: Sale[]; warnings: Warning[] }
+export interface SaleVoidBody { reason: string }
+export interface SaleReturnCreate {
+  businessDate: string;
+  items: Array<{ saleItemId: number; qty: number; resalable: boolean }>;
+  note?: string;
+  clientRef: string;
+}
+export interface SaleReturnResult { item: SaleReturn; sale: Sale }

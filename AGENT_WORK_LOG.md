@@ -83,3 +83,12 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 | Backend | sonnet | stocktake/stock-losses/drawings services, stock-common, inventory additions, 3 route files | Accepted — reversal and C10 gain logic read line by line; smoke numbers re-derived by hand |
 | Frontend | sonnet | web/src/pages/stock/*, api/stock.ts | Accepted — browser-verified end to end |
 | QA | sonnet | 8 new test files + helper | Accepted — found the CHECK bug; 607/607 after fix |
+
+## Phase 5 — POS, sales, returns, voids (2026-11-11)
+| Agent | Model | Files | Orchestrator review |
+|---|---|---|---|
+| DB Architect | sonnet | 006 migration + README section, sales repo, stock-losses repo | Accepted — all triggers fired in agent checks |
+| Backend | sonnet | sales/sales-returns/sales-common/return-rules services, sales routes, stock-losses edits | Accepted — hit a usage limit mid-run and was resumed; C5 numbers re-derived by hand (33334 x3; COGS 23333/23333/23334) |
+| Frontend | sonnet | web/src/pages/sales/*, api/sales.ts | Accepted — reused the shared hooks/components; browser-verified |
+| QA | sonnet | 7 test files + helper; 2 existing tests updated | Accepted — found the missing DELETE guards; 751/751 after migration 007 |
+| Quality pass (3 agents) | sonnet | comments + safe refactors across server/web/tests | Accepted — behaviour identical (607 tests, migrations 001-005 byte-identical, UI regression-tested in browser) |

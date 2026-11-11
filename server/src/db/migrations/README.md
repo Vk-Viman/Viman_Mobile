@@ -162,3 +162,55 @@ Specific rules:
   (manual, damaged_return). The cost is the weighted-average value removed (section 3) and is frozen on the row.
 - `owner_drawings`: `(book = 'icecream') = (fund IS NOT NULL)` (same fund rule as the cash ledger); goods
   drawings need a product and a quantity of at least 1 and are never ice-cream; cash drawings must have neither.
+
+
+## 006_sales_returns.sql - sales, sales returns, damaged-return write-offs (Phase 5)
+
+No stock or cash ledger changes: the movements (`sale`, `sale_return`) and cash entries (`sale_goods`,
+`card_sale`, `sale_refund`, `card_refund`) are written by the inventory engine and the sales service.
+
+| Table | Purpose |
+|---|---|
+| `sales` | One receipt. A mixed cart is split by book, so one cart can make a shop sale and a telecom sale. |
+| `sale_items` | The lines: quantity, price, and the cost removed at the weighted average (frozen, C5). |
+| `sales_returns`, `sales_return_items` | Goods a customer brings back: refund, cost reversed, resalable or damaged. Append-only. |
+| `stock_losses.sales_return_id` | Links the write-off of a damaged returned item to its return. |
+
+Sales:
+
+- `UNIQUE (client_ref, book)`: a repeated submission cannot create the same sale twice, yet one cart may create
+  one sale in each book with the same reference.
+- Date rules as in earlier phases: strict date CHECK, `FUTURE_DATE_NOT_ALLOWED` (R-FD),
+  `BUSINESS_DATE_IMMUTABLE`, `POSTED_AT_IMMUTABLE`.
+- `trg_sales_immutable` (`SALE_IMMUTABLE`): only `posted -> void` (status, voided_at, void_reason together); a void
+  never goes back (R1).
+- `sale_items`: `CHECK (revenue_cents = qty * unit_price_cents)` (no rounding on a line), `returned_qty` between 0
+  and `qty`, `UNIQUE (sale_id, line_no)`. `trg_sale_items_immutable` (`SALE_ITEM_IMMUTABLE`) lets only
+  `returned_qty` change, and only upwards. `trg_sale_items_book_mismatch` (`SALE_ITEM_BOOK_MISMATCH`): goods
+  lines only in shop sales, card lines only in telecom sales, and the product must belong to the sale's book.
+
+Returns:
+
+- `trg_sales_returns_before_original` (`RETURN_BEFORE_ORIGINAL_DATE`, R-RD): same day or later is fine, earlier is not.
+- `trg_sales_returns_void` (`SALE_VOID`): no return against a voided sale.
+- `trg_sales_return_items_mismatch` (`RETURN_ITEM_MISMATCH`): a line must belong to the return's own sale.
+- `trg_sales_return_items_exceeds` (`RETURN_EXCEEDS_SOLD`): the returned quantity must be at most
+  `sale_items.qty - sale_items.returned_qty` at insert time. The service inserts the return lines first and
+  only then raises `returned_qty` (`addReturnedQty`), so the check sees the quantity still returnable.
+- Both return tables are append-only (`*_no_update`, `*_no_delete`).
+
+Damaged returns (`stock_losses`):
+
+- `ALTER TABLE ... ADD COLUMN sales_return_id` (nullable FK, indexed). Phase 4's `STOCK_LOSS_IMMUTABLE` is untouched;
+  a small extra trigger freezes the new column too.
+- `DAMAGED_RETURN_LINK`: `source = 'damaged_return'` if and only if `sales_return_id` is set.
+- `DAMAGED_RETURN_DATE`: the loss carries the return's business date. `DAMAGED_RETURN_REASON`: its reason is 'damaged'.
+
+
+## 007_no_hard_deletes.sql
+
+**Why:** BUSINESS_RULES section 12 says completed transactions are never hard-deleted; mistakes are fixed by voiding (status `void` + reversal rows). Until this migration only the ledgers and the return tables refused DELETE in the database; the other business documents relied on the application. 
+
+**What it adds:** one `BEFORE DELETE` trigger per table that aborts with `RECORD_DELETE_FORBIDDEN` — `purchases`, `purchase_items`, `stocktakes`, `stock_losses`, `owner_drawings`, `sales`, `sale_items`. 
+
+**Not covered on purpose:** `stocktake_items` (a draft count sheet is rewritten by delete + insert; completed/void sheets are already frozen by migration 005) and the catalogue tables (master data, retired with `active = 0`).

@@ -37,6 +37,7 @@ import type {
 import { getSupplier } from '../repositories/suppliers.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { issueStockCapped, receiveStock } from './inventory.service.ts';
+import { returnBeforeOriginalError, returnPortion } from './return-rules.ts';
 import {
   FUTURE_DATE_MESSAGE, NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate,
   futureDateError, isBackdated, isBackdatedToday, notFound, trimmed, validationError,
@@ -68,19 +69,7 @@ export interface Purchase {
 
 const BILL_NO_MAX_LENGTH = 40;
 
-/** R-RD: the owner-approved wording, naming the original purchase date. */
-function returnBeforeOriginalMessage(originalDate: string): string {
-  return `The return date cannot be earlier than the original purchase date (${originalDate}). `
-    + `Please select ${originalDate} or a later date (not after today).`;
-}
-
 // ---------- helpers ----------
-
-/** R-RD: 400 RETURN_BEFORE_ORIGINAL_DATE; `originalDate` is also returned as an extra key for the screen. */
-function returnBeforeOriginalError(originalDate: string): AppError {
-  const message = returnBeforeOriginalMessage(originalDate);
-  return new AppError(400, 'RETURN_BEFORE_ORIGINAL_DATE', message, { businessDate: message }, { originalDate });
-}
 
 /**
  * Safety net: maps database trigger / constraint aborts to the contract's error envelopes. The checks above
@@ -92,7 +81,7 @@ function mapDbAbort(err: unknown, originalDate?: string): never {
   const msg = err instanceof Error ? err.message : '';
   if (msg.includes('FUTURE_DATE_NOT_ALLOWED')) throw futureDateError();
   if (msg.includes('RETURN_BEFORE_ORIGINAL_DATE')) {
-    if (originalDate !== undefined) throw returnBeforeOriginalError(originalDate);
+    if (originalDate !== undefined) throw returnBeforeOriginalError('purchase', originalDate);
     throw new AppError(400, 'RETURN_BEFORE_ORIGINAL_DATE',
       'The return date cannot be earlier than the original purchase date.');
   }
@@ -393,7 +382,7 @@ export function createPurchaseReturn(
     const header = getPurchaseRow(conn, purchaseId);
     if (!header) throw notFound('Purchase');
     originalDate = header.businessDate;
-    if (body.businessDate < header.businessDate) throw returnBeforeOriginalError(header.businessDate); // R-RD
+    if (body.businessDate < header.businessDate) throw returnBeforeOriginalError('purchase', header.businessDate); // R-RD
     if (header.status === 'void') {
       throw new AppError(409, 'PURCHASE_VOID', 'This purchase has been voided, so it cannot be returned.');
     }
@@ -429,10 +418,7 @@ export function createPurchaseReturn(
     const priced = lines.map((l) => {
       const item = l.item as PurchaseItem;
       const returnedValue = returnedValueSoFar(conn, item.id);
-      const remainingValue = Math.max(0, item.lineTotalCents - returnedValue);
-      const valueCents = item.returnedUnits + l.units === item.units
-        ? remainingValue
-        : Math.min(mulDivRound(item.lineTotalCents, l.units, item.units), remainingValue);
+      const valueCents = returnPortion(item.lineTotalCents, l.units, item.units, item.returnedUnits, returnedValue);
       return { ...l, item, valueCents };
     });
     const refundCents = priced.reduce((sum, l) => sum + l.valueCents, 0);
