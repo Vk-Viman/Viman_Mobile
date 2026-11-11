@@ -1,3 +1,11 @@
+// Stock losses API (POST/GET /stock-losses, void) - API level (Fastify inject, real temp database).
+// Protects R2/R3 (BUSINESS_RULES section 11): a loss (damaged / lost / expired / other) removes stock at the current
+// weighted-average cost (the last unit takes the remainder, no residue), belongs to the product's own book, writes exactly one
+// stock movement, NEVER touches cash, and feeds the "Stock adjustments (net)" P&L line. Also R1 / C6 (a void writes an exact
+// reversal at the ORIGINAL value and business date), R-FD (no future dates; backdating allowed and flagged), clientRef
+// idempotency, an audit row per create/void, and full rollback when any step fails.
+// Organised as: create, list, void, audit/atomicity.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { auditRows, breakAudit, get, post } from './helpers/catalog.ts';
@@ -10,25 +18,32 @@ import {
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
+// Silences the expected server error log lines while tests deliberately force failures.
 const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
 
 const bl = (productId: number, units: number, lineTotalCents: number) => ({ productId, packs: 1, packSize: units, lineTotalCents });
+// Fixture: product with 10 @ Rs 3,000 + 10 @ Rs 4,000 = 20 units / 700,000 cents (average 35,000 = Rs 350).
 async function p20(s: ApiBase, mk = mkProduct): Promise<number> {  // 20 / 700000, average 35000
   const p = await mk(s);
   await buy(s, [bl(p.id, 10, 300000)]);
   await buy(s, [bl(p.id, 10, 400000)]);
   return p.id;
 }
+// Fixture: product with exactly 'units' units worth 'value' cents in total.
 async function pUnits(s: ApiBase, units: number, value: number, mk = mkProduct): Promise<number> {
   const p = await mk(s);
   await buy(s, [bl(p.id, units, value)]);
   return p.id;
 }
 
+// Exact field list of a stock loss in API responses.
 const KEYS = ['backdated', 'book', 'businessDate', 'clientRef', 'costCents', 'id', 'note', 'postedAt', 'productId', 'productName', 'qty',
-  'reason', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt'];
+  'reason', 'salesReturnId', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt'];
 
+// Recording a loss: costing, rounding, validation, idempotency, book, dates.
 describe('POST /stock-losses - create', () => {
+  // Hand calculation: average 35,000 x 3 = 105,000 cost -> pool 17 / 595,000 (average unchanged). One movement, no cash entry
+  // (a loss costs the shop stock value, not cash).
   it('201 exact shape; 3 of 20/700000 at the average = 105000; pool 17/595000; one movement; no cash entry', async () => {
     const s = await setup();
     const P = await mkProduct(s, { name: 'Speaker' });
@@ -41,7 +56,7 @@ describe('POST /stock-losses - create', () => {
     expect(Object.keys(r.body.item).sort()).toEqual(KEYS);
     expect(r.body.item).toMatchObject({
       businessDate: today(), backdated: false, productId: P.id, productName: 'Speaker', book: 'shop', qty: 3,
-      costCents: 105000, unitCostCents: 35000, reason: 'damaged', note: 'fell off the shelf', source: 'manual',
+      costCents: 105000, unitCostCents: 35000, reason: 'damaged', note: 'fell off the shelf', source: 'manual', salesReturnId: null,
       status: 'posted', voidedAt: null, voidReason: null, clientRef: 'loss-create-001',
     });
     expect(r.body.item.postedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
@@ -56,6 +71,7 @@ describe('POST /stock-losses - create', () => {
     await reconOk(s);
   });
 
+  // All four reasons cost the same: 4 losses of 1 unit at 35,000 each, the pool stays at exactly 35,000 per unit.
   it('each reason works; note defaults to empty; all at the same average', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -71,6 +87,7 @@ describe('POST /stock-losses - create', () => {
     await reconOk(s);
   });
 
+  // 1,000 x 2 / 3 = 666.67 -> 667 (unit cost 333.5 -> 334); the last unit takes the remaining 333. Whole-pool loss of 3 / 1,001 removes all 1,001.
   it('rounding: 2 of 3/1000 costs 667 (666.67), unit 334 (333.5); then the last unit takes the remaining 333', async () => {
     const s = await setup();
     const P = await pUnits(s, 3, 1000);
@@ -88,6 +105,7 @@ describe('POST /stock-losses - create', () => {
     await reconOk(s);
   });
 
+  // Free stock lost: the loss is still recorded (quantity leaves) but costs nothing.
   it('a zero-valued pool: loss costs 0 and is still recorded (one movement)', async () => {
     const s = await setup();
     const P = await pUnits(s, 5, 0);
@@ -98,6 +116,7 @@ describe('POST /stock-losses - create', () => {
     await reconOk(s);
   });
 
+  // Double-click protection: the same clientRef returns the original loss and removes stock only once.
   it('idempotent clientRef: a repeat returns the original with 200 and writes no second loss or movement', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -137,6 +156,7 @@ describe('POST /stock-losses - create', () => {
     expect(poolOf(s, P)).toEqual({ qty: 19, value: 665000 });
   });
 
+  // Cannot lose more units than the system says exist (section 3 "Blocked": no negative stock).
   it('INSUFFICIENT_STOCK: more than on hand (or any on an empty product) -> 422, nothing written', async () => {
     const s = await setup();
     const P = await pUnits(s, 3, 1000);
@@ -185,6 +205,7 @@ describe('POST /stock-losses - create', () => {
     expect(num(s, 'SELECT COUNT(*) FROM stock_losses')).toBe(1);
   });
 
+  // A telecom product's loss lands in the telecom book; shop and telecom pools never mix.
   it('the book comes from the product (a Telecom product stays in the telecom book); Shop and Telecom are independent', async () => {
     const s = await setup();
     const shop = await p20(s);
@@ -200,6 +221,7 @@ describe('POST /stock-losses - create', () => {
     await reconOk(s);
   });
 
+  // R-FD: future dates are refused with the exact message; backdated entries are flagged and their movement carries the business date (R7).
   it('dates: future -> exact FUTURE_DATE_NOT_ALLOWED; impossible -> 400; backdated flagged and its movement carries the business date', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -226,6 +248,7 @@ describe('POST /stock-losses - create', () => {
 });
 
 // =============================================================================================
+// Listing losses with filters; totals show the cost of POSTED losses only.
 describe('GET /stock-losses', () => {
   async function scenario(s: ApiBase) {
     const P = await p20(s);
@@ -298,7 +321,10 @@ describe('GET /stock-losses', () => {
 });
 
 // =============================================================================================
+// R1 / C6: voiding adds an exact reversal movement; the loss row keeps its history.
 describe('POST /stock-losses/:id/void', () => {
+  // Loss of 3 (105,000) on a date 4 days ago, then voided: pool goes 17 / 595,000 -> back to 20 / 700,000. The reversal has the same
+  // type, +3 / +105,000, the ORIGINAL business date, and no cash entry exists for it.
   it('restores stock and value exactly with a reversal movement (type loss, +qty, +cost) on the original business date', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -316,6 +342,7 @@ describe('POST /stock-losses/:id/void', () => {
     await reconOk(s);
   });
 
+  // 3 units / 1,000: loss of 2 costs 667; a later sale empties the pool; voiding the loss restores 2 units / 667 exactly (C6: same value as the original, not re-averaged).
   it('restores the exact original value even after later sales changed the pool', async () => {
     const s = await setup();
     const P = await pUnits(s, 3, 1000);
@@ -349,6 +376,7 @@ describe('POST /stock-losses/:id/void', () => {
     expect(poolOf(s, P)).toEqual({ qty: 20, value: 700000 });
   });
 
+  // A voided loss stays visible in the list (no hard deletes) but is excluded from the cost total.
   it('a voided loss no longer counts in totalCostCents but stays listed; a repeat of its clientRef still returns it', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -365,6 +393,7 @@ describe('POST /stock-losses/:id/void', () => {
 });
 
 // =============================================================================================
+// Every create/void leaves one audit entry; any failed step leaves the database exactly as before.
 describe('audit and atomicity', () => {
   it('audit: entity "stock_loss" create and void with businessDate and backdated', async () => {
     const s = await setup();
@@ -406,6 +435,7 @@ describe('audit and atomicity', () => {
     await reconOk(s);
   });
 
+  // No loss may exist without its stock movement.
   it('create: a failing movement insert rolls back the loss row (no loss without its movement)', async () => {
     const s = await setup();
     quiet();
@@ -437,6 +467,7 @@ describe('audit and atomicity', () => {
     expect(poolOf(s, P)).toEqual({ qty: 20, value: 700000 });
   });
 
+  // Each loss has exactly one movement (two after a void) and reconciliation (cache = ledger) stays ok after every step.
   it('every record has exactly one movement on its own (refTable, refId); reconciliation ok after each step of a mixed run', async () => {
     const s = await setup();
     const P = await p20(s);

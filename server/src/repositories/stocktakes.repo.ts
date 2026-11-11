@@ -1,12 +1,24 @@
+/**
+ * repositories/stocktakes.repo.ts - SQL for `stocktakes` and `stocktake_items` (physical stock counts).
+ *
+ * Layer: repository. A stocktake starts as a `draft` (counted quantities can be edited freely), then is
+ * `completed` (the differences become stock movements, written by `stocktake.service.ts`) or `void`.
+ * The status rules are guarded by the triggers of migration 005: items change only while the stocktake is a
+ * draft, only stock products of the stocktake's book may be counted, and only the transitions
+ * draft -> completed | void and completed -> void are allowed. No business rules live in this file.
+ */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
 
 export type StocktakeBook = 'shop' | 'telecom';
 export type StocktakeStatus = 'draft' | 'completed' | 'void';
 
+/** Stocktake header. */
 export interface StocktakeRow {
   id: number; businessDate: string; postedAt: string; book: StocktakeBook; status: StocktakeStatus;
   notes: string; clientRef: string; completedAt: string | null; voidedAt: string | null; voidReason: string | null;
 }
+/** One counted product; the `expected*`/`difference*`/`valueDelta` columns are filled only when completed. */
 export interface StocktakeItemRow {
   id: number; stocktakeId: number; productId: number; productName: string; productCode: string | null;
   countedQty: number; expectedQty: number | null; differenceQty: number | null;
@@ -24,7 +36,6 @@ interface RawItem {
 }
 
 const SELECT = `SELECT id, business_date, posted_at, book, status, notes, client_ref, completed_at, voided_at, void_reason FROM stocktakes`;
-const nn = (v: N | null): number | null => (v === null ? null : Number(v));
 
 function map(r: Raw): StocktakeRow {
   return {
@@ -33,6 +44,7 @@ function map(r: Raw): StocktakeRow {
   };
 }
 
+/** Inserts an empty draft stocktake and returns its id. */
 export function insertStocktake(conn: DatabaseSync, s: {
   businessDate: string; book: StocktakeBook; notes: string; clientRef: string;
 }): number {
@@ -42,16 +54,19 @@ export function insertStocktake(conn: DatabaseSync, s: {
   return Number(res.lastInsertRowid);
 }
 
+/** One stocktake by id, or undefined. */
 export function getStocktake(conn: DatabaseSync, id: number): StocktakeRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE id = ?`).get(id) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** The stocktake already saved under this client reference (idempotent retry), or undefined. */
 export function getStocktakeByClientRef(conn: DatabaseSync, ref: string): StocktakeRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE client_ref = ?`).get(ref) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** Lists stocktakes, newest business date first, with the total number of matches. */
 export function listStocktakes(conn: DatabaseSync, q: {
   from?: string; to?: string; book?: StocktakeBook; status?: StocktakeStatus; limit: number; offset: number;
 }): { items: StocktakeRow[]; total: number } {
@@ -84,6 +99,7 @@ export function updateStocktakeNotes(conn: DatabaseSync, id: number, notes: stri
   conn.prepare('UPDATE stocktakes SET notes = ? WHERE id = ?').run(notes, id);
 }
 
+/** The counted lines of one stocktake in entry order, with product name and code. */
 export function listStocktakeItems(conn: DatabaseSync, stocktakeId: number): StocktakeItemRow[] {
   const rows = conn.prepare(
     `SELECT i.id, i.stocktake_id, i.product_id, p.name AS product_name, p.code AS product_code, i.counted_qty,
@@ -93,8 +109,8 @@ export function listStocktakeItems(conn: DatabaseSync, stocktakeId: number): Sto
   return rows.map((r) => ({
     id: Number(r.id), stocktakeId: Number(r.stocktake_id), productId: Number(r.product_id),
     productName: r.product_name, productCode: r.product_code, countedQty: Number(r.counted_qty),
-    expectedQty: nn(r.expected_qty), differenceQty: nn(r.difference_qty),
-    valueDeltaCents: nn(r.value_delta_cents), gainUnitCostCents: nn(r.gain_unit_cost_cents),
+    expectedQty: numberOrNull(r.expected_qty), differenceQty: numberOrNull(r.difference_qty),
+    valueDeltaCents: numberOrNull(r.value_delta_cents), gainUnitCostCents: numberOrNull(r.gain_unit_cost_cents),
   }));
 }
 
@@ -110,13 +126,13 @@ export function completeStocktakeItem(conn: DatabaseSync, itemId: number, v: {
 /** draft -> completed; completed_at is the database clock. */
 export function markStocktakeCompleted(conn: DatabaseSync, id: number): void {
   conn.prepare(
-    `UPDATE stocktakes SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+    `UPDATE stocktakes SET status = 'completed', completed_at = ${SQL_NOW_UTC} WHERE id = ?`,
   ).run(id);
 }
 
 /** draft -> void or completed -> void; voided_at is the database clock. */
 export function markStocktakeVoid(conn: DatabaseSync, id: number, reason: string): void {
   conn.prepare(
-    `UPDATE stocktakes SET status = 'void', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), void_reason = ? WHERE id = ?`,
+    `UPDATE stocktakes SET status = 'void', voided_at = ${SQL_NOW_UTC}, void_reason = ? WHERE id = ?`,
   ).run(reason, id);
 }

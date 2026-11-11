@@ -1,5 +1,7 @@
+/* Global styles. Loaded once from main.tsx. Most styling is Tailwind utility classes written in the components. */
 @import "tailwindcss";
 
+/* Brand colour scale (teal) and font stack; Tailwind turns these into classes such as bg-brand-600. */
 @theme {
   --color-brand-50: #f0fdfa;
   --color-brand-100: #ccfbf1;
@@ -9,7 +11,10 @@
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+/* Let the app fill the full window height (the sidebar layout relies on it). */
 html, body, #root { height: 100%; }
 body { background: #f1f5f9; color: #0f172a; font-family: var(--font-sans); }
+/* Visible keyboard focus ring everywhere (accessibility). */
 :focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
+/* Equal-width digits so columns of money/quantities line up. Used as className="num". */
 .num { font-variant-numeric: tabular-nums; }

@@ -1,3 +1,12 @@
+// Restore from backup (POST /backups/restore) - API level with real temp databases and files.
+// Protects the most dangerous owner action: replacing live shop data with a backup. Rules covered: an explicit
+// confirm word is required; the file must be a valid SQLite database with the expected tables and a schema version this
+// app understands (older ones are upgraded, newer ones refused); a safety backup of the CURRENT data is always taken
+// first; the audit log records the restore; if anything fails after the swap the previous data is put back (RESTORE_FAILED);
+// while a restore runs every other /api request gets 503. Names are checked so a path like ../x can never escape the
+// backups folder.
+// Organised as: restore by name, older-version backup, restore by upload, rollback on failure, restore in progress.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -12,6 +21,7 @@ import { latestVersion, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
 const env = new TestEnv();
 afterEach(() => env.cleanup());
 
+// Settings body that sets the two commission rates; rates are used as an easy visible "marker" of which data is live.
 const rates = (a: number, b: number) => ({ rates: { reloadCommissionBp: a, ezcashCommissionBp: b } });
 const putSettings = (app: FastifyInstance, body: unknown) =>
   app.inject({ method: 'PUT', url: '/api/v1/settings', payload: body as object });
@@ -23,9 +33,11 @@ const restoreUpload = (app: FastifyInstance, parts: Part[]) => {
   const { payload, headers } = buildMultipart(parts);
   return app.inject({ method: 'POST', url: '/api/v1/backups/restore', payload, headers });
 };
+// Lists temp files a restore must never leave behind (candidate, upload and rollback files).
 const leftovers = (dataDir: string) =>
   readdirSync(dataDir).filter((f) => f.startsWith('restore-candidate') || f.startsWith('upload-') || f.startsWith('viman.db.rollback'));
 
+// (Marker idea: backup = rates 111/11, live data = 222/22, so after a restore the rates tell us which data we have.)
 /** App with live rates 222/22, plus a manual backup that holds rates 111/11. */
 async function setup() {
   const b = await env.build();
@@ -35,6 +47,7 @@ async function setup() {
   return { ...b, backup, backupPath: join(b.dataDir, 'backups', backup.name) };
 }
 
+// Creates a standalone SQLite file for upload tests (valid, corrupt or incomplete, depending on setupFn).
 function makeDbFile(dir: string, name: string, setupFn: (db: DatabaseSync) => void): string {
   const p = join(dir, name);
   const db = new DatabaseSync(p);
@@ -42,7 +55,9 @@ function makeDbFile(dir: string, name: string, setupFn: (db: DatabaseSync) => vo
   return p;
 }
 
+// Restoring one of the backups already in the backups folder.
 describe('restore by name', () => {
+  // After restore the old marker rates are back, a pre-restore safety copy of the replaced data exists, and one audit row records it.
   it('restores the named backup, writes a safety backup and an audit row', async () => {
     const { app, ctx, dataDir, backup } = await setup();
     const res = await restoreJson(app, { name: backup.name, confirm: 'RESTORE' });
@@ -77,6 +92,7 @@ describe('restore by name', () => {
     expect(leftovers(dataDir)).toEqual([]);
   });
 
+  // The database file was swapped underneath the app; the connection must be reopened so new saves work and persist.
   it('writes work after a restore (connection reopened) and survive another rebuild', async () => {
     const { app, dataDir, backup } = await setup();
     expect((await restoreJson(app, { name: backup.name, confirm: 'RESTORE' })).statusCode).toBe(200);
@@ -89,6 +105,7 @@ describe('restore by name', () => {
     expect((await getSettings(again.app)).rates).toEqual({ reloadCommissionBp: 333, ezcashCommissionBp: 33 });
   });
 
+  // The word RESTORE must be sent exactly; a missing, wrong, empty or non-text confirmation is refused and live data stays unchanged.
   it.each([
     ['confirm missing', (n: string) => ({ name: n })],
     ['confirm wrong', (n: string) => ({ name: n, confirm: 'restore' })],
@@ -135,6 +152,7 @@ describe('restore by name', () => {
   });
 });
 
+// Old backups must stay usable after the app is upgraded.
 describe('restore of an older (version 1) backup', () => {
   function v1Backup(): string {
     const dir = env.newDir();
@@ -176,6 +194,7 @@ describe('restore of an older (version 1) backup', () => {
   });
 });
 
+// Restoring from a file the owner picks (e.g. from a USB stick); every kind of bad file must be refused safely.
 describe('restore by upload', () => {
   it('valid uploaded backup restores; restoredFrom is upload:<filename>', async () => {
     const { app, dataDir, backupPath } = await setup();
@@ -215,6 +234,7 @@ describe('restore by upload', () => {
     return res;
   }
 
+  // A non-database file is refused before touching live data.
   it('junk text file -> 422 RESTORE_INVALID_FILE', async () => {
     await expectRejected([
       { name: 'confirm', value: 'RESTORE' },
@@ -229,6 +249,7 @@ describe('restore by upload', () => {
     ], 422, ['RESTORE_INVALID_FILE']);
   });
 
+  // A file that looks like SQLite but is damaged inside fails the integrity check and is refused.
   it('valid header but corrupted pages -> 422 integrity/invalid', async () => {
     const { app, dataDir, backupPath } = await setup();
     const good = readFileSync(backupPath);
@@ -285,6 +306,7 @@ describe('restore by upload', () => {
     ], 422, ['RESTORE_SCHEMA_MISSING']);
   });
 
+  // A backup from a future app version is refused (cannot be understood safely).
   it('all required tables but schema version 999 -> 422 RESTORE_SCHEMA_TOO_NEW', async () => {
     const tmp = env.newDir();
     const p = makeDbFile(tmp, 'future.db', (db) => {
@@ -334,6 +356,7 @@ describe('restore by upload', () => {
   });
 });
 
+// If the restore fails after the files were swapped (here: migration checksum error), the previous data must be put back.
 describe('restore rollback (RESTORE_FAILED)', () => {
   /** A backup that passes validation but whose checksum row makes migrate() fail after the swap. */
   async function tamperedSetup() {
@@ -387,6 +410,7 @@ describe('restore rollback (RESTORE_FAILED)', () => {
   });
 });
 
+// While files are being swapped, normal requests must not touch the database.
 describe('restore in progress', () => {
   it('any /api request -> 503 RESTORE_IN_PROGRESS while ctx.isRestoring', async () => {
     const { app, ctx } = await setup();

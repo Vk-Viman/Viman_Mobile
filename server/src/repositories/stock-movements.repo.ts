@@ -1,9 +1,21 @@
+/**
+ * repositories/stock-movements.repo.ts - SQL for `stock_movements`, the append-only inventory ledger.
+ *
+ * Layer: repository. Every change of a product's quantity or stock value is exactly one row here
+ * (BUSINESS_RULES section 3). The products cache (`qty_on_hand`, `stock_value_cents`) is updated by the
+ * database trigger `trg_stock_movements_cache` on insert, never by this code, so SUM(movements) = cache.
+ * Rows are never edited or deleted; a void/reversal inserts the negated movement (C6). The costing rules
+ * (weighted average, R4 sweep) live in `services/inventory.service.ts`.
+ */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { numberOrNull } from './sql-helpers.ts';
 
+/** Why stock changed (BUSINESS_RULES section 3); also restricted by a CHECK in migration 004. */
 export type MovementType =
   | 'opening' | 'purchase' | 'purchase_return' | 'purchase_void' | 'sale' | 'sale_return' | 'sale_void'
   | 'personal_use' | 'loss' | 'stocktake_gain' | 'stocktake_loss' | 'adjustment';
 
+/** One ledger row. Inflows have positive deltas, outflows negative; `adjustment` may be value-only (qty 0). */
 export interface MovementRow {
   id: number; productId: number; businessDate: string; postedAt: string; type: MovementType;
   qtyDelta: number; valueDeltaCents: number; unitCostCents: number | null;
@@ -16,16 +28,24 @@ interface Raw {
   ref_table: string | null; ref_id: number | bigint | null; reason: string;
 }
 
+const SELECT = `SELECT id, product_id, business_date, posted_at, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason
+     FROM stock_movements`;
+
 function map(r: Raw): MovementRow {
   return {
     id: Number(r.id), productId: Number(r.product_id), businessDate: r.business_date, postedAt: r.posted_at,
     type: r.type, qtyDelta: Number(r.qty_delta), valueDeltaCents: Number(r.value_delta_cents),
-    unitCostCents: r.unit_cost_cents === null ? null : Number(r.unit_cost_cents),
-    refTable: r.ref_table, refId: r.ref_id === null ? null : Number(r.ref_id), reason: r.reason,
+    unitCostCents: numberOrNull(r.unit_cost_cents),
+    refTable: r.ref_table, refId: numberOrNull(r.ref_id), reason: r.reason,
   };
 }
 
-/** Appends a movement; the database cache trigger updates products.qty_on_hand / stock_value_cents. */
+/**
+ * Appends a movement; the database cache trigger updates products.qty_on_hand / stock_value_cents.
+ * The database may refuse it (negative quantity/value, value left in an empty pool, future date, R-FD).
+ *
+ * @returns The new movement id.
+ */
 export function insertMovement(conn: DatabaseSync, m: {
   productId: number; businessDate: string; type: MovementType; qtyDelta: number; valueDeltaCents: number;
   unitCostCents: number | null; refTable: string | null; refId: number | null; reason: string;
@@ -37,6 +57,13 @@ export function insertMovement(conn: DatabaseSync, m: {
   return Number(res.lastInsertRowid);
 }
 
+/** One movement by id, or undefined. */
+export function getMovement(conn: DatabaseSync, id: number): MovementRow | undefined {
+  const r = conn.prepare(`${SELECT} WHERE id = ?`).get(id) as unknown as Raw | undefined;
+  return r ? map(r) : undefined;
+}
+
+/** Movement history of one product, newest posting first, with the total number of matches. */
 export function listMovements(conn: DatabaseSync, q: {
   productId: number; from?: string; to?: string; type?: MovementType; limit: number; offset: number;
 }): { items: MovementRow[]; total: number } {
@@ -48,8 +75,7 @@ export function listMovements(conn: DatabaseSync, q: {
   const w = ` WHERE ${where.join(' AND ')}`;
   const total = Number((conn.prepare(`SELECT COUNT(*) AS n FROM stock_movements${w}`).get(...params) as unknown as { n: number | bigint }).n);
   const rows = conn.prepare(
-    `SELECT id, product_id, business_date, posted_at, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason
-     FROM stock_movements${w} ORDER BY posted_at DESC, id DESC LIMIT ? OFFSET ?`,
+    `${SELECT}${w} ORDER BY posted_at DESC, id DESC LIMIT ? OFFSET ?`,
   ).all(...params, q.limit, q.offset) as unknown as Raw[];
   return { items: rows.map(map), total };
 }
@@ -57,8 +83,7 @@ export function listMovements(conn: DatabaseSync, q: {
 /** Movements written for one source record (e.g. refTable 'stocktakes'), in posting order. */
 export function listMovementsByRef(conn: DatabaseSync, refTable: string, refId: number): MovementRow[] {
   const rows = conn.prepare(
-    `SELECT id, product_id, business_date, posted_at, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason
-     FROM stock_movements WHERE ref_table = ? AND ref_id = ? ORDER BY id ASC`,
+    `${SELECT} WHERE ref_table = ? AND ref_id = ? ORDER BY id ASC`,
   ).all(refTable, refId) as unknown as Raw[];
   return rows.map(map);
 }

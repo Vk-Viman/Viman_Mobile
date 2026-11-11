@@ -1,3 +1,10 @@
+/**
+ * PurchaseDetailDialog: read-only details of one purchase (header, items, returns) with the "Void purchase" and
+ * "Return items" actions. Opened from the Purchases list.
+ * API: GET /purchases/:id (api/purchases.ts); the actions open VoidDialog / ReturnDialog.
+ * Rules shown: a purchase with returns cannot be voided (R1), a voided purchase accepts no actions, and "Return
+ * items" is unavailable once everything has been returned. The server enforces these too.
+ */
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Badge } from '../../components/Badge';
@@ -6,14 +13,16 @@ import { ErrorState } from '../../components/ErrorState';
 import { Modal } from '../../components/Modal';
 import { Money } from '../../components/Money';
 import { Spinner } from '../../components/Spinner';
+import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { usePurchase } from '../../api/purchases';
 import { formatDateTime } from '../../lib/format';
-import { BOOK_LABEL } from '../products/shared';
 import { ReturnDialog } from './ReturnDialog';
 import { VoidDialog } from './VoidDialog';
 
+/** @param id the purchase to show. Mount only while open (parent keys it by id so switching purchases reloads). */
 export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   const q = usePurchase(id);
+  // Which action dialog is open on top of this one (null = none).
   const [sub, setSub] = useState<'void' | 'return' | null>(null);
   const p = q.data?.item;
 
@@ -22,6 +31,7 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
 
   return (
     <>
+      {/* `paused` hands Esc/Tab to the action dialog while it is open on top of this one. */}
       <Modal title={`Purchase #${id}`} onClose={onClose} paused={sub !== null}>
         {q.isPending ? (
           <div className="flex justify-center py-10"><Spinner label="Loading purchase" /></div>
@@ -34,8 +44,8 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
               <Row k="Posted (Colombo time)" v={formatDateTime(p.postedAt)} />
               <Row k="Bill no" v={p.billNo || '—'} />
               <Row k="Supplier" v={p.supplierName ?? '—'} />
-              <Row k="Book" v={<Badge tone={p.book === 'shop' ? 'brand' : 'neutral'}>{BOOK_LABEL[p.book]}</Badge>} />
-              <Row k="Status" v={<Badge tone={p.status === 'void' ? 'red' : 'brand'}>{p.status === 'void' ? 'Void' : 'Posted'}</Badge>} />
+              <Row k="Book" v={<BookBadge book={p.book} />} />
+              <Row k="Status" v={<PostedStatusBadge status={p.status} />} />
               <Row k="Total paid" v={<Money cents={p.totalCents} className="font-semibold" />} />
               <Row k="Notes" v={p.notes || '—'} />
               {p.status === 'void' && (
@@ -103,6 +113,7 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
               )}
             </section>
 
+            {/* Actions: disabled according to the purchase state (void/return rules above) */}
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
               {hasReturns && p.status === 'posted' && (
                 <span className="mr-auto text-xs text-slate-500">A purchase with returns cannot be voided.</span>
@@ -120,6 +131,7 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
   );
 }
 
+/** One "label: value" line of the details list. */
 function Row({ k, v }: { k: string; v: ReactNode }) {
   return (
     <div className="flex gap-2">

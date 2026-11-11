@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+/**
+ * Stock > Personal use tab (route "/stock/personal-use"): goods the owner took from stock for personal use
+ * (recorded as owner drawings at cost), with filters, a total, paging, "Record personal use" and "Void".
+ * API: GET /drawings (kind "goods"), POST /drawings (via StockOutDialog), POST /drawings/:id/void (api/stock.ts).
+ * It is not a sale and not a stock loss; the server values it at average cost and reports the total in integer
+ * cents. Voiding puts the stock back at the original cost (needs a reason; the entry stays as "Void").
+ */
+import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
@@ -7,24 +14,28 @@ import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
+import { BookFilterSelect, DateRangeFields, PostedStatusFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
+import { Pager } from '../../components/Pager';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
+import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
-import { useProducts } from '../../api/catalog';
+import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useDrawings, useVoidDrawing } from '../../api/stock';
+import { useDebounced } from '../../hooks/useDebounced';
+import { PAGE_SIZE } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
 import type { Book, Drawing, DrawingQuery, PostedStatus } from '../../types/api';
-import { BOOK_LABEL, useDebounced } from '../products/shared';
-import { Pager, VoidRecordDialog } from './shared';
+import { useStockProductChoices } from './shared';
 import { StockOutDialog } from './StockOutDialog';
 
-const LIMIT = 50;
-
+/** The tab: filter bar, drawings table with total, pager, and the record / void dialogs. */
 export function PersonalUseTab() {
   const toast = useToast();
   const voidMut = useVoidDrawing();
+  // ---- Filter and paging state ("" means "no filter") ----
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [search, setSearch] = useState('');
@@ -32,14 +43,17 @@ export function PersonalUseTab() {
   const [book, setBook] = useState<'' | Book>('');
   const [status, setStatus] = useState<'' | PostedStatus>('');
   const [page, setPage] = useState(0);
+  // Dialog state: `creating` shows the record form; `voiding` holds the drawing being voided.
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<Drawing | null>(null);
 
-  const q = useDebounced(search.trim(), 300);
-  const products = useProducts({ q: q || undefined, limit: 500 });
-  const stockProducts = useMemo(() => (products.data?.items ?? []).filter((p) => p.kind === 'stock'), [products.data]);
+  // The "Find product" box narrows the Product drop-down (debounced so the server is queried once typing pauses).
+  const q = useDebounced(search.trim());
+  const stockProducts = useStockProductChoices(q);
+  // Back to the first page whenever a filter changes.
   useEffect(() => { setPage(0); }, [from, to, productId, book, status]);
 
+  // Unset filters become undefined so the API helper leaves them out of the URL. `kind: 'goods'` excludes cash drawings.
   const query: DrawingQuery = {
     kind: 'goods',
     from: from || undefined,
@@ -47,10 +61,11 @@ export function PersonalUseTab() {
     productId: productId ? Number(productId) : undefined,
     book: book || undefined,
     status: status || undefined,
-    limit: LIMIT,
-    offset: page * LIMIT,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
   };
   const list = useDrawings(query);
+  // True when any filter is set; decides between "nothing yet" and "nothing matches".
   const filtered = Boolean(from || to || productId || book || status);
 
   const columns: Column<Drawing>[] = [
@@ -62,7 +77,7 @@ export function PersonalUseTab() {
       ),
     },
     { key: 'prod', header: 'Product', render: (d) => <span className="font-medium text-slate-900">{d.productName ?? '—'}</span> },
-    { key: 'book', header: 'Book', render: (d) => <Badge tone={d.book === 'shop' ? 'brand' : 'neutral'}>{BOOK_LABEL[d.book]}</Badge> },
+    { key: 'book', header: 'Book', render: (d) => <BookBadge book={d.book} /> },
     { key: 'qty', header: 'Qty', align: 'right', render: (d) => d.qty ?? '—' },
     { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (d) => <Money cents={d.amountCents} /> },
     { key: 'note', header: 'Note', render: (d) => d.note || '—' },
@@ -71,7 +86,7 @@ export function PersonalUseTab() {
       header: 'Status',
       render: (d) => (
         <span>
-          <Badge tone={d.status === 'void' ? 'red' : 'brand'}>{d.status === 'void' ? 'Void' : 'Posted'}</Badge>
+          <PostedStatusBadge status={d.status} />
           {d.status === 'void' && d.voidReason && <span className="mt-1 block text-xs text-slate-500">{d.voidReason}</span>}
         </span>
       ),
@@ -79,6 +94,7 @@ export function PersonalUseTab() {
     {
       key: 'act',
       header: 'Actions',
+      // Only live (posted) entries can be voided.
       render: (d) => (d.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(d)} aria-label={`Void personal use #${d.id}`}>Void</Button> : null),
     },
   ];
@@ -93,23 +109,14 @@ export function PersonalUseTab() {
           Stock taken for your own use is recorded at cost as an owner drawing. It is not a sale and not a stock loss.
         </p>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <TextField label="From date" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
-          <TextField label="To date" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
+          <DateRangeFields from={from} to={to} onFrom={setFrom} onTo={setTo} />
           <TextField label="Find product" placeholder="Name or code" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
           <SelectField label="Product" value={productId} onChange={(e) => setProductId(e.target.value)}>
             <option value="">All products</option>
             {stockProducts.map((p) => <option key={p.id} value={String(p.id)}>{p.name}{p.code ? ` (${p.code})` : ''}</option>)}
           </SelectField>
-          <SelectField label="Book" value={book} onChange={(e) => setBook(e.target.value as '' | Book)}>
-            <option value="">All</option>
-            <option value="shop">Shop</option>
-            <option value="telecom">Telecom</option>
-          </SelectField>
-          <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value as '' | PostedStatus)}>
-            <option value="">All</option>
-            <option value="posted">Posted</option>
-            <option value="void">Void</option>
-          </SelectField>
+          <BookFilterSelect value={book} onChange={setBook} />
+          <PostedStatusFilterSelect value={status} onChange={setStatus} />
         </div>
 
         {list.isPending ? (
@@ -124,12 +131,14 @@ export function PersonalUseTab() {
           />
         ) : (
           <>
+            {/* Total comes from the server (sum of posted drawings matching the filters), never added up here. */}
             <p className="mb-3 text-sm font-semibold text-slate-900">Total drawn at cost (posted): <span className="num">{formatLKR(list.data.totalAmountCents)}</span></p>
             <DataTable columns={columns} rows={list.data.items} rowKey={(d) => d.id} emptyTitle="No records match these filters" emptyHint="Try a different date range or clear a filter." />
-            <Pager page={page} total={list.data.total} limit={LIMIT} noun="records" onPage={setPage} />
+            <Pager page={page} total={list.data.total} limit={PAGE_SIZE} noun="records" onPage={setPage} />
           </>
         )}
       </Card>
+      {/* Dialogs are mounted only while open so each opening starts fresh (new clientRef, empty form). */}
       {creating && <StockOutDialog mode="use" onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

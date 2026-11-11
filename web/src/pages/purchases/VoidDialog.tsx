@@ -1,46 +1,29 @@
-import { useRef, useState } from 'react';
-import { FormDialog } from '../../components/FormDialog';
-import { TextField } from '../../components/TextField';
+/**
+ * VoidDialog: asks for a reason and the word VOID, then cancels a whole purchase.
+ * Opened from PurchaseDetailDialog. API: POST /purchases/:id/void (api/purchases.ts).
+ * Built on the shared VoidRecordDialog (reason + typed confirmation + double-click guard) so every void in the
+ * app behaves identically. The server (rule R1) refuses to void a purchase that already has returns.
+ */
+import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useVoidPurchase } from '../../api/purchases';
-import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
-import { BOOK_LABEL } from '../products/shared';
+import { BOOK_LABEL } from '../../lib/constants';
 import type { Purchase } from '../../types/api';
 
+/** @param purchase the purchase to void. Mount only while open. */
 export function VoidDialog({ purchase, onClose }: { purchase: Purchase; onClose: () => void }) {
   const toast = useToast();
   const voidMut = useVoidPurchase();
-  const [reason, setReason] = useState('');
-  const [typed, setTyped] = useState('');
-  const [err, setErr] = useState<ApiError | Error | null>(null);
-  const busy = useRef(false);
-
-  const r = reason.trim();
-  const canSubmit = r.length >= 1 && r.length <= 200 && typed === 'VOID';
-
-  const submit = () => {
-    if (!canSubmit || busy.current) return;
-    busy.current = true;
-    setErr(null);
-    voidMut.mutate(
-      { id: purchase.id, body: { reason: r } },
-      {
-        onSuccess: () => { toast.success('Purchase voided.'); onClose(); },
-        onError: (e) => { busy.current = false; setErr(e); },
-      },
-    );
-  };
-
-  const extra = err instanceof ApiError ? Object.values(err.fields).filter((m) => m !== err.message) : [];
-  const banner = err ? [err.message, ...extra].join(' ') : null;
 
   return (
-    <FormDialog title={`Void purchase #${purchase.id}`} submitLabel="Void purchase" canSubmit={canSubmit} loading={voidMut.isPending} error={banner} onSubmit={submit} onClose={onClose}>
-      <p className="text-sm text-slate-700">
-        This removes the stock that was bought and puts the money back into the {BOOK_LABEL[purchase.book]} cash book. It cannot be undone.
-      </p>
-      <TextField label="Reason (required, up to 200 characters)" value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} autoComplete="off" />
-      <TextField label="Type VOID to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />
-    </FormDialog>
+    <VoidRecordDialog
+      title={`Void purchase #${purchase.id}`}
+      intro={`This removes the stock that was bought and puts the money back into the ${BOOK_LABEL[purchase.book]} cash book. It cannot be undone.`}
+      submitLabel="Void purchase"
+      pending={voidMut.isPending}
+      run={(reason, cb) => voidMut.mutate({ id: purchase.id, body: { reason } }, cb)}
+      onDone={() => { toast.success('Purchase voided.'); onClose(); }}
+      onClose={onClose}
+    />
   );
 }

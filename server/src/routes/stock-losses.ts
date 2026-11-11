@@ -1,14 +1,28 @@
+/**
+ * routes/stock-losses.ts - HTTP endpoints for stock losses (damaged / lost / expired / other).
+ *
+ * Layer: route (thin): JSON-schema validation -> `stock-losses.service.ts` -> response.
+ * Business rules (R2/R3 removal at average cost, section 11; R-FD; R1 void by reversal) live in the service.
+ *
+ *   POST /stock-losses          create (201; 200 on a repeated `clientRef`)   GET /stock-losses   list
+ *   GET  /stock-losses/:id      one loss                                      POST /stock-losses/:id/void   void
+ * Items carry `source` ('manual' | 'damaged_return') and `salesReturnId`; voiding a damaged-return loss is
+ * refused by the service (409 DAMAGED_RETURN_LOSS).
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import {
   createStockLoss, getStockLoss, listStockLosses, voidStockLoss,
 } from '../services/stock-losses.service.ts';
 import type { StockLossCreate } from '../services/stock-losses.service.ts';
-import { bookQuery, fail, idParamsSchema, intQuery, parseId } from './catalog-query.ts';
-import { checkQueryDates, dateQuery } from './purchases.ts';
+import {
+  bookQuery, checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging,
+  voidBody,
+} from './catalog-query.ts';
 
-const clientRef = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' } as const;
-const dateField = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } as const;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
 const reasonEnum = { type: 'string', enum: ['damaged', 'lost', 'expired', 'other'] } as const;
 
 const createBody = {
@@ -23,13 +37,6 @@ const createBody = {
     note: { type: 'string' },
     clientRef,
   },
-} as const;
-
-const voidBody = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['reason'],
-  properties: { reason: { type: 'string' } },
 } as const;
 
 const listQuery = {
@@ -47,6 +54,7 @@ const listQuery = {
   },
 } as const;
 
+/** Registers the stock-loss endpoints under the `/api/v1` prefix. */
 export function registerStockLossRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/stock-losses', { schema: { body: createBody } }, async (request, reply) => {
     const { item, created } = createStockLoss(ctx, request.body as StockLossCreate);
@@ -59,9 +67,7 @@ export function registerStockLossRoutes(app: FastifyInstance, ctx: AppContext): 
       reason?: 'damaged' | 'lost' | 'expired' | 'other'; status?: 'posted' | 'void'; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
-    const limit = raw.limit === undefined ? 50 : Number(raw.limit);
-    const offset = raw.offset === undefined ? 0 : Number(raw.offset);
-    if (limit < 1 || limit > 200) fail({ limit: 'must be between 1 and 200' });
+    const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listStockLosses>[1] = { limit, offset };
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;

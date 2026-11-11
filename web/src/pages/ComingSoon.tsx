@@ -1,7 +1,13 @@
+/**
+ * ComingSoon: placeholder screen for menu entries whose real screen is not built yet.
+ * Routes for these are generated automatically in App.tsx from the NAV_ITEMS that have `built: false`.
+ * No API calls.
+ */
 import { Card } from '../components/Card';
 import { PageHeader } from '../components/PageHeader';
 import type { LucideIcon } from 'lucide-react';
 
+/** @param phase the delivery phase shown to the owner; @param description one line about what the screen will do. */
 export function ComingSoon({ title, icon: Icon, phase, description }: { title: string; icon: LucideIcon; phase: number; description: string }) {
   return (
     <>

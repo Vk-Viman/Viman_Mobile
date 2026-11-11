@@ -1,3 +1,9 @@
+// Audit log (BUSINESS_RULES section 12) - database level plus API level (GET /audit-logs).
+// Protects: the audit trail can only grow (UPDATE and DELETE are refused by database triggers, so nobody can
+// rewrite history), entries come back newest first with before/after as real objects, financial entries carry the
+// business date and the "backdated" flag (confirmed rule of 2026-11-10), and paging walks every row exactly once.
+// Organised as: append-only guarantee, then the read API (shape, filters, paging, validation).
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { logAudit } from '../services/audit.service.ts';
@@ -6,6 +12,7 @@ import { insertAudit, listAudit } from '../repositories/audit.repo.ts';
 const env = new TestEnv();
 afterEach(() => env.cleanup());
 
+// Builds an app and writes n audit rows (alternating entity 'odd'/'even', before {i}, after {i*10}) in one transaction.
 async function seeded(n = 5) {
   const b = await env.build();
   b.ctx.database.tx((conn) => {
@@ -18,7 +25,9 @@ async function seeded(n = 5) {
 const get = (app: Awaited<ReturnType<typeof seeded>>['app'], q = '') =>
   app.inject({ method: 'GET', url: `/api/v1/audit-logs${q}` });
 
+// The audit table must be tamper-proof at database level, independent of any API.
 describe('audit append-only', () => {
+  // A trigger blocks edits and deletes, so an audit entry, once written, is permanent; inserting and listing still work.
   it('UPDATE and DELETE are refused by the database; insert/list still work', async () => {
     const { app, ctx } = await seeded(3);
     const conn = ctx.database.conn;
@@ -34,6 +43,7 @@ describe('audit append-only', () => {
   });
 });
 
+// Reading the audit trail: ordering, shape, filters, paging, validation.
 describe('GET /audit-logs', () => {
   it('empty log', async () => {
     const { app } = await env.build();
@@ -56,6 +66,8 @@ describe('GET /audit-logs', () => {
     expect(b.nextBeforeId).toBeNull();
   });
 
+  // Financial entries record both the business date (drives reports) and the posting time (postedAt = when the server saved it);
+  // backdated = business date earlier than the posting day. Backdating is allowed but always visible (section 12).
   it('financial audit rows carry businessDate and backdated; postedAt mirrors at', async () => {
     const { app, ctx } = await env.build();
     ctx.database.tx((c) => {
@@ -85,6 +97,7 @@ describe('GET /audit-logs', () => {
     expect(b.nextBeforeId).toBe(4);
   });
 
+  // Using nextBeforeId repeatedly must return every entry once, with no repeats and no gaps.
   it('paging walks every row exactly once', async () => {
     const { app } = await seeded(7);
     const seen: number[] = [];
@@ -106,6 +119,7 @@ describe('GET /audit-logs', () => {
     expect((await get(app, '?entity=eve')).json().items).toEqual([]);
   });
 
+  // With more rows than the default page, one request returns 50 and tells the client how to fetch the rest.
   it('default limit is 50', async () => {
     const { app } = await seeded(55);
     const b = (await get(app)).json();
@@ -118,6 +132,7 @@ describe('GET /audit-logs', () => {
     expect((await get(app, '?limit=200')).statusCode).toBe(200);
   });
 
+  // Bad query values must give a clean 400 naming the field, never a database error.
   it.each([
     ['limit=0', '?limit=0', 'limit'],
     ['limit=201', '?limit=201', 'limit'],

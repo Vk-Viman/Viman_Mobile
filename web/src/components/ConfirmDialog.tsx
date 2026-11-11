@@ -1,61 +1,55 @@
+/**
+ * ConfirmDialog: an "Are you sure?" pop-up for risky actions (voiding, restoring a backup...).
+ * Optionally requires the user to type a word (e.g. RESTORE) before the confirm button works, as a guard against
+ * accidental clicks on irreversible actions.
+ */
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from './Button';
 import { inputClass } from './TextField';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface Props {
+  /** Whether the dialog is shown. Unlike FormDialog it stays mounted and renders nothing when false. */
   open: boolean;
   title: string;
+  /** Explanation of what will happen. */
   children: ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
+  /** Red confirm button for destructive actions. */
   danger?: boolean;
+  /** True while the action's request is in flight. */
   loading?: boolean;
   /** When set, the user must type this exact text to enable the confirm button. */
   requireText?: string;
+  /** Error banner (e.g. the server refused the action). */
   error?: string | null;
   onConfirm: () => void;
   onClose: () => void;
 }
 
-const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), [href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
+/**
+ * Renders the confirmation pop-up while `open`. Focus is trapped inside; Esc cancels; Enter confirms when allowed.
+ * Uses role="alertdialog" so screen readers treat it as an urgent question.
+ */
 export function ConfirmDialog({ open, title, children, confirmLabel, cancelLabel = 'Cancel', danger, loading, requireText, error, onConfirm, onClose }: Props) {
+  // What the user has typed into the "type X to confirm" box.
   const [typed, setTyped] = useState('');
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const inputId = useId();
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
 
+  // Clear the typed text on every opening so an earlier confirmation cannot be reused for a different action.
   useEffect(() => {
-    if (!open) return;
-    setTyped('');
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const first = panel.current?.querySelector<HTMLElement>('input, button');
-    first?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== 'Tab' || !panel.current) return;
-      const els = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (els.length === 0) return;
-      const a = els[0] as HTMLElement;
-      const z = els[els.length - 1] as HTMLElement;
-      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
-      else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('keydown', onKey, true);
-      previouslyFocused?.focus?.();
-    };
+    if (open) setTyped('');
   }, [open]);
 
+  // Focus first goes to the typing box when there is one (otherwise the first button).
+  useDialogFocusTrap(panel, { onClose, active: open, initialFocusSelector: 'input, button' });
+
   if (!open) return null;
+  // Exact, case-sensitive match on purpose: it must be a deliberate action.
   const canConfirm = !requireText || typed === requireText;
 
   return (

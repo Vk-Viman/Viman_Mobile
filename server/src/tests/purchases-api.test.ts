@@ -1,3 +1,17 @@
+// Purchases API (POST/GET /purchases, void, returns) - API level (Fastify inject, real temp database).
+// This is the first module that moves both STOCK and CASH, so it protects the most rules at once:
+// - Section 3: units = packs x pack size, the line total is exact (no per-unit rounding loss), the stock pool follows the
+//   weighted average, every change writes one stock_movements row and one cash entry in the same transaction.
+// - R1 / C6: a void writes reversal rows (never edits), keeps the ORIGINAL business date, and is blocked when returns exist.
+// - R4 / C7: a purchase return or void removes min(purchase cost, pool value) from stock, sweeps any leftover value when the
+//   quantity reaches 0, while the CASH refund is always the full purchase value; a partial return refunds
+//   mulDivRound(lineTotal, q, lineUnits) and the final return takes the exact remainder.
+// - R-FD: no future business dates; R-RD: a return may not be dated before its purchase (checked in that order).
+// - Section 12: duplicate submissions are prevented by clientRef (a repeat gives the original, a reused ref for another
+//   purchase conflicts), every real change writes exactly one audit row, and every failure rolls EVERYTHING back.
+// Organised as: create (incl. date and validation rules), list/get, void, returns, atomic rollback.
+// Money in the comments is in cents unless written as Rs.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { auditRows, breakAudit, count, get, post, put } from './helpers/catalog.ts';
@@ -12,20 +26,25 @@ afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
 
+// The exact owner-facing message required by R-FD.
 const FUTURE_MSG = 'Future-dated transactions are not allowed. Please select today or an earlier date.';
+// One purchase line: packs x packSize units for lineTotalCents (the exact cost of the whole line).
 const line = (productId: number, packs: number, packSize: number, lineTotalCents: number) => ({ productId, packs, packSize, lineTotalCents });
 const err = (r: { body: any }) => r.body.error;
 
+// Row counts of these tables before and after a failing request must be equal: proof that nothing was half-saved.
 const TABLES = ['purchases', 'purchase_items', 'purchase_returns', 'purchase_return_items', 'stock_movements', 'cash_entries', 'audit_logs'];
 function snap(s: ApiBase): Record<string, number> {
   return Object.fromEntries(TABLES.map((t) => [t, count(s.ctx, t)]));
 }
 const sql = (s: ApiBase, q: string, ...p: any[]) => s.ctx.database.conn.prepare(q).all(...p) as unknown as Array<Record<string, any>>;
+// Stock ledger of one product in a compact form (type, qty change, value change, date, source document).
 const moves = (s: ApiBase, productId: number) =>
   sql(s, 'SELECT * FROM stock_movements WHERE product_id = ? ORDER BY id', productId).map((m) => ({
     id: Number(m.id), type: m.type as string, qty: Number(m.qty_delta), value: Number(m.value_delta_cents),
     date: m.business_date as string, refTable: m.ref_table as string | null, refId: m.ref_id === null ? null : Number(m.ref_id),
   }));
+// Sum of a cash book's entries, i.e. what the drawer should hold for that book.
 const cashBal = (s: ApiBase, book: string) => Number(sql(s, 'SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ?', book)[0]!.t);
 /** Removes stock through the engine (as a later sale would). */
 const engineSell = (s: ApiBase, productId: number, qty: number) =>
@@ -37,6 +56,7 @@ const valueMove = (s: ApiBase, productId: number, valueDelta: number) =>
   ).run(productId, today(), valueDelta);
 const reconOk = (s: ApiBase) => expect(reconcileStock(s.ctx.database.conn)).toMatchObject({ ok: true, mismatches: [] });
 
+// Exact field lists of a purchase and a purchase line (contract check: nothing may appear or vanish silently).
 const PURCHASE_KEYS = [
   'backdated', 'billNo', 'book', 'businessDate', 'clientRef', 'id', 'items', 'notes', 'postedAt', 'returns', 'status',
   'supplierId', 'supplierName', 'totalCents', 'voidedAt', 'voidReason',
@@ -44,7 +64,9 @@ const PURCHASE_KEYS = [
 const ITEM_KEYS = ['id', 'lineTotalCents', 'packSize', 'packs', 'productId', 'productName', 'returnedUnits', 'unitCostCents', 'units'];
 
 // =============================================================================================
+// Creating a purchase: stock in, cash out, audit, dates, validation, duplicates.
 describe('POST /purchases - create', () => {
+  // 1 box of 10 for Rs 1,320 = 132,000 cents / 10 units = 13,200 (Rs 132) per unit. Stock +10 / 132,000 and the shop cash book -132,000.
   it('201 with exact shape; 1 box x 10 for Rs 1,320 -> 10 units, 13200 per unit; stock and cash updated', async () => {
     const s = await setup();
     const p = await mkProduct(s, { name: 'Charger' });
@@ -82,6 +104,8 @@ describe('POST /purchases - create', () => {
     reconOk(s);
   });
 
+  // 2 packs x 5 = 10 units for 4,000 -> 400 each. Unit cost is for display: 1,000/3 = 333.33 -> 333; 5/2 = 2.5 -> 3.
+  // The stored value is always the exact line total.
   it('pack conversion 2 x 5 = 10 units; supplier, trimmed billNo/notes; unit cost rounds half up', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -95,6 +119,7 @@ describe('POST /purchases - create', () => {
     expect(h.items[0]).toMatchObject({ units: 2, unitCostCents: 3 });   // 2.5 -> 3
   });
 
+  // Biggest allowed values stay exact: 1 pack of 1,000,000 units for Rs 999,999,999.99; a free pack of 10^12 units adds quantity but no value.
   it('large pack sizes: 1 pack of 1,000,000 units for the maximum line total', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -108,6 +133,7 @@ describe('POST /purchases - create', () => {
     reconOk(s);
   });
 
+  // Lines 1,200 + 999 = 2,199 = one cash entry. Product b: 6 units / 999 -> average 166.5 -> 167.
   it('multiple lines: total is the sum, one movement per line, one cash entry for the total', async () => {
     const s = await setup();
     const a = await mkProduct(s); const b = await mkProduct(s);
@@ -121,6 +147,7 @@ describe('POST /purchases - create', () => {
     expect(await productOf(s, b.id)).toMatchObject({ qtyOnHand: 6, stockValueCents: 999, avgUnitCostCents: 167 }); // 166.5 -> 167
   });
 
+  // 5 @ 1,000 + 5 @ 3,000 = 10 units / 4,000 -> average 400; both lines are applied to the same pool in order.
   it('same product on two lines: both applied in order to the pool', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -130,6 +157,7 @@ describe('POST /purchases - create', () => {
     expect(moves(s, p.id).map((m) => [m.qty, m.value])).toEqual([[5, 1000], [5, 3000]]);
   });
 
+  // 10 @ Rs 3,000 + 10 @ Rs 4,000 = 20 units / Rs 7,000 (700,000 cents) -> average Rs 350 (35,000 cents).
   it('successive purchases accumulate the weighted average (10@3000, 10@4000 -> 20/7000)', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -138,6 +166,7 @@ describe('POST /purchases - create', () => {
     expect(await productOf(s, p.id)).toMatchObject({ qtyOnHand: 20, stockValueCents: 700000, avgUnitCostCents: 35000 });
   });
 
+  // Free goods (e.g. supplier bonus stock): quantity is added with value 0 and no cash entry is made (cash entries are never zero).
   it('zero-total purchase: stock added with zero value, NO cash entry', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -149,6 +178,7 @@ describe('POST /purchases - create', () => {
     expect(moves(s, p.id)).toHaveLength(1);
   });
 
+  // A purchase of scratch cards belongs to the telecom book, so the payment leaves the TELECOM cash book (section 2).
   it('telecom stock product: book telecom, cash entry in the telecom book', async () => {
     const s = await setup();
     const t = await mkTelecom(s, { kind: 'stock' });
@@ -175,7 +205,9 @@ describe('POST /purchases - create', () => {
     expect(api.postedAt).toBe(api.at);
   });
 
+  // R-FD (no future dates) and backdating (allowed, flagged and audited).
   describe('business date rules', () => {
+    // An earlier business date is allowed but flagged backdated, and every record created carries that date (reports follow business date, R7).
     it('today: backdated false; earlier date: backdated true and every record carries that date', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -189,6 +221,7 @@ describe('POST /purchases - create', () => {
       expect((await buy(s, [line(p.id, 1, 1, 100)], { businessDate: '2000-01-01' })).backdated).toBe(true);
     });
 
+    // R-FD: the server blocks tomorrow's date even if the screen's date picker is bypassed; nothing is saved.
     it('future date -> 400 FUTURE_DATE_NOT_ALLOWED with the exact message and fields.businessDate; nothing written', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -216,6 +249,7 @@ describe('POST /purchases - create', () => {
       expect((await post(s.app, '/purchases', { businessDate: 20261110, items: [line(p.id, 1, 1, 100)], clientRef: ref() })).status).toBe(400);
     });
 
+    // The posting timestamp is set by the server only (section 12), so a client cannot send it.
     it('postedAt (and any unknown field) in the body -> 400 VALIDATION_ERROR', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -324,6 +358,7 @@ describe('POST /purchases - create', () => {
     });
   });
 
+  // The purchase must reference sensible products and suppliers.
   describe('lookups and business rules', () => {
     it('unknown product -> 400 VALIDATION_ERROR fields["items.N.productId"]', async () => {
       const s = await setup();
@@ -336,6 +371,7 @@ describe('POST /purchases - create', () => {
       expect(snap(s)).toEqual(before);
     });
 
+    // Services have no stock to buy and inactive products cannot be restocked.
     it('service product and inactive product -> 400 PRODUCT_NOT_STOCKABLE naming the line', async () => {
       const s = await setup();
       const stock = await mkProduct(s);
@@ -354,6 +390,7 @@ describe('POST /purchases - create', () => {
       expect(snap(s)).toEqual(before);
     });
 
+    // Segments are disjoint (section 0): one bill pays from ONE cash book, so shop and telecom goods cannot be mixed.
     it('shop + telecom on one bill -> 400 MIXED_BOOKS with the contract message; nothing written', async () => {
       const s = await setup();
       const a = await mkProduct(s);
@@ -386,7 +423,9 @@ describe('POST /purchases - create', () => {
     });
   });
 
+  // Double-click protection: the same clientRef means "the same purchase".
   describe('idempotent clientRef', () => {
+    // Sending the same clientRef again returns the original and writes nothing new (no second stock movement, cash entry, audit row).
     it('repeat returns 200 with the original purchase; no second movement, cash entry, audit row or stock', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -407,6 +446,7 @@ describe('POST /purchases - create', () => {
       expect(snap(s)).toEqual(before);
     });
 
+    // If the first try failed validation, the owner can fix the form and resubmit with the same reference.
     it('a failed attempt does not burn the clientRef', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -418,6 +458,7 @@ describe('POST /purchases - create', () => {
 });
 
 // =============================================================================================
+// Listing and filtering purchases (by business date, book, supplier, status, text).
 describe('GET /purchases and /purchases/:id', () => {
   async function fixture() {
     const s = await setup();
@@ -519,7 +560,9 @@ describe('GET /purchases and /purchases/:id', () => {
 });
 
 // =============================================================================================
+// R1 void: the purchase becomes 'void' and reversal rows are added; stock leaves at min(cost, pool) and cash returns in full.
 describe('POST /purchases/:id/void', () => {
+  // A void is dated like the original so the correction lands in the same report period (section 12 "Reversals").
   it('reverses movements, stock and cash; keeps the ORIGINAL business date; audit row; response shape', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -555,6 +598,8 @@ describe('POST /purchases/:id/void', () => {
     expect([raw.business_date, Number(raw.backdated), raw.note]).toEqual([daysAgo(4), 1, 'Entered twice']);
   });
 
+  // A 10 @ 1,000 (units cost 100) and B 10 @ 3,000 -> pool 20 / 4,000. Voiding A removes only A's cost 1,000 -> 10 / 3,000
+  // (B's value is untouched; it is not re-averaged).
   it('void removes only the purchase cost from a richer pool (A 10@1000 + B 10@3000 -> void A -> 10/3000)', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -566,6 +611,8 @@ describe('POST /purchases/:id/void', () => {
     reconOk(s);
   });
 
+  // Purchase 10 / 10,000, then pool value written down by 4,000 -> 10 / 6,000. Void can only remove 6,000 of stock value,
+  // yet the cash refund is the full 10,000 so the shop cash book returns to 0.
   it('pool value below the purchase value: removes the pool value only (R4 cap)', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -578,6 +625,8 @@ describe('POST /purchases/:id/void', () => {
     reconOk(s);
   });
 
+  // Pool 10 / 12,500 (2,500 extra value from an adjustment). Voiding the 10,000 purchase empties the quantity, so the
+  // leftover 2,500 is swept FIRST (adjustment -2,500) then -10,000 is removed -> 0 / 0.
   it('residual sweep: pool holds extra value -> adjustment(-2500) written BEFORE the void movement(-10000)', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -609,6 +658,7 @@ describe('POST /purchases/:id/void', () => {
     expect(cashRows(s.ctx).map((c) => [c.book, Number(c.amount_cents)])).toEqual([['telecom', -1200], ['telecom', 1200]]);
   });
 
+  // Voiding twice must not reverse twice.
   it('409 ALREADY_VOID on a second void; nothing more written', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -622,6 +672,7 @@ describe('POST /purchases/:id/void', () => {
     expect((await get(s.app, `/purchases/${A.id}`)).body.item.voidReason).toBe('x');
   });
 
+  // R1: a void is blocked once part of the purchase has been returned (the return already reversed some of it).
   it('409 HAS_RETURNS once any unit was returned', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -635,6 +686,7 @@ describe('POST /purchases/:id/void', () => {
     expect((await get(s.app, `/purchases/${A.id}`)).body.item.status).toBe('posted');
   });
 
+  // If some of the purchased goods were already sold, they cannot be removed again; the whole void is refused and nothing changes.
   it('422 INSUFFICIENT_STOCK when part was sold; message, fields["items.N"], onHand; NOTHING written', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -688,6 +740,7 @@ describe('POST /purchases/:id/void', () => {
     expect((await post(s.app, '/purchases/abc/void', { reason: 'x' })).status).toBe(400);
   });
 
+  // R-FD only limits business dates entered by the owner; a void takes the original date, which is never in the future.
   it('void is not subject to R-FD (works for old purchases) and works with no body date', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -699,10 +752,13 @@ describe('POST /purchases/:id/void', () => {
 });
 
 // =============================================================================================
+// Returning goods to a supplier: partial/full returns (C7), R4 caps and sweeps, R-FD then R-RD, idempotency.
 describe('POST /purchases/:id/returns', () => {
   const ret = (s: ApiBase, purchaseId: number, items: Array<{ purchaseItemId: number; units: number }>, over: Record<string, unknown> = {}) =>
     post(s.app, `/purchases/${purchaseId}/returns`, { businessDate: today(), clientRef: ref(), items, ...over });
 
+  // C7 hand calculation: line 132,000 for 10 units. Return 3: 132,000 x 3 / 10 = 39,600 (refund) -> pool 7 / 92,400.
+  // The final 7 units take the exact remainder 132,000 - 39,600 = 92,400. Shop cash: paid 132,000, refunded 39,600 + 92,400 = 0 net.
   it('partial return 3 of 10 for Rs 1,320: refund 39600; then the remaining 7 take the remainder 92400', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -741,6 +797,7 @@ describe('POST /purchases/:id/returns', () => {
     expect(err(r3).code).toBe('RETURN_EXCEEDS_PURCHASED');
   });
 
+  // 100,000 / 3 = 33,333.33 -> 33,333; again 33,333; the last unit takes the remainder 33,334. Total 100,000 exactly.
   it('3 units for Rs 1,000: returning one at a time refunds 33333, 33333, 33334', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -760,6 +817,7 @@ describe('POST /purchases/:id/returns', () => {
     reconOk(s);
   });
 
+  // 100,001 x 3 / 10 = 30,000.3 -> 30,000 (twice); the completing 4 take 100,001 - 60,000 = 40,001.
   it('10 units for 100001: 3, 3 then the completing 4 takes the exact remainder (30000, 30000, 40001)', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -802,6 +860,7 @@ describe('POST /purchases/:id/returns', () => {
     expect([raw.business_date, Number(raw.backdated)]).toEqual([daysAgo(2), 1]);
   });
 
+  // Cannot return more than was bought minus what was already returned.
   it('RETURN_EXCEEDS_PURCHASED -> 422 with fields["items.N.units"]; nothing written', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -872,6 +931,7 @@ describe('POST /purchases/:id/returns', () => {
     expect(snap(s)).toEqual(before);
   });
 
+  // Goods that were already sold cannot be sent back; the request fails and stock never goes negative.
   it('INSUFFICIENT_STOCK when the units were sold: 422, fields["items.N.units"], nothing written, no negative stock', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -892,6 +952,7 @@ describe('POST /purchases/:id/returns', () => {
     reconOk(s);
   });
 
+  // All-or-nothing: the earlier line's stock and refund are rolled back when a later line fails.
   it('multi-line return where a LATER line lacks stock rolls back the earlier line too', async () => {
     const s = await setup();
     const a = await mkProduct(s); const b = await mkProduct(s);
@@ -907,7 +968,9 @@ describe('POST /purchases/:id/returns', () => {
     reconOk(s);
   });
 
+  // Check order: future date first (R-FD), then purchase lookup, then return-before-purchase (R-RD), then the other rules.
   describe('dates (R-FD then R-RD)', () => {
+    // R-RD: you cannot return goods before you bought them; the error includes the original date to help the owner fix it.
     it('return before the purchase date -> 400 RETURN_BEFORE_ORIGINAL_DATE with message, fields, originalDate', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -923,6 +986,7 @@ describe('POST /purchases/:id/returns', () => {
       expect(snap(s)).toEqual(before);
     });
 
+    // The valid window is original date <= return date <= today.
     it('return on the purchase date and after it (backdated) are accepted', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -976,6 +1040,7 @@ describe('POST /purchases/:id/returns', () => {
     });
   });
 
+  // A voided purchase has already been fully reversed.
   it('return on a void purchase -> 409 PURCHASE_VOID; nothing written', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -988,6 +1053,7 @@ describe('POST /purchases/:id/returns', () => {
     expect(snap(s)).toEqual(before);
   });
 
+  // Pool 3 / 7,500 (purchase 5,000 + 2,500 extra). Returning all 3: refund 5,000; stock sweeps -2,500 first, then -5,000 -> 0 / 0.
   it('residual sweep on return: pool 3/7500, returning all 3 (refund 5000) -> adjustment -2500 then -5000, 0/0', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -1002,6 +1068,8 @@ describe('POST /purchases/:id/returns', () => {
     reconOk(s);
   });
 
+  // Purchase 10 / 10,000, pool written down to 10 / 1,000. Return 4: refund = 10,000 x 4 / 10 = 4,000 (cash),
+  // but stock removal is capped at min(4,000, 1,000) = 1,000 -> 6 units / 0 value.
   it('pool value below the purchase value: refund is the purchase value, stock removal is capped at the pool value', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -1016,6 +1084,7 @@ describe('POST /purchases/:id/returns', () => {
     reconOk(s);
   });
 
+  // Returning free goods removes units, refunds nothing, and writes no cash entry.
   it('zero-value purchase return: refund 0, no cash entry, stock removed', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -1037,6 +1106,7 @@ describe('POST /purchases/:id/returns', () => {
     ]);
   });
 
+  // Repeating a return request must not return the goods twice.
   describe('idempotency', () => {
     it('same clientRef repeats with 200 and the original; no second movement, refund, audit row or returnedUnits', async () => {
       const s = await setup();
@@ -1054,6 +1124,7 @@ describe('POST /purchases/:id/returns', () => {
       expect(await productOf(s, p.id)).toMatchObject({ qtyOnHand: 6, stockValueCents: 600 });
     });
 
+    // One reference cannot mean two different business actions.
     it('same clientRef used for a DIFFERENT purchase -> 409 CLIENT_REF_CONFLICT', async () => {
       const s = await setup();
       const p = await mkProduct(s);
@@ -1071,6 +1142,8 @@ describe('POST /purchases/:id/returns', () => {
 });
 
 // =============================================================================================
+// Each step (purchase rows, stock movements, cash, audit) is forced to fail in turn; the database must end up exactly as before.
+// breakAudit installs a trigger that makes audit inserts fail; other failures are injected by blocking the cash insert.
 describe('atomic rollback (nothing persists when any step fails)', () => {
   const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
 

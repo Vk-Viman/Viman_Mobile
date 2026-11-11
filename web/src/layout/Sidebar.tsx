@@ -1,8 +1,15 @@
+/**
+ * Desktop sidebar navigation (the left column of the app).
+ * Rendered by AppLayout. Entries come from navItems.ts. No API calls.
+ */
 import { NavLink } from 'react-router';
 import { Smartphone } from 'lucide-react';
 import { NAV_ITEMS } from './navItems';
 
-/** Fixed left sidebar: icons only between md and lg, icons + labels from lg up. Hidden below md (overlay menu used). */
+/**
+ * Fixed left sidebar: icons only between md and lg, icons + labels from lg up. Hidden below md (overlay menu used).
+ * In the icon-only width the label stays available to screen readers (sr-only) and as a hover tooltip (title).
+ */
 export function Sidebar() {
   return (
     <aside className="hidden w-16 shrink-0 flex-col border-r border-slate-200 bg-white md:flex lg:w-60">
@@ -15,6 +22,7 @@ export function Sidebar() {
           <NavLink
             key={n.to}
             to={n.to}
+            // "end" only for Dashboard: "/" would otherwise count as active on every page.
             end={n.to === '/'}
             title={n.label}
             className={({ isActive }) =>

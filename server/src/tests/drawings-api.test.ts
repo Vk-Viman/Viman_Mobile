@@ -1,3 +1,11 @@
+// Owner drawings API (POST/GET /drawings, void) - API level (Fastify inject, real temp database).
+// Protects BUSINESS_RULES section 9 and section 1 "below the line": when the owner takes goods for personal use, stock leaves
+// at the weighted-average COST (never the selling price), one 'personal_use' movement is written, and the drawing is NOT a
+// stock loss and NOT a P&L expense (it only reduces stock). Cash drawings are not available yet
+// (NOT_AVAILABLE_YET). Also R1 / C6 (void = exact reversal at the original value and date), R-FD, clientRef idempotency,
+// audit rows and rollback.
+// Organised as: goods drawing create, list, void, "personal use is separate from losses", audit/atomicity.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { auditRows, breakAudit, get, post } from './helpers/catalog.ts';
@@ -10,9 +18,11 @@ import {
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
+// Silences the expected server error log lines while tests deliberately force failures.
 const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
 
 const bl = (productId: number, units: number, lineTotalCents: number) => ({ productId, packs: 1, packSize: units, lineTotalCents });
+// (Fixture: 10 @ 300,000 + 10 @ 400,000 = 20 units / 700,000.)
 /** 20 / 700000 (average Rs 350.00); the product sells for Rs 1,000 (100000). */
 async function p20(s: ApiBase, mk = mkProduct): Promise<number> {
   const p = await mk(s, { sellPriceCents: 100000, minPriceCents: 50000 });
@@ -20,16 +30,21 @@ async function p20(s: ApiBase, mk = mkProduct): Promise<number> {
   await buy(s, [bl(p.id, 10, 400000)]);
   return p.id;
 }
+// Fixture: product with exactly 'units' units worth 'value' cents in total.
 async function pUnits(s: ApiBase, units: number, value: number, mk = mkProduct): Promise<number> {
   const p = await mk(s);
   await buy(s, [bl(p.id, units, value)]);
   return p.id;
 }
 
+// Exact field list of a drawing in API responses.
 const KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'id', 'kind', 'note', 'postedAt', 'productId', 'productName',
   'qty', 'status', 'voidReason', 'voidedAt'];
 
+// Taking goods for personal use: valued at cost, book from the product, validation and dates.
 describe('POST /drawings - goods drawing', () => {
+  // Average Rs 350 (35,000) x 2 = 70,000, NOT the Rs 1,000 selling price: a drawing is valued at what the goods cost the shop (C12: price is
+  // never used for costing). No loss row and no cash entry are created.
   it('2 units at cost: amount 70000 (avg Rs 350 x 2), NOT the Rs 1,000 selling price; exact shape; no loss row, no cash entry', async () => {
     const s = await setup();
     const P = await mkProduct(s, { name: 'Perfume', sellPriceCents: 100000, minPriceCents: 50000 });
@@ -60,6 +75,7 @@ describe('POST /drawings - goods drawing', () => {
     await reconOk(s);
   });
 
+  // Telecom pool 3 / 1,000: drawing 2 = 1,000 x 2 / 3 = 666.67 -> 667, the last unit takes 333. A shop drawing of 1 at the average = 35,000.
   it('book is the product book; Shop and Telecom pools stay independent; rounding at the average', async () => {
     const s = await setup();
     const shop = await p20(s);
@@ -76,6 +92,7 @@ describe('POST /drawings - goods drawing', () => {
     await reconOk(s);
   });
 
+  // Cash drawings are not built yet, so they are refused cleanly. The future-date check still comes first.
   it('kind "cash" -> 400 NOT_AVAILABLE_YET, nothing written; checked after the date rules', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -91,6 +108,7 @@ describe('POST /drawings - goods drawing', () => {
     expect(snap(s)).toEqual(before);
   });
 
+  // A goods drawing must say which product and how many.
   it('goods without product or qty -> 400 VALIDATION_ERROR naming the field', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -156,6 +174,7 @@ describe('POST /drawings - goods drawing', () => {
     await reconOk(s);
   });
 
+  // Double-click protection: one drawing, one stock movement.
   it('idempotent clientRef: repeat returns the original (200) and posts no second drawing or movement', async () => {
     const s = await setup();
     const P = await p20(s);
@@ -191,6 +210,7 @@ describe('POST /drawings - goods drawing', () => {
 });
 
 // =============================================================================================
+// Listing drawings; totals count posted rows only.
 describe('GET /drawings', () => {
   async function scenario(s: ApiBase) {
     const P = await p20(s);
@@ -258,6 +278,7 @@ describe('GET /drawings', () => {
 });
 
 // =============================================================================================
+// R1 / C6: a void adds an exact reversal ('personal_use', +qty, +amount) dated like the original.
 describe('POST /drawings/:id/void', () => {
   it('restores stock/value exactly; reversal movement is personal_use +qty +amount on the original business date; excluded from totals', async () => {
     const s = await setup();
@@ -277,6 +298,7 @@ describe('POST /drawings/:id/void', () => {
     await reconOk(s);
   });
 
+  // Voiding returns the goods at their ORIGINAL drawing value, not at whatever the average is now (C6).
   it('restores the original value even after later sales changed the pool', async () => {
     const s = await setup();
     const P = await pUnits(s, 3, 1000);
@@ -310,7 +332,11 @@ describe('POST /drawings/:id/void', () => {
 });
 
 // =============================================================================================
+// Goods drawings and stock losses are different business facts with separate totals; only losses count in Stock adjustments.
 describe('personal use is separate from stock losses', () => {
+  // Pool 20 / 700,000: loss 2 = 70,000 -> 18 / 630,000; loss 1 (expired) = 35,000 -> 17 / 595,000; drawing 2 = 70,000 -> 15 / 525,000.
+  // Losses total 105,000 (stock adjustments), drawings total 70,000 (below the line). Voiding the drawing (+70,000) leaves the losses at 105,000;
+  // voiding loss 1 (+70,000) leaves 35,000; final pool 19 / 665,000.
   it('2 losses + 1 drawing: independent totals; stock adjustments from movements exclude personal_use', async () => {
     const s = await setup();
     const P = await p20(s);                                   // 20 / 700000
@@ -342,6 +368,7 @@ describe('personal use is separate from stock losses', () => {
 });
 
 // =============================================================================================
+// Every create/void leaves one audit entry; any failed step leaves the database exactly as before.
 describe('audit and atomicity', () => {
   it('audit: entity "drawing" create and void with businessDate / backdated; repeats and rejects add nothing', async () => {
     const s = await setup();
@@ -407,6 +434,7 @@ describe('audit and atomicity', () => {
     await reconOk(s);
   });
 
+  // Stock cache = ledger after every step, and no cash entries exist beyond the purchases (drawings of goods never move cash).
   it('reconciliation ok after each step of a create / void sequence; no cash entries beyond purchases', async () => {
     const s = await setup();
     const P = await p20(s);

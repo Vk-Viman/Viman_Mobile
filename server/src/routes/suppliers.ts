@@ -1,3 +1,12 @@
+/**
+ * routes/suppliers.ts - HTTP endpoints for suppliers.
+ *
+ *   GET /suppliers?q=&active=   list (q searches name and phone)
+ *   POST /suppliers             create (201)           PUT /suppliers/:id   edit or (de)activate
+ *
+ * Layer: route (thin) -> `catalog.service.ts` (unique names, trimming, audit). Suppliers are never deleted:
+ * purchases refer to them, so "removing" one means setting `active` to false.
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { createSupplier, listSupplierItems, updateSupplierItem } from '../services/catalog.service.ts';
@@ -28,6 +37,7 @@ const updateBody = {
   },
 } as const;
 
+/** Registers the supplier endpoints under the `/api/v1` prefix. */
 export function registerSupplierRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/suppliers', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as { q?: string; active?: string };

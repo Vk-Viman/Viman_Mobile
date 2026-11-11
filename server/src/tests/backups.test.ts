@@ -1,3 +1,9 @@
+// Backups (services/backup.service.ts and /backups API) - API level and file level, real temp folders.
+// Protects the owner's safety net: a backup is created at startup and on demand, named with the Colombo time stamp,
+// is a valid readable SQLite file, and old backups are rotated (30 regular, 10 pre-restore kept) without ever touching
+// files that are not backups. Also covers cleanup of leftover temp files after a crash.
+// Organised as: creating/listing backups, rotation rules, then stale-file cleanup.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -12,9 +18,11 @@ import { latestVersion } from '../db/migrate.ts';
 const env = new TestEnv();
 afterEach(() => env.cleanup());
 
+// Fixed clock for naming/rotation tests: backup i is "created" i seconds after 1 March 2026 00:00 UTC, so order is predictable.
 const BASE = Date.parse('2026-03-01T00:00:00Z');
 const at = (i: number) => new Date(BASE + i * 1000);
 
+// Creating, naming, listing, opening and rotating backups.
 describe('backups', () => {
   it('startup backup: pattern, listed by GET', async () => {
     const { app, ctx, backupsDir } = await build();
@@ -55,6 +63,7 @@ describe('backups', () => {
     expect(new Set(list.map((i: { name: string }) => i.name)).size).toBe(2);
   });
 
+  // Two backups in the same second must never overwrite each other (that would destroy a good copy).
   it('same-second backups get -2, -3 suffixes', async () => {
     const { ctx } = await build();
     const now = at(0);
@@ -68,6 +77,7 @@ describe('backups', () => {
     for (const n of [a.name, b.name, c.name]) expect(n).toMatch(BACKUP_NAME_RE);
   });
 
+  // A backup is only useful if it can be opened and passes SQLite's integrity check; it also holds the settings at that moment.
   it('a backup opens read-only, integrity ok, and contains current settings', async () => {
     const { app, ctx, backupsDir } = await build();
     await app.inject({ method: 'PUT', url: '/api/v1/settings', payload: { rates: { reloadCommissionBp: 321, ezcashCommissionBp: 12 } } });
@@ -89,6 +99,7 @@ describe('backups', () => {
     expect(readdirSync(backupsDir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
   });
 
+  // Keep the newest 30 regular backups (KEEP_REGULAR), delete the oldest, so the disk does not fill up.
   it('rotation: 31 regular backups -> 30 remain, oldest deleted', async () => {
     const { ctx } = await build();
     const names: string[] = [];
@@ -100,6 +111,7 @@ describe('backups', () => {
     expect(remaining[0]).toBe(names[30]); // newest first
   });
 
+  // Safety copies taken before a restore are kept separately: newest 10 (KEEP_PRE_RESTORE).
   it('rotation: 11 pre-restore -> 10 remain, oldest deleted', async () => {
     const { ctx } = await build();
     const names: string[] = [];
@@ -110,6 +122,7 @@ describe('backups', () => {
     expect(remaining).toContain(names[1]);
   });
 
+  // Many daily backups must never push out the pre-restore safety copies, and vice versa.
   it('regular and pre-restore rotate independently', async () => {
     const { ctx } = await build();
     const pre: string[] = [];
@@ -130,6 +143,7 @@ describe('backups', () => {
     expect(all2.map((b) => b.name)).not.toContain(pre[0]);
   });
 
+  // Rotation deletes only files that match the backup name pattern; the owner's own files in that folder are safe.
   it('non-matching files are ignored and never deleted', async () => {
     const { app, ctx, backupsDir } = await build();
     const strays = ['notes.txt', 'viman-bad.db', 'viman-20260101-000000-weird.db', 'viman-20260101-000000-manual.db.tmp', 'old-backup.db'];
@@ -143,7 +157,9 @@ describe('backups', () => {
   });
 });
 
+// Housekeeping after crashes, and the list shown in the "database damaged" message.
 describe('cleanupStaleTempFiles / newestBackupNames', () => {
+  // Half-written temp files from an interrupted backup/restore are removed; anything else is left alone.
   it('removes exactly the stale temp patterns and leaves everything else', async () => {
     const { ctx, dataDir, backupsDir } = await build();
     const real = createBackup(ctx, 'manual', at(0)).name;

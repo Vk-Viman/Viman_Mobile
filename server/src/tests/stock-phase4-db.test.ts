@@ -1,3 +1,12 @@
+// Phase 4 database rules (migration 005: stocktakes, stocktake_items, stock_losses, owner_drawings) - database level,
+// raw SQL on in-memory SQLite, no HTTP.
+// Protects the schema-level guarantees behind stocktakes (R2/R3), stock losses and owner drawings (BUSINESS_RULES sections 9
+// and 11): documents move only along allowed status paths (draft -> completed -> void, never back, R1), a voided record keeps
+// its void reason and timestamp, the business date and posting time never change (section 12), no future dates (R-FD), a
+// stocktake can only list products of its own book, completed stocktakes are frozen, goods drawings need a product and a
+// quantity, and ice cream drawings must name a fund (section 10.2).
+// Organised by table: migration, stocktakes, stocktake_items, stock_losses, owner_drawings, then a rollback test.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -7,6 +16,7 @@ import { currentVersion, latestVersion, loadMigrations, migrate, MIGRATIONS_DIR 
 import { receiveStock, issueStock } from '../services/inventory.service.ts';
 import { TestEnv } from './helpers/tmp.ts';
 import { daysAgo, daysAhead, memDb, msgOf, pool, scalar, sqlProduct, today } from './helpers/inventory.ts';
+import { sqlReturn, sqlSale, sqlSaleItem } from './helpers/phase5.ts';
 
 const env = new TestEnv();
 const conns: DatabaseSync[] = [];
@@ -19,24 +29,30 @@ afterEach(async () => {
 let seq = 0;
 const uniq = () => `cref-${seq++}-${Math.random().toString(36).slice(2, 8)}`;
 
+// Raw-SQL helper: insert a stocktake header with the given status/dates (defaults to a draft for today in the shop book).
 function addST(c: DatabaseSync, o: { date?: string; book?: string; status?: string; completedAt?: string | null; voidedAt?: string | null; voidReason?: string | null; ref?: string } = {}): number {
   return Number(c.prepare(
     `INSERT INTO stocktakes (business_date, book, status, completed_at, voided_at, void_reason, client_ref) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(o.date ?? today(), o.book ?? 'shop', o.status ?? 'draft', o.completedAt ?? null, o.voidedAt ?? null, o.voidReason ?? null, o.ref ?? uniq()).lastInsertRowid);
 }
+// Raw-SQL helper: add a counted line (default counted quantity 5) to a stocktake.
 const addItem = (c: DatabaseSync, st: number, product: number, counted = 5): number =>
   Number(c.prepare('INSERT INTO stocktake_items (stocktake_id, product_id, counted_qty) VALUES (?, ?, ?)').run(st, product, counted).lastInsertRowid);
+// Raw-SQL helper: move a stocktake to 'completed' directly in SQL (the real flow does this via the API).
 const complete = (c: DatabaseSync, st: number) =>
   c.prepare("UPDATE stocktakes SET status = 'completed', completed_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(st);
 const NOW = '2026-01-01T00:00:00.000Z';
 
+// Raw-SQL helper: insert a stock loss row with sensible defaults (1 unit, cost 100, 'damaged', manual, no return link).
+// Phase 5: o.salesReturnId links the loss to a sales return (required exactly when source = 'damaged_return').
 function addLoss(c: DatabaseSync, product: number, o: Record<string, any> = {}): number {
   return Number(c.prepare(
-    `INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, source, status, client_ref, voided_at, void_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, source, status, client_ref, voided_at, void_reason, sales_return_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(o.date ?? today(), product, o.book ?? 'shop', o.qty ?? 1, o.cost ?? 100, o.reason ?? 'damaged', o.source ?? 'manual',
-    o.status ?? 'posted', o.ref ?? uniq(), o.voidedAt ?? null, o.voidReason ?? null).lastInsertRowid);
+    o.status ?? 'posted', o.ref ?? uniq(), o.voidedAt ?? null, o.voidReason ?? null, o.salesReturnId ?? null).lastInsertRowid);
 }
+// Raw-SQL helper: insert an owner drawing row (goods by default, shop book, amount 100).
 function addDrawing(c: DatabaseSync, o: Record<string, any> = {}): number {
   return Number(c.prepare(
     `INSERT INTO owner_drawings (business_date, book, fund, kind, amount_cents, product_id, qty, status, client_ref, voided_at, void_reason)
@@ -46,6 +62,7 @@ function addDrawing(c: DatabaseSync, o: Record<string, any> = {}): number {
 }
 
 // =============================================================================================
+// Migration 005 adds the Phase 4 tables and their guard triggers.
 describe('migration 005', () => {
   it('fresh DB reaches latestVersion >= 5 with all Phase 4 tables and triggers', () => {
     const c = memDb(conns);
@@ -62,6 +79,7 @@ describe('migration 005', () => {
     ]));
   });
 
+  // An older shop database (products, movements, purchases, audit) upgrades without losing rows, and the new tables work on it.
   it('v4 -> v5 upgrade preserves existing data (products, movements, purchases, audit) and the new tables work', () => {
     const dir = env.newDir();
     const mdir = join(dir, 'mig');
@@ -95,7 +113,9 @@ describe('migration 005', () => {
 });
 
 // =============================================================================================
+// Stocktake header rules: defaults, dates, immutability, allowed status transitions.
 describe('stocktakes table', () => {
+  // A new stocktake starts as a draft with a server-set posting time; unknown statuses or books are refused.
   it('defaults: draft, empty notes, posted_at server timestamp; enums enforced', () => {
     const c = memDb(conns);
     const id = addST(c);
@@ -111,6 +131,7 @@ describe('stocktakes table', () => {
     expect(msgOf(() => addST(c, { ref: dupRef }))).toMatch(/UNIQUE/);
   });
 
+  // R-FD at database level: tomorrow's date is refused, backdating is allowed.
   it('future business date rejected (trigger); today and backdated accepted; malformed dates refused', () => {
     const c = memDb(conns);
     expect(msgOf(() => addST(c, { date: daysAhead(1) }))).toMatch(/FUTURE_DATE_NOT_ALLOWED/);
@@ -123,6 +144,7 @@ describe('stocktakes table', () => {
     addST(c, { date: '2024-02-29' });
   });
 
+  // Section 12: reports and costing order depend on these two fields, so they can never be changed after saving.
   it('business_date and posted_at are immutable', () => {
     const c = memDb(conns);
     const id = addST(c);
@@ -132,6 +154,7 @@ describe('stocktakes table', () => {
     c.prepare('UPDATE stocktakes SET business_date = business_date WHERE id = ?').run(id);
   });
 
+  // The only legal life cycle: draft -> completed, draft -> void, completed -> void.
   it('allowed transitions: draft->completed, draft->void, completed->void', () => {
     const c = memDb(conns);
     const a = addST(c);
@@ -144,6 +167,7 @@ describe('stocktakes table', () => {
     expect(scalar(c, "SELECT COUNT(*) FROM stocktakes WHERE id = ? AND status = 'void'", b)).toBe(1);
   });
 
+  // History moves forward only: nothing can be reopened or un-voided (R1: corrections are new records).
   it('forbidden transitions: completed->draft, void->draft, void->completed, and un-voiding', () => {
     const c = memDb(conns);
     const a = addST(c);
@@ -157,6 +181,7 @@ describe('stocktakes table', () => {
     expect(msgOf(() => c.prepare("UPDATE stocktakes SET voided_at = ? WHERE id = ?").run('2030-01-01T00:00:00.000Z', v))).toMatch(/STOCKTAKE_TRANSITION/);
   });
 
+  // A void must say when and why (audit trail), and a completed stocktake must record completed_at.
   it('void requires voided_at and void_reason; completed requires completed_at', () => {
     const c = memDb(conns);
     const a = addST(c);
@@ -180,6 +205,7 @@ describe('stocktakes table', () => {
     expect(msgOf(() => c.prepare("UPDATE stocktakes SET completed_at = '2027-01-01T00:00:00.000Z' WHERE id = ?").run(a))).toMatch(/STOCKTAKE_TRANSITION/);
   });
 
+  // Once completed, even the notes are frozen.
   it('notes may change only while draft', () => {
     const c = memDb(conns);
     const a = addST(c);
@@ -194,6 +220,7 @@ describe('stocktakes table', () => {
 });
 
 // =============================================================================================
+// Counted lines: only valid counts, one per product, only products of the stocktake's book, only while draft.
 describe('stocktake_items table', () => {
   it('inserts in a draft; counted_qty >= 0; gain cost >= 0 or null; one row per (stocktake, product)', () => {
     const c = memDb(conns);
@@ -212,6 +239,7 @@ describe('stocktake_items table', () => {
     expect(msgOf(() => addItem(c, st, 9999))).toMatch(/FOREIGN KEY|PRODUCT_NOT_IN_BOOK/);
   });
 
+  // A shop stocktake cannot list telecom products (segments are disjoint) or services (no stock).
   it('product of another book, or a service product, is refused with PRODUCT_NOT_IN_BOOK', () => {
     const c = memDb(conns);
     const shopSt = addST(c, { book: 'shop' });
@@ -229,6 +257,7 @@ describe('stocktake_items table', () => {
     expect(msgOf(() => c.prepare('UPDATE stocktake_items SET product_id = ? WHERE id = ?').run(telP, id))).toMatch(/PRODUCT_NOT_IN_BOOK/);
   });
 
+  // Drafts are working copies: lines and their completion figures may still change; completed/void ones may not.
   it('draft items may be updated and deleted, including the completion figures', () => {
     const c = memDb(conns);
     const st = addST(c);
@@ -262,6 +291,7 @@ describe('stocktake_items table', () => {
 });
 
 // =============================================================================================
+// Stock loss rows: checks, dates and the posted -> void lifecycle.
 describe('stock_losses table', () => {
   it('valid insert, defaults, and every CHECK', () => {
     const c = memDb(conns);
@@ -271,7 +301,11 @@ describe('stock_losses table', () => {
     expect(r).toMatchObject({ status: 'posted', source: 'manual', note: '' });
     expect(r.posted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     for (const reason of ['damaged', 'lost', 'expired', 'other']) addLoss(c, p, { reason });
-    addLoss(c, p, { source: 'damaged_return' });
+    // Phase 5: a damaged-return loss must point at a real return (trigger DAMAGED_RETURN_LINK), so build a sale + return first.
+    const sale = sqlSale(c);
+    sqlSaleItem(c, sale, p);
+    const ret = sqlReturn(c, sale);
+    addLoss(c, p, { source: 'damaged_return', salesReturnId: ret });
     addLoss(c, p, { book: 'telecom' });
     addLoss(c, p, { cost: 0 });
     expect(msgOf(() => addLoss(c, p, { reason: 'stolen' }))).toMatch(/CHECK/);
@@ -287,6 +321,34 @@ describe('stock_losses table', () => {
     expect(msgOf(() => addLoss(c, p, { ref: dup }))).toMatch(/UNIQUE/);
   });
 
+  // Phase 5 link rules (migration 006): a loss carries a sales_return_id if and only if its source is 'damaged_return',
+  // and a damaged-return loss must use the return's own date and the reason 'damaged'.
+  it('damaged_return link rules: DAMAGED_RETURN_LINK, DAMAGED_RETURN_DATE, DAMAGED_RETURN_REASON', () => {
+    const c = memDb(conns);
+    const p = sqlProduct(c);
+    const sale = sqlSale(c, { date: daysAgo(3) });
+    sqlSaleItem(c, sale, p);
+    const ret = sqlReturn(c, sale, { date: daysAgo(1) });
+    // damaged_return WITHOUT a return link
+    expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', date: daysAgo(1) }))).toMatch(/DAMAGED_RETURN_LINK/);
+    // manual loss WITH a link
+    expect(msgOf(() => addLoss(c, p, { source: 'manual', salesReturnId: ret, date: daysAgo(1) }))).toMatch(/DAMAGED_RETURN_LINK/);
+    // right link but another date than the return's
+    expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', salesReturnId: ret, date: today() }))).toMatch(/DAMAGED_RETURN_DATE/);
+    // right link and date but a reason other than 'damaged'
+    for (const reason of ['lost', 'expired', 'other']) {
+      expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', salesReturnId: ret, date: daysAgo(1), reason })), reason).toMatch(/DAMAGED_RETURN_REASON/);
+    }
+    // a link to a return that does not exist is a foreign-key error
+    expect(msgOf(() => addLoss(c, p, { source: 'damaged_return', salesReturnId: 9999, date: daysAgo(1) }))).toMatch(/DAMAGED_RETURN_DATE|FOREIGN KEY/);
+    expect(scalar(c, 'SELECT COUNT(*) FROM stock_losses')).toBe(0);
+    // the valid combination works and the link can never change afterwards
+    const id = addLoss(c, p, { source: 'damaged_return', salesReturnId: ret, date: daysAgo(1) });
+    expect(scalar(c, 'SELECT sales_return_id FROM stock_losses WHERE id = ?', id)).toBe(ret);
+    const ret2 = sqlReturn(c, sale, { date: daysAgo(1) });
+    expect(msgOf(() => c.prepare('UPDATE stock_losses SET sales_return_id = ? WHERE id = ?').run(ret2, id))).toMatch(/STOCK_LOSS_IMMUTABLE/);
+  });
+
   it('dates: future refused, malformed refused, backdated accepted; business_date / posted_at immutable', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -297,6 +359,7 @@ describe('stock_losses table', () => {
     expect(msgOf(() => c.prepare("UPDATE stock_losses SET posted_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(id))).toMatch(/POSTED_AT_IMMUTABLE/);
   });
 
+  // A posted loss can only be voided (with time and reason) and never goes back (R1).
   it('immutable except posted -> void; void needs voided_at and void_reason; no way back', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -319,6 +382,7 @@ describe('stock_losses table', () => {
 });
 
 // =============================================================================================
+// Owner drawings (below the P&L line, section 9): goods need a product + quantity; ice cream drawings name a fund.
 describe('owner_drawings table', () => {
   it('goods drawing needs a product and qty >= 1', () => {
     const c = memDb(conns);
@@ -334,6 +398,7 @@ describe('owner_drawings table', () => {
     expect(msgOf(() => addDrawing(c, { product: p, qty: 1, amount: -1 }))).toMatch(/CHECK/);
   });
 
+  // NULL >= 1 is not true in SQL, so a missing quantity must be caught explicitly or it would slip through the CHECK.
   it('goods drawing with a product but NULL qty is refused (NULL >= 1 must not pass the CHECK)', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -353,6 +418,7 @@ describe('owner_drawings table', () => {
     expect(msgOf(() => addDrawing(c, { kind: 'cash', status: 'draft' }))).toMatch(/CHECK/);
   });
 
+  // Section 10.2: ice cream drawings must name exactly one fund; other books must not have one; goods drawings are not allowed in ice cream.
   it('(book = icecream) = (fund IS NOT NULL); fund enum; no goods in icecream', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -386,6 +452,7 @@ describe('owner_drawings table', () => {
     expect(msgOf(() => addDrawing(c, { product: p, qty: 1, status: 'void' }))).toMatch(/CHECK/);
   });
 
+  // Inserting a drawing row creates nothing else: stock and cash effects are written by the service, not hidden in triggers.
   it('a drawing never touches stock, cash or loss tables by itself', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -397,6 +464,7 @@ describe('owner_drawings table', () => {
 });
 
 // =============================================================================================
+// A loss row and its stock movement are saved together or not at all.
 describe('database transaction rollback (loss row + movement)', () => {
   it('a tx that inserts a loss row and its movement and then fails leaves nothing behind and the cache unchanged', () => {
     const dir = env.newDir();

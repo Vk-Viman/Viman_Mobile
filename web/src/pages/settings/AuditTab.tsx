@@ -1,3 +1,9 @@
+/**
+ * Settings > Audit log tab (route "/settings/audit"): a read-only history of every change made in the system
+ * (who/what/when, with the values before and after). The server keeps this log append-only, so entries can never
+ * be edited or deleted from here.
+ * API: GET /audit-logs with cursor paging (api/auditLogs.ts). Times are shown in Asia/Colombo.
+ */
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Card } from '../../components/Card';
@@ -11,6 +17,7 @@ import { useAuditLogs } from '../../api/auditLogs';
 import type { AuditLog } from '../../types/api';
 import { formatDateTime } from '../../lib/format';
 
+/** A titled, scrollable box showing a value as formatted JSON ("none" when there is no value). */
 function Json({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0">
@@ -22,9 +29,13 @@ function Json({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+/** The tab: entity filter, the log table with expandable before/after details, and a "Load more" button. */
 export function AuditTab() {
+  // `entityInput` is what is typed in the box; `entity` is the applied filter (changes only when Apply is pressed,
+  // so a request is not sent on every keystroke).
   const [entityInput, setEntityInput] = useState('');
   const [entity, setEntity] = useState('');
+  // Ids of the rows whose details are expanded.
   const [open, setOpen] = useState<Set<number>>(new Set());
   const q = useAuditLogs(entity);
 
@@ -35,6 +46,7 @@ export function AuditTab() {
       return n;
     });
 
+  // The infinite query returns pages; flatten them into one list for the table.
   const rows = q.data?.pages.flatMap((p) => p.items) ?? [];
 
   const columns: Column<AuditLog>[] = [

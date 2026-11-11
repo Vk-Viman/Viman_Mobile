@@ -1,6 +1,15 @@
+/**
+ * ErrorState: the block shown in place of a table/card when loading its data failed.
+ * Announced to screen readers immediately (role="alert").
+ */
 import { AlertTriangle } from 'lucide-react';
 import { Button } from './Button';
 
+/**
+ * @param error   Whatever the query reported; an ApiError/Error contributes its readable message,
+ *                anything else falls back to a generic sentence.
+ * @param onRetry Optional; when given a "Try again" button is shown (usually the query's `refetch`).
+ */
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof Error ? error.message : 'Something went wrong.';
   return (

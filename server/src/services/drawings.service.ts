@@ -1,6 +1,18 @@
+/**
+ * services/drawings.service.ts - owner drawings: the owner taking goods (or, later, cash) for personal use.
+ *
+ * Layer: service (route -> SERVICE -> repository -> database). Business rules (BUSINESS_RULES section 9):
+ *  - A GOODS drawing removes stock at the weighted-average cost (movement type `personal_use`). The drawing is
+ *    recorded at that COST, never at the selling price, and creates no revenue, no COGS, no expense and no
+ *    cash entry: it is "below the line" (not part of P&L).
+ *  - Cash drawings (cash out of a chosen book) arrive with the cash books in a later phase; until then
+ *    `kind = 'cash'` is answered with 400 NOT_AVAILABLE_YET.
+ *  - R-FD: no future dates. Section 12: idempotent by `clientRef`; every write is audited.
+ *  - R1 / C6: a void writes the exact negation of the stock movement (stock returns at its original value)
+ *    and marks the drawing `void`; nothing is edited or deleted.
+ */
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
-import { todayBusinessDate } from '../lib/dates.ts';
 import { AppError } from '../lib/errors.ts';
 import {
   getDrawing as getDrawingRow, getDrawingByClientRef, insertDrawing, listDrawings as listDrawingRows, markDrawingVoid,
@@ -10,9 +22,14 @@ import { getProduct } from '../repositories/products.repo.ts';
 import { listMovementsByRef } from '../repositories/stock-movements.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { issueStock, outflowValue, reverseMovements } from './inventory.service.ts';
-import { checkBusinessDate, isBackdated, notFound, runWrite, trimmed, validationError } from './stock-common.ts';
-import type { Fields } from './stock-common.ts';
+import { runWrite } from './stock-common.ts';
+import {
+  NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
+  isBackdatedToday, notFound, trimmed, validationError,
+} from './validation.ts';
+import type { Fields } from './validation.ts';
 
+/** A drawing as returned by the API (adds the `backdated` flag). */
 export interface Drawing {
   id: number; businessDate: string; postedAt: string; backdated: boolean; book: DrawingBook; kind: DrawingKind;
   amountCents: number; productId: number | null; productName: string | null; qty: number | null; note: string;
@@ -33,10 +50,12 @@ function loadDrawing(conn: DatabaseSync, id: number): Drawing {
   return toDrawing(r);
 }
 
+/** One drawing by id. @throws AppError 404 NOT_FOUND. */
 export function getDrawing(ctx: AppContext, id: number): Drawing {
   return loadDrawing(ctx.database.conn, id);
 }
 
+/** Lists drawings newest first; `totalAmountCents` sums only POSTED drawings that match the filters. */
 export function listDrawings(ctx: AppContext, q: {
   kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; productId?: number; status?: DrawingStatus;
   limit: number; offset: number;
@@ -49,10 +68,17 @@ export interface DrawingCreate {
   kind: DrawingKind; businessDate: string; productId?: number; qty?: number; note?: string; clientRef: string;
 }
 
+/**
+ * Records a goods drawing: stock out at average cost, no cash and no P&L (section 9).
+ * Idempotent by `clientRef`: a repeat returns the saved drawing with `created: false`.
+ *
+ * @throws AppError 400 VALIDATION_ERROR / FUTURE_DATE_NOT_ALLOWED / NOT_AVAILABLE_YET (cash kind) /
+ *   PRODUCT_NOT_STOCKABLE (a service cannot be taken), 422 INSUFFICIENT_STOCK (more than on hand).
+ */
 export function createDrawing(ctx: AppContext, body: DrawingCreate): { item: Drawing; created: boolean } {
   const fields: Fields = {};
-  const note = trimmed(fields, 'note', 'Note', body.note, 0, 500);
-  if (Object.keys(fields).length > 0) throw validationError(fields);
+  const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
+  assertNoFieldErrors(fields);
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
   if (body.kind !== 'goods') {
     throw new AppError(400, 'NOT_AVAILABLE_YET',
@@ -61,7 +87,7 @@ export function createDrawing(ctx: AppContext, body: DrawingCreate): { item: Dra
   const missing: Fields = {};
   if (body.productId === undefined) missing.productId = 'Product is required.';
   if (body.qty === undefined) missing.qty = 'Quantity is required.';
-  if (Object.keys(missing).length > 0) throw validationError(missing);
+  assertNoFieldErrors(missing);
   const productId = body.productId as number;
   const qty = body.qty as number;
 
@@ -77,6 +103,8 @@ export function createDrawing(ctx: AppContext, body: DrawingCreate): { item: Dra
     }
 
     // amount = the stock cost removed (never the selling price); no revenue, COGS, expense or cash entry.
+    // The drawing row is written first because the stock movement refers to its id, so its amount is worked
+    // out beforehand with the same formula the movement will use (`outflowValue` = what `issueStock` removes).
     const amountCents = outflowValue(conn, product.id, qty);
     const id = insertDrawing(conn, {
       businessDate: body.businessDate, book: product.book, kind: 'goods', amountCents, productId: product.id, qty,
@@ -86,6 +114,7 @@ export function createDrawing(ctx: AppContext, body: DrawingCreate): { item: Dra
       productId: product.id, businessDate: body.businessDate, type: 'personal_use', qty,
       refTable: 'owner_drawings', refId: id, reason: `Personal use #${id}`,
     });
+    // Internal consistency guard: the recorded amount must equal the value the movement removed.
     if (out.valueRemovedCents !== amountCents) throw new Error(`Drawing #${id}: amount ${amountCents} differs from value removed ${out.valueRemovedCents}`);
 
     const item = loadDrawing(conn, id);
@@ -95,15 +124,22 @@ export function createDrawing(ctx: AppContext, body: DrawingCreate): { item: Dra
   });
 }
 
+/**
+ * Voids a drawing (R1, C6): the stock movement is negated (units return at their original value) and the
+ * drawing is marked `void`. The reversal keeps the drawing's business date (section 12).
+ *
+ * @throws AppError 400 VALIDATION_ERROR (reason), 404 NOT_FOUND, 409 ALREADY_VOID,
+ *   422 INSUFFICIENT_STOCK (cannot occur for a goods drawing in practice; returned stock only adds).
+ */
 export function voidDrawing(ctx: AppContext, id: number, body: { reason: string }): Drawing {
   const fields: Fields = {};
-  const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, 200);
-  if (Object.keys(fields).length > 0) throw validationError(fields);
+  const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, REASON_MAX_LENGTH);
+  assertNoFieldErrors(fields);
 
   return runWrite(ctx, (conn) => {
     const row = getDrawingRow(conn, id);
     if (!row) throw notFound('Drawing');
-    if (row.status === 'void') throw new AppError(409, 'ALREADY_VOID', 'This drawing is already void.');
+    if (row.status === 'void') throw alreadyVoid('drawing');
     const before = toDrawing(row);
 
     const movements = listMovementsByRef(conn, 'owner_drawings', id);
@@ -113,7 +149,7 @@ export function voidDrawing(ctx: AppContext, id: number, body: { reason: string 
     markDrawingVoid(conn, id, reason);
     const after = loadDrawing(conn, id);
     logAudit(conn, 'drawing', String(id), 'void', before, after, reason,
-      { businessDate: after.businessDate, backdated: after.businessDate < todayBusinessDate() });
+      { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
     return after;
   });
 }

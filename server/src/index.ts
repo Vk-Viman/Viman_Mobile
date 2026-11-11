@@ -1,14 +1,35 @@
+/**
+ * index.ts - the program that `Start-Viman-Shop.bat` runs (`node server/src/index.ts`).
+ *
+ * Layer: entry point (composition root). Start-up order, chosen to protect the shop's data (ARCHITECTURE.md
+ * "Startup & crash safety"):
+ *   1. READ-ONLY integrity check of an existing `viman.db` - before anything opens it for writing.
+ *   2. Open the database for writing and apply the migrations (`buildApp`).
+ *   3. Start listening on the port. (Before the backup, so a second copy of the program started by mistake
+ *      fails fast on "port in use" without writing anything.)
+ *   4. Remove temp files left by a crash, then take the start-up backup.
+ *   5. Print where the shop is running; close cleanly on Ctrl+C / system shutdown.
+ * Every failure prints plain-language instructions for the owner and exits; nothing is ever deleted.
+ *
+ * Settings (environment variables): VIMAN_DATA_DIR (default `<project>/data`), VIMAN_PORT (default 4300),
+ * VIMAN_HOST (default 127.0.0.1, i.e. only this PC can connect).
+ */
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { buildApp } from './app.ts';
 import { cleanupStaleTempFiles, createBackup, newestBackupNames } from './services/backup.service.ts';
 
+const DEFAULT_PORT = 4300;
+/** How many recent backups are listed in the "database is damaged" recovery message. */
+const RECOVERY_BACKUPS_SHOWN = 3;
+
 const dataDir = process.env.VIMAN_DATA_DIR ?? resolve(import.meta.dirname, '../../data');
 const webDistDir = resolve(import.meta.dirname, '../../web/dist');
-const port = Number(process.env.VIMAN_PORT ?? 4300);
+const port = Number(process.env.VIMAN_PORT ?? DEFAULT_PORT);
 const host = process.env.VIMAN_HOST ?? '127.0.0.1';
 
+/** Prints each line to the console and stops the program with an error status. */
 function fail(lines: string[]): never {
   for (const l of lines) console.error(l);
   process.exit(1);
@@ -24,7 +45,7 @@ function isDamagedDbError(err: unknown): boolean {
 function failDamaged(detail: string): never {
   const dbFile = join(resolve(dataDir), 'viman.db');
   const backupsDir = join(resolve(dataDir), 'backups');
-  const newest = newestBackupNames(backupsDir, 3);
+  const newest = newestBackupNames(backupsDir, RECOVERY_BACKUPS_SHOWN);
   fail([
     '',
     'The shop database is damaged, so the system did not start. Nothing was changed or deleted.',
@@ -45,11 +66,15 @@ function failDamaged(detail: string): never {
   ]);
 }
 
-// Pre-flight, READ-ONLY: check an existing database before anything opens it for writing
-// (opening for writing switches it to WAL and runs migrations — both write to the file).
-// So "nothing was changed" in the damage message is literally true.
-const liveDb = join(resolve(dataDir), 'viman.db');
-if (existsSync(liveDb)) {
+/**
+ * Step 1 - pre-flight, READ-ONLY: check an existing database before anything opens it for writing
+ * (opening for writing switches it to WAL and runs migrations - both write to the file).
+ * So "nothing was changed" in the damage message is literally true. `quick_check` is a fast integrity test.
+ * Stops the program (with recovery instructions) if the file is damaged; returns normally otherwise.
+ */
+function preflightIntegrityCheck(): void {
+  const liveDb = join(resolve(dataDir), 'viman.db');
+  if (!existsSync(liveDb)) return; // first run: nothing to check yet
   let integrity: string | null = null;
   try {
     const ro = new DatabaseSync(liveDb, { readOnly: true });
@@ -66,6 +91,9 @@ if (existsSync(liveDb)) {
   if (integrity !== null && integrity !== 'ok') failDamaged(`integrity check failed (${integrity.slice(0, 200)})`);
 }
 
+preflightIntegrityCheck();
+
+// Step 2 - open for writing and migrate. The codes below come from db/migrate.ts.
 let built: Awaited<ReturnType<typeof buildApp>>;
 try {
   built = await buildApp({ dataDir, webDistDir, logger: false });
@@ -90,7 +118,7 @@ try {
 
 const { app, ctx } = built;
 
-// Listen before the startup backup: a second launch on a busy port must fail fast
+// Step 3 - listen before the startup backup: a second launch on a busy port must fail fast
 // without writing anything (it would otherwise snapshot a DB another process is using).
 try {
   await app.listen({ port, host });
@@ -104,6 +132,7 @@ try {
   process.exit(1);
 }
 
+// Step 4 - housekeeping. A failed start-up backup is only a warning: the shop can still work.
 const staleRemoved = cleanupStaleTempFiles(ctx);
 
 let startupBackup: string | null = null;
@@ -113,11 +142,13 @@ try {
   console.warn('Warning: could not create the startup backup:', err instanceof Error ? err.message : err);
 }
 
+// Step 5 - tell the owner where the shop is running.
 console.log(`Viman Mobile Shop running at http://localhost:${port}`);
 console.log(`Data folder: ${ctx.dataDir}`);
 console.log(startupBackup ? `Startup backup: ${startupBackup}` : 'Startup backup: not created');
 if (staleRemoved.length > 0) console.log(`Cleaned up ${staleRemoved.length} leftover temporary file(s).`);
 
+/** Closes the server (and the database, folding the WAL file in) once, then exits. */
 let closing = false;
 async function shutdown(): Promise<void> {
   if (closing) return;

@@ -1,6 +1,10 @@
+/**
+ * Products > Suppliers tab (route "/products/suppliers"): list, search, add and edit suppliers.
+ * API: GET /suppliers, POST /suppliers, PUT /suppliers/:id (api/catalog.ts). Suppliers are chosen when recording a
+ * purchase (Purchases screen). They are deactivated rather than deleted, so old purchases keep their supplier name.
+ */
 import { useState } from 'react';
 import { Pencil, Plus } from 'lucide-react';
-import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { DataTable } from '../../components/DataTable';
@@ -10,32 +14,44 @@ import { ErrorState } from '../../components/ErrorState';
 import { FormDialog } from '../../components/FormDialog';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
+import { ActiveBadge } from '../../components/StatusBadges';
 import { TextField, inputClass } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
 import { useCreateSupplier, useSuppliers, useUpdateSupplier } from '../../api/catalog';
+import { useDebounced } from '../../hooks/useDebounced';
+import { CHECKBOX_CLASS } from '../../lib/constants';
 import type { Supplier, SupplierUpdate } from '../../types/api';
-import { CHECKBOX_CLASS, useDebounced } from './shared';
+import { StatusFilterOptions, statusToActive } from './shared';
+import type { StatusFilter } from './shared';
 
-type StatusFilter = 'active' | 'inactive' | 'all';
+/** Field length limits, matching the server's validation. */
+const MAX_NAME = 120;
+const MAX_PHONE = 30;
+const MAX_NOTES = 500;
 
+/** The tab: search + status filter, supplier table, add/edit dialog. */
 export function SuppliersTab() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<StatusFilter>('active');
+  // null = no dialog; { supplier: null } = "new supplier"; { supplier: s } = editing s.
   const [dialog, setDialog] = useState<{ supplier: Supplier | null } | null>(null);
-  const q = useDebounced(search.trim(), 300);
-  const suppliers = useSuppliers({ q: q || undefined, active: status === 'all' ? undefined : status === 'active' });
+  // Only the debounced text goes into the query, so the server is asked once typing pauses.
+  const q = useDebounced(search.trim());
+  const suppliers = useSuppliers({ q: q || undefined, active: statusToActive(status) });
+  // True when any filter differs from the default view; decides between "nothing yet" and "nothing matches".
   const filtered = Boolean(q) || status !== 'active';
 
   const columns: Column<Supplier>[] = [
     { key: 'name', header: 'Name', render: (s) => <span className="font-medium text-slate-900">{s.name}</span> },
     { key: 'phone', header: 'Phone', render: (s) => s.phone || '—' },
     { key: 'notes', header: 'Notes', className: 'max-w-xs truncate', render: (s) => s.notes || '—' },
-    { key: 'status', header: 'Status', render: (s) => <Badge tone={s.active ? 'brand' : 'neutral'}>{s.active ? 'Active' : 'Inactive'}</Badge> },
+    { key: 'status', header: 'Status', render: (s) => <ActiveBadge active={s.active} /> },
     {
       key: 'actions',
       header: 'Actions',
       render: (s) => (
+        // stopPropagation: the whole row is also clickable; this keeps the click from firing twice.
         <Button variant="ghost" className="!min-h-8 !px-2" aria-label={`Edit ${s.name}`} onClick={(e) => { e.stopPropagation(); setDialog({ supplier: s }); }}>
           <Pencil size={16} aria-hidden="true" /> Edit
         </Button>
@@ -49,9 +65,7 @@ export function SuppliersTab() {
         <div className="mb-4 grid gap-3 sm:grid-cols-3">
           <TextField label="Search suppliers" placeholder="Search by name or phone" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" className="sm:col-span-2" />
           <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="all">All</option>
+            <StatusFilterOptions />
           </SelectField>
         </div>
         {suppliers.isPending ? (
@@ -73,11 +87,16 @@ export function SuppliersTab() {
           />
         )}
       </Card>
+      {/* Mounted only while open (with a key per supplier) so the form always starts with fresh values. */}
       {dialog && <SupplierDialog key={dialog.supplier?.id ?? 'new'} supplier={dialog.supplier} onClose={() => setDialog(null)} />}
     </>
   );
 }
 
+/**
+ * Add/edit form for one supplier.
+ * @param supplier the supplier being edited, or null to create a new one.
+ */
 function SupplierDialog({ supplier, onClose }: { supplier: Supplier | null; onClose: () => void }) {
   const editing = supplier !== null;
   const toast = useToast();
@@ -91,10 +110,11 @@ function SupplierDialog({ supplier, onClose }: { supplier: Supplier | null; onCl
 
   const trimmed = name.trim();
   const errors: Record<string, string> = {};
-  if (trimmed.length > 120) errors.name = 'Name can be at most 120 characters.';
-  if (phone.trim().length > 30) errors.phone = 'Phone can be at most 30 characters.';
-  if (notes.length > 500) errors.notes = 'Notes can be at most 500 characters.';
+  if (trimmed.length > MAX_NAME) errors.name = `Name can be at most ${MAX_NAME} characters.`;
+  if (phone.trim().length > MAX_PHONE) errors.phone = `Phone can be at most ${MAX_PHONE} characters.`;
+  if (notes.length > MAX_NOTES) errors.notes = `Notes can be at most ${MAX_NOTES} characters.`;
 
+  // When editing, send only the fields that actually changed (a partial update).
   const body: SupplierUpdate = {};
   if (supplier) {
     if (trimmed !== supplier.name) body.name = trimmed;
@@ -103,8 +123,10 @@ function SupplierDialog({ supplier, onClose }: { supplier: Supplier | null; onCl
     if (active !== supplier.active) body.active = active;
   }
   const valid = trimmed.length >= 1 && Object.keys(errors).length === 0;
+  // "dirty": creating is always submittable; editing needs at least one change.
   const dirty = !editing || Object.keys(body).length > 0;
 
+  // Field message: our own quick check first, otherwise the server's message for that field.
   const apiErr = err instanceof ApiError ? err : null;
   const fe = (k: string) => errors[k] ?? apiErr?.fields[k];
   const hasFieldErr = apiErr && ['name', 'phone', 'notes'].some((k) => apiErr.fields[k]);

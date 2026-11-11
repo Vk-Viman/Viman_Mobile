@@ -1,6 +1,11 @@
+/**
+ * Button: the app's one standard button, so every action looks and behaves the same.
+ * Supports four looks (variants) and a built-in "busy" state used while a request is being sent.
+ */
 import type { ButtonHTMLAttributes } from 'react';
 import { Spinner } from './Spinner';
 
+/** primary = main action, secondary = neutral action, danger = destructive (void/delete), ghost = low emphasis. */
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
 const styles: Record<Variant, string> = {
@@ -12,9 +17,15 @@ const styles: Record<Variant, string> = {
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
+  /** True while a save/request is in flight: shows a spinner and disables the button so it cannot be double-clicked. */
   loading?: boolean;
 }
 
+/**
+ * Renders a button. All normal button attributes (onClick, aria-label...) pass through.
+ * `type` defaults to "button" (not the browser default "submit") so a button inside a form never submits it
+ * by accident; submit buttons must say type="submit" explicitly.
+ */
 export function Button({ variant = 'primary', loading = false, disabled, className = '', children, type = 'button', ...rest }: Props) {
   return (
     <button
