@@ -99,3 +99,6 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 | DB + Backend (one agent, DB first) | migration 008, sales repo/services/routes | Accepted — numbers re-derived by hand (extra 300; rounding min 3334; 33/33/34 split) |
 | Frontend | POS cart cost field, result/history/detail | Accepted — browser-verified |
 | QA | 3 new test files, 6 contract-driven updates, model test extended | Accepted — 798/798 |
+
+## Wave 1 (2026-11-11) — dispatched
+Orchestrator wrote the Wave 1 contracts (DATABASE_SCHEMA "Wave 1 contracts", API_CONTRACTS "Wave 1 contracts") and pre-wired shared files (route stubs registered in `app.ts`, tab stubs and routes in `App.tsx`, nav entries) so agents cannot collide. Three full-stack agents (Phase 6, 7, 13), each in an isolated worktree with exclusive file ownership, were started in parallel.

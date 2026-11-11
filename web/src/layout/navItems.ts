@@ -6,7 +6,7 @@
  */
 import {
   LayoutDashboard, ShoppingCart, Package, Truck, Boxes, ClipboardList, Smartphone, Receipt,
-  Wallet, HandCoins, IceCreamCone, BarChart3, Settings,
+  Wallet, HandCoins, IceCreamCone, BarChart3, Settings, Printer,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -32,8 +32,9 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/products', label: 'Products', icon: Package, phase: 2, description: 'Manage the product catalogue, prices and categories.', built: true },
   { to: '/purchases', label: 'Purchases', icon: Truck, phase: 3, description: 'Record stock bought from suppliers and what you paid.', built: true },
   { to: '/stock', label: 'Stock', icon: Boxes, phase: 4, description: 'See stock on hand, movements, adjustments and losses.', built: true },
-  { to: '/opening-stock', label: 'Opening Stock', icon: ClipboardList, phase: 13, description: 'Enter starting stock by hand or from an Excel template at go-live.' },
-  { to: '/telecom', label: 'Telecom', icon: Smartphone, phase: 6, description: 'Reloads, EZCash bill payments and scratch cards with commissions.' },
+  { to: '/opening-stock', label: 'Opening Stock', icon: ClipboardList, phase: 13, description: 'Enter starting stock by hand or from an Excel template at go-live.', built: true },
+  { to: '/printing', label: 'Printing', icon: Printer, phase: 7, description: 'Print and photocopy sales, service prices and paper/toner supplies.', built: true },
+  { to: '/telecom', label: 'Telecom', icon: Smartphone, phase: 6, description: 'Reloads, EZCash bill payments and scratch cards with commissions.', built: true },
   { to: '/expenses', label: 'Expenses', icon: Receipt, phase: 8, description: 'Record shop, telecom and ice cream expenses.' },
   { to: '/cash-books', label: 'Cash Books', icon: Wallet, phase: 8, description: 'Daily cash book for each of the three segments, with transfers and cash counts.' },
   { to: '/drawings', label: 'Drawings', icon: HandCoins, phase: 9, description: 'Owner drawings and capital introduced into the business.' },

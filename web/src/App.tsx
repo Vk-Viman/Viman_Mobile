@@ -33,6 +33,17 @@ import { SalesPage } from './pages/sales/SalesPage';
 import { PosTab } from './pages/sales/PosTab';
 import { HistoryTab } from './pages/sales/HistoryTab';
 import { SuppliersTab } from './pages/products/SuppliersTab';
+import { TelecomPage } from './pages/telecom/TelecomPage';
+import { ReloadsTab } from './pages/telecom/ReloadsTab';
+import { EzCashTab } from './pages/telecom/EzCashTab';
+import { TopupsTab } from './pages/telecom/TopupsTab';
+import { PrintingPage } from './pages/printing/PrintingPage';
+import { PrintSalesTab } from './pages/printing/PrintSalesTab';
+import { ServiceTypesTab } from './pages/printing/ServiceTypesTab';
+import { SuppliesTab } from './pages/printing/SuppliesTab';
+import { OpeningStockPage } from './pages/opening-stock/OpeningStockPage';
+import { ManualTab } from './pages/opening-stock/ManualTab';
+import { ImportTab } from './pages/opening-stock/ImportTab';
 
 /** Root component: declares every route. Renders no markup of its own. */
 export function App() {
@@ -60,6 +71,20 @@ export function App() {
           <Route path="stocktake/:id" element={<StocktakeSheet />} />
           <Route path="losses" element={<StockLossesTab />} />
           <Route path="personal-use" element={<PersonalUseTab />} />
+        </Route>
+        <Route path="telecom" element={<TelecomPage />}>
+          <Route index element={<ReloadsTab />} />
+          <Route path="ezcash" element={<EzCashTab />} />
+          <Route path="topups" element={<TopupsTab />} />
+        </Route>
+        <Route path="printing" element={<PrintingPage />}>
+          <Route index element={<PrintSalesTab />} />
+          <Route path="types" element={<ServiceTypesTab />} />
+          <Route path="supplies" element={<SuppliesTab />} />
+        </Route>
+        <Route path="opening-stock" element={<OpeningStockPage />}>
+          <Route index element={<ManualTab />} />
+          <Route path="import" element={<ImportTab />} />
         </Route>
         <Route path="settings" element={<SettingsPage />}>
           <Route index element={<GeneralTab />} />

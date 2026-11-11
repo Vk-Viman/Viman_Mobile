@@ -54,3 +54,10 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 
 ## Later phases (not started — require owner approval)
 2 Catalog · 3 Purchases & movements · 4 Costing/stocktake/valuation · 5 POS/returns/voids · 6 Telecom · 7 Printing · 8 Expenses (electricity blocked, §7) + 3 cash books (Ice Cream entries carry a fund) · 9 Transfers/drawings/capital/losses · 10 Ice cream three-fund system (BUSINESS_RULES §10) · 11 Reports · 12 Dashboard + exports · 13 Opening-stock Excel · 14 Full QA + docs.
+
+## Wave 1 — Phases 6, 7, 13 (built and integrated 2026-11-11)
+- [x] Phase 6 Telecom reloads, EZCash, top-ups (migration 009)
+- [x] Phase 7 Printing service types, print sales, supplies (migration 010)
+- [x] Phase 13 Opening stock + Excel template/preview/import (migration 011)
+- [x] Integrate, full tests (1,127 pass)
+- [ ] PR/merge; launcher browser verification in Phase 14
