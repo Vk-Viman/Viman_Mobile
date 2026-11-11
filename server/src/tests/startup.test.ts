@@ -184,7 +184,9 @@ describe('index.ts startup guards', () => {
     } finally { db.close(); }
     const bytes = readFileSync(dbPath);
     expect(bytes.length).toBeGreaterThan(200000);
-    bytes.fill(0x41, Math.floor(bytes.length * 0.5), Math.floor(bytes.length * 0.8));
+    // Schema pages (migrations 001-003) sit at the START of the file; the padded audit_logs rows fill the
+    // rest. Overwrite only the tail (data pages) so the DB still opens but quick_check finds damage.
+    bytes.fill(0x41, Math.floor(bytes.length * 0.7), Math.floor(bytes.length * 0.95));
     writeFileSync(dbPath, bytes);
     const before = Buffer.from(bytes);
 
