@@ -1,3 +1,8 @@
+/**
+ * Dashboard: the home screen (route "/").
+ * For now it shows system status: server health (GET /health) and the newest backup (GET /backups).
+ * The business figures (sales, profit, cash, stock alerts) arrive in Phase 12; their card is a placeholder.
+ */
 import { Card } from '../components/Card';
 import { PageHeader } from '../components/PageHeader';
 import { Badge } from '../components/Badge';
@@ -9,6 +14,7 @@ import { formatDateTime } from '../lib/format';
 import { LayoutDashboard } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+/** One "label ... value" line of the status list (a <dt>/<dd> pair, so screen readers read it as a definition). */
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-slate-100 py-3 last:border-0">
@@ -18,9 +24,14 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/**
+ * Renders the status card (loading / error with retry / data) and the Phase 12 placeholder card.
+ * The two queries are independent: a backup-list failure only affects its own row, never the health block.
+ */
 export function Dashboard() {
   const health = useHealth();
   const backups = useBackups();
+  // The server lists backups newest first, so the first item is the latest one.
   const latest = backups.data?.items[0];
 
   return (

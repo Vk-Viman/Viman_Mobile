@@ -1,18 +1,31 @@
+/**
+ * The list of sidebar / menu entries, defined once and used by three consumers:
+ *  - layout/Sidebar.tsx (desktop sidebar) and layout/MobileMenu.tsx (phone-width overlay) draw the links;
+ *  - App.tsx builds "Coming soon" routes for entries that are not built yet.
+ * Keeping one list means the menu and the routes cannot drift apart.
+ */
 import {
   LayoutDashboard, ShoppingCart, Package, Truck, Boxes, ClipboardList, Smartphone, Receipt,
   Wallet, HandCoins, IceCreamCone, BarChart3, Settings,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
+/** One menu entry. */
 export interface NavItem {
+  /** URL path, e.g. "/products". */
   to: string;
+  /** Text shown in the menu and as the placeholder page title. */
   label: string;
   icon: LucideIcon;
+  /** Implementation phase in which the screen is (or will be) delivered; shown on the "Coming soon" page. */
   phase: number;
+  /** One-line explanation of the screen, shown on the "Coming soon" page. */
   description: string;
+  /** True once the real screen exists; false/absent entries get a placeholder route. */
   built?: boolean;
 }
 
+/** Menu order, top to bottom. To add a screen: add it here, then (when built) set `built: true` and add its route. */
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, phase: 12, description: 'Today at a glance: sales, profit, cash in each book and stock alerts.', built: true },
   { to: '/sales', label: 'Sales', icon: ShoppingCart, phase: 5, description: 'Record cash sales of goods and services, with returns and voids.' },

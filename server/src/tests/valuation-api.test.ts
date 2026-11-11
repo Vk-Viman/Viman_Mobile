@@ -1,3 +1,11 @@
+// Stock valuation report (GET /inventory/valuation) - API level (Fastify inject, real temp database).
+// Protects the owner's "how much is my stock worth?" figure: value = the weighted-average pool value (BUSINESS_RULES
+// section 3, a cost figure - never the selling price, C12), grouped by book (shop / telecom, section 0), with the
+// average per unit computed by mulDivRound (R0). Also protects the "as of a past date" view, which follows BUSINESS dates
+// (R7: reports follow business date) while the cost of each movement was fixed at posting time.
+// Organised as: live valuation (shape, filters, validation), as-of valuation with a hand-derived timeline, and a final
+// check that the report equals the product cache and the movement ledger after a busy mixed sequence.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { get, post } from './helpers/catalog.ts';
@@ -9,11 +17,15 @@ const env = new TestEnv();
 afterEach(() => env.cleanup());
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
 const bl = (productId: number, units: number, lineTotalCents: number) => ({ productId, packs: 1, packSize: units, lineTotalCents });
+// Calls the valuation report; row() finds one product's line by name.
 const val = async (s: ApiBase, qs = '') => (await get(s.app, `/inventory/valuation${qs ? `?${qs}` : ''}`)).body;
 const row = (v: any, name: string) => v.items.find((i: any) => i.name === name);
 
+// Exact field list of one report line (contract check).
 const ITEM_KEYS = ['active', 'avgUnitCostCents', 'book', 'categoryId', 'categoryName', 'code', 'name', 'productId', 'qty', 'valueCents'];
 
+// (Hand totals of this fixture: shop 20 + 3 + 7 + 2 = 32 units; value 700,000 + 1,000 + 10,000 + 5 = 711,005;
+// telecom 10 / 50,000; all together 42 units / 761,005. Cherry has no stock and the service has no stock pool.)
 /** shop: apple 20/700000, Banana 3/1000, Date 7/10000 (inactive), Half 2/5, cherry 0/0; telecom: Zed 10/50000; plus a service product. */
 async function catalog(s: ApiBase) {
   const apple = await mkProduct(s, { name: 'apple', code: 'A-1' });
@@ -33,7 +45,9 @@ async function catalog(s: ApiBase) {
   return { apple, banana, date, half, cherry, zed };
 }
 
+// The report for today's stock: which products appear, how they are ordered and totalled.
 describe('GET /inventory/valuation - live', () => {
+  // Both books always appear in the totals, even when empty, so the screen never has to guess.
   it('empty database: no items, zero totals, byBook always has shop and telecom, asOf null', async () => {
     const s = await setup();
     const r = await get(s.app, '/inventory/valuation');
@@ -44,6 +58,8 @@ describe('GET /inventory/valuation - live', () => {
     });
   });
 
+  // Averages use half-away-from-zero rounding: Banana 1,000/3 = 333.33 -> 333; Date 10,000/7 = 1,428.57 -> 1,429;
+  // Half 5/2 = 2.5 -> 3. Totals must equal the sum of the lines. Services and zero-stock products are hidden by default.
   it('shape, case-insensitive name order, services and zero-stock products hidden, averages via mulDivRound, totals = sum of items', async () => {
     const s = await setup();
     const c = await catalog(s);
@@ -66,6 +82,8 @@ describe('GET /inventory/valuation - live', () => {
     expect(v.items.reduce((a: number, i: any) => a + i.valueCents, 0)).toBe(v.totals.valueCents);
   });
 
+  // Optional views: show products with no stock (no average exists -> null), or hide inactive ones.
+  // Inactive Date (7 / 10,000) removed: 42 - 7 = 35 units, 761,005 - 10,000 = 751,005.
   it('includeZero shows empty products with avgUnitCostCents null; includeInactive=false hides inactive ones', async () => {
     const s = await setup();
     await catalog(s);
@@ -82,6 +100,7 @@ describe('GET /inventory/valuation - live', () => {
     expect(both.items.map((i: any) => i.name)).toEqual(['apple', 'Banana', 'cherry', 'Half', 'Zed Card']);
   });
 
+  // Filtering by book keeps both books in byBook (the other at zero). Shop only: 32 units / 711,005; telecom only: 10 / 50,000.
   it('filters by book and categoryId; byBook keeps both books (the other one zero)', async () => {
     const s = await setup();
     await catalog(s);
@@ -99,6 +118,7 @@ describe('GET /inventory/valuation - live', () => {
     expect((await val(s, 'categoryId=99999')).items).toEqual([]);
   });
 
+  // Impossible or malformed dates and non-boolean flags are refused, naming the field.
   it('bad query values -> 400 (including impossible and malformed asOf with fields.asOf)', async () => {
     const s = await setup();
     for (const q of ['asOf=2026-02-31', 'asOf=abc', 'asOf=2026-1-1', 'asOf=20260101', 'asOf=2026-13-01']) {
@@ -114,6 +134,8 @@ describe('GET /inventory/valuation - live', () => {
 });
 
 // =============================================================================================
+// "What was my stock worth on date D?" - rebuilt from movements by BUSINESS date (R7), using the cost each movement was
+// posted with. Later or backdated entries therefore change history only from their own business date onward.
 describe('GET /inventory/valuation?asOf= (business-date basis)', () => {
   /**
    * X: purchase 10 for 100000 dated D-10, purchase 10 for 300000 dated D-5, then (posted later) a loss of 5 dated D-7:
@@ -134,6 +156,10 @@ describe('GET /inventory/valuation?asOf= (business-date basis)', () => {
   }
   const at = (v: any, name: string) => row(v, name);
 
+  // Walk through the timeline day by day (see the fixture comment): D-10: 10 / 100,000; D-7 backdated loss of 5 is valued at
+  // what the pool average was WHEN IT WAS POSTED (20 units / 400,000 -> 5 x 20,000 = 100,000), so on D-7 the report shows 5 units / 0;
+  // D-5: +10 / 300,000 -> 15 / 300,000; D-3: product Y 4 / 8,000 -> totals 19 / 308,000; today: X 20 / 350,000 + Y 4 / 8,000 = 24 / 358,000.
+  // A future date shows the same as today.
   it('before / at / after each movement matches the hand-derived sums', async () => {
     const s = await setup();
     await timeline(s);
@@ -181,6 +207,7 @@ describe('GET /inventory/valuation?asOf= (business-date basis)', () => {
     expect((await val(s)).totals).toEqual((await val(s, `asOf=${daysAhead(30)}`)).totals);
   });
 
+  // Filters still apply to the historical view: telecom card bought on D-6 (10 / 50,000) plus X (5 units / 0) = 15 / 50,000.
   it('asOf honours book / category / includeInactive filters', async () => {
     const s = await setup();
     const { x } = await timeline(s);
@@ -195,6 +222,8 @@ describe('GET /inventory/valuation?asOf= (business-date basis)', () => {
     expect((await val(s, `asOf=${daysAgo(6)}&includeInactive=false`)).items.map((i: any) => i.name)).toEqual(['Tel card']);
   });
 
+  // Hand calculation: buy 10 for 300,000 (D-9); stocktake D-4 counts 8: loss 2 x 30,000 = 60,000 -> 8 / 240,000;
+  // goods drawing D-2 of 3 units = 3 x 30,000 = 90,000 -> 5 / 150,000. Each shows only from its own business date.
   it('a stocktake and a goods drawing, both backdated, are visible from their business date', async () => {
     const s = await setup();
     const p = await mkProduct(s, { name: 'Counted' });
@@ -214,7 +243,11 @@ describe('GET /inventory/valuation?asOf= (business-date basis)', () => {
 });
 
 // =============================================================================================
+// Three independent views of stock must agree: the report, the product cache and the sum of movements.
 describe('valuation equals the live pool', () => {
+  // Alpha: 10 / 300,000 + 10 / 400,000 = 20 / 700,000 (loss of 3 = 105,000 later voided, so back to 20 / 700,000).
+  // beta: 6 / 9,000; drawing 2 = 3,000 (voided); loss of 1 = 1,500 -> 5 / 7,500.  Card: 20 / 100,000; stocktake loss 2 = 10,000 -> 18 / 90,000.
+  // Shop 25 units / 707,500 + telecom 18 / 90,000 = 43 units / 797,500.
   it('after a mixed sequence of purchases, stocktakes, losses, drawings and voids: items = products cache = movement sums', async () => {
     const s = await setup();
     const a = await mkProduct(s, { name: 'Alpha' });

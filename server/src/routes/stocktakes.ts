@@ -1,14 +1,28 @@
+/**
+ * routes/stocktakes.ts - HTTP endpoints for physical stock counts.
+ *
+ * Layer: route (thin): JSON-schema validation -> `stocktake.service.ts` -> response. The life cycle
+ * (draft -> completed -> void), the weighted-average gain/loss postings (section 3, C10) and R-FD live in the
+ * service.
+ *
+ *   POST /stocktakes              create a draft (201; 200 on a repeated `clientRef`)
+ *   PUT  /stocktakes/:id          edit a draft's lines / notes       GET /stocktakes, /stocktakes/:id   read
+ *   POST /stocktakes/:id/complete post the differences as stock movements
+ *   POST /stocktakes/:id/void     void (reverses the movements)
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import {
   completeStocktake, createStocktake, getStocktake, listStocktakes, updateStocktake, voidStocktake,
 } from '../services/stocktake.service.ts';
 import type { StocktakeCreate, StocktakeItemInput } from '../services/stocktake.service.ts';
-import { bookQuery, fail, idParamsSchema, intQuery, parseId } from './catalog-query.ts';
-import { checkQueryDates, dateQuery } from './purchases.ts';
+import {
+  bookQuery, checkQueryDates, clientRef, dateField, dateQuery, fail, idParamsSchema, intQuery, parseId, parsePaging,
+  voidBody,
+} from './catalog-query.ts';
 
-const clientRef = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' } as const;
-const dateField = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } as const;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
 
 const itemsSchema = {
   type: 'array',
@@ -45,13 +59,6 @@ const updateBody = {
   properties: { notes: { type: 'string' }, items: itemsSchema },
 } as const;
 
-const voidBody = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['reason'],
-  properties: { reason: { type: 'string' } },
-} as const;
-
 const listQuery = {
   type: 'object',
   additionalProperties: false,
@@ -65,6 +72,13 @@ const listQuery = {
   },
 } as const;
 
+/** True for `undefined`, `null` or an empty object `{}` - the only bodies `complete` accepts. */
+function isEmptyBody(body: unknown): boolean {
+  if (body === undefined || body === null) return true;
+  return typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0;
+}
+
+/** Registers the stocktake endpoints under the `/api/v1` prefix. */
 export function registerStocktakeRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/stocktakes', { schema: { body: createBody } }, async (request, reply) => {
     const { item, created } = createStocktake(ctx, request.body as StocktakeCreate);
@@ -81,9 +95,7 @@ export function registerStocktakeRoutes(app: FastifyInstance, ctx: AppContext): 
       limit?: string; offset?: string;
     };
     checkQueryDates(raw);
-    const limit = raw.limit === undefined ? 50 : Number(raw.limit);
-    const offset = raw.offset === undefined ? 0 : Number(raw.offset);
-    if (limit < 1 || limit > 100) fail({ limit: 'must be between 1 and 100' });
+    const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listStocktakes>[1] = { limit, offset };
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
@@ -98,10 +110,7 @@ export function registerStocktakeRoutes(app: FastifyInstance, ctx: AppContext): 
 
   app.post('/stocktakes/:id/complete', { schema: { params: idParamsSchema } }, async (request) => {
     // The body is `{}` or absent (no body schema: an absent body must be accepted); anything else is rejected.
-    const body = request.body;
-    if (body !== undefined && body !== null && !(typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0)) {
-      fail({ body: 'must be an empty object' });
-    }
+    if (!isEmptyBody(request.body)) fail({ body: 'must be an empty object' });
     return { item: completeStocktake(ctx, parseId(request.params)) };
   });
 

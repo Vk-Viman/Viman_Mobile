@@ -1,12 +1,20 @@
-import { useEffect, useId, useRef } from 'react';
+/**
+ * FormDialog: a pop-up window containing a form with Cancel / Submit buttons.
+ * Used by every "Add ..." / "Edit ..." / "Void ..." form in the app (products, categories, purchases, stock...).
+ */
+import { useId, useRef } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Button } from './Button';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface Props {
   title: string;
+  /** The form fields. */
   children: ReactNode;
   submitLabel: string;
+  /** False disables the submit button (e.g. required fields still empty). The server re-validates anyway. */
   canSubmit: boolean;
+  /** True while the save request is in flight: spinner on the submit button, Cancel disabled. */
   loading?: boolean;
   /** Banner for errors that do not belong to a single field. */
   error?: string | null;
@@ -16,42 +24,25 @@ interface Props {
   widthClass?: string;
 }
 
-const FOCUSABLE =
-  'button:not([disabled]), input:not([disabled]), [href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/** Modal form: focus trapped, Esc closes, Enter submits (native form submit). Mount it only while open. */
+/**
+ * Modal form: focus trapped, Esc closes, Enter submits (native form submit). Mount it only while open.
+ * Mounting only while open means each opening starts with fresh form state (parents keep their own state inside
+ * the dialog component), so a half-filled form from last time never reappears.
+ * `noValidate` turns off the browser's own pop-up validation bubbles: the app shows its own field messages,
+ * and the server remains the final authority on what is valid.
+ */
 export function FormDialog({ title, children, submitLabel, canSubmit, loading, error, onSubmit, onClose, widthClass = 'max-w-xl' }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    panel.current?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== 'Tab' || !panel.current) return;
-      const els = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (els.length === 0) return;
-      const a = els[0] as HTMLElement;
-      const z = els[els.length - 1] as HTMLElement;
-      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
-      else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('keydown', onKey, true);
-      previouslyFocused?.focus?.();
-    };
-  }, []);
+  // First focus goes to the first editable field so the owner can start typing straight away.
+  useDialogFocusTrap(panel, {
+    onClose,
+    initialFocusSelector: 'input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+  });
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    // Guard against Enter-key submits while the button is disabled or a request is already running.
     if (canSubmit && !loading) onSubmit();
   };
 

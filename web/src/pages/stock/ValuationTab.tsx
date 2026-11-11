@@ -1,3 +1,12 @@
+/**
+ * Stock > Stock on hand tab (route "/stock", the default tab): the stock valuation report: quantity and value
+ * (at average cost) per product, with totals for the Shop book, the Telecom book and overall.
+ * API: GET /categories, GET /inventory/valuation (api/stock.ts) and GET /inventory/reconciliation (on demand,
+ * api/purchases.ts). Every quantity, value and total is calculated by the server in integer cents and only
+ * formatted here; the two books are always reported separately.
+ * The "as of" date is a REPORT date, so it may be any date (R-FD applies to transactions only); the picker's max
+ * of today is just a convenience, because a later date would show the same figures as today.
+ */
 import { useState } from 'react';
 import { CheckCircle2, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { Badge } from '../../components/Badge';
@@ -6,19 +15,27 @@ import { Card } from '../../components/Card';
 import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { ErrorState } from '../../components/ErrorState';
+import { BookFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
+import { BookBadge } from '../../components/StatusBadges';
 import { TextField } from '../../components/TextField';
 import { useCategories } from '../../api/catalog';
 import { useHealth } from '../../api/health';
 import { useInventoryReconciliation } from '../../api/purchases';
 import { useValuation } from '../../api/stock';
+import { CHECKBOX_CLASS } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
 import type { Book, ValuationItem } from '../../types/api';
-import { BOOK_LABEL, CHECKBOX_CLASS } from '../products/shared';
 
+/**
+ * "Check stock reconciliation" button and result. The server compares each product's stored quantity/value with
+ * the sum of its stock movements. The check runs only when the owner asks (the query starts disabled), because it
+ * scans every product.
+ */
 function Reconciliation() {
+  // First click enables the query (which then fetches); later clicks re-run it with refetch().
   const [enabled, setEnabled] = useState(false);
   const rec = useInventoryReconciliation(enabled);
   return (
@@ -26,6 +43,7 @@ function Reconciliation() {
       <Button variant="secondary" onClick={() => (enabled ? void rec.refetch() : setEnabled(true))} loading={enabled && rec.isFetching}>
         <ShieldCheck size={16} aria-hidden="true" /> Check stock reconciliation
       </Button>
+      {/* aria-live: the result is announced to screen readers when it appears */}
       <div aria-live="polite" className="text-sm">
         {enabled && rec.isError && <span className="text-red-700">{rec.error.message}</span>}
         {enabled && rec.data && rec.data.ok && (
@@ -50,9 +68,11 @@ function Reconciliation() {
   );
 }
 
+/** The tab: filters, reconciliation check, three total cards and the per-product valuation table. */
 export function ValuationTab() {
   const health = useHealth();
   const today = health.data?.today;
+  // ---- Filter state ("" means "no filter") ----
   const [book, setBook] = useState<'' | Book>('');
   const [categoryId, setCategoryId] = useState('');
   const [asOf, setAsOf] = useState('');
@@ -60,6 +80,7 @@ export function ValuationTab() {
   const [includeInactive, setIncludeInactive] = useState(false);
 
   const categories = useCategories({ active: true });
+  // The category filter only offers categories of the selected book.
   const cats = (categories.data?.items ?? []).filter((c) => !book || c.book === book);
   const val = useValuation({
     book: book || undefined,
@@ -73,7 +94,7 @@ export function ValuationTab() {
     { key: 'code', header: 'Code', render: (i) => i.code ?? '—' },
     { key: 'name', header: 'Name', render: (i) => <span className="font-medium text-slate-900">{i.name}</span> },
     { key: 'cat', header: 'Category', render: (i) => i.categoryName },
-    { key: 'book', header: 'Book', render: (i) => <Badge tone={i.book === 'shop' ? 'brand' : 'neutral'}>{BOOK_LABEL[i.book]}</Badge> },
+    { key: 'book', header: 'Book', render: (i) => <BookBadge book={i.book} /> },
     { key: 'qty', header: 'Qty', align: 'right', render: (i) => i.qty },
     { key: 'val', header: 'Value (Rs.)', align: 'right', render: (i) => <Money cents={i.valueCents} /> },
     { key: 'avg', header: 'Avg cost', align: 'right', render: (i) => (i.avgUnitCostCents === null ? '—' : <Money cents={i.avgUnitCostCents} />) },
@@ -86,11 +107,8 @@ export function ValuationTab() {
     <div className="space-y-5">
       <Card>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <SelectField label="Book" value={book} onChange={(e) => { setBook(e.target.value as '' | Book); setCategoryId(''); }}>
-            <option value="">All</option>
-            <option value="shop">Shop</option>
-            <option value="telecom">Telecom</option>
-          </SelectField>
+          {/* Changing the book also clears the category, which may belong to the other book. */}
+          <BookFilterSelect value={book} onChange={(b) => { setBook(b); setCategoryId(''); }} />
           <SelectField label="Category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">All categories</option>
             {cats.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
@@ -115,6 +133,7 @@ export function ValuationTab() {
         <ErrorState error={val.error} onRetry={() => void val.refetch()} />
       ) : (
         <>
+          {/* Totals per book and overall, exactly as summed by the server */}
           <div className="grid gap-4 sm:grid-cols-3">
             <Card title="Shop stock">
               <p className="num text-xl font-semibold text-slate-900">{val.data.totals.byBook.shop.qty} units</p>

@@ -1,3 +1,9 @@
+/**
+ * Settings > Backups tab (route "/settings/backups"): list the database backups, take one now, or restore.
+ * API: GET /backups, POST /backups, POST /backups/restore (api/backups.ts). The server makes the consistent
+ * snapshot and performs all safety checks (including a safety copy of the live data before any restore).
+ * Restoring replaces ALL current data, so it is guarded by a dialog that requires typing RESTORE.
+ */
 import { useRef, useState } from 'react';
 import { DatabaseBackup, RotateCcw, Upload } from 'lucide-react';
 import { Card } from '../../components/Card';
@@ -16,23 +22,29 @@ import { formatBytes, formatDateTime } from '../../lib/format';
 import { errorMessage } from './formUtils';
 import { ApiError } from '../../api/client';
 
+/** Badge colour per backup reason (why it was taken). */
 const tone = { startup: 'neutral', manual: 'brand', 'pre-restore': 'amber' } as const;
 
+/** Error text including the machine code, so the owner can quote it when asking for support. */
 function describeError(e: unknown): string {
   if (e instanceof ApiError) return `${e.message} (${e.code})`;
   return errorMessage(e);
 }
 
+/** The tab: backup table, "Backup now" / "Restore from file" buttons and the restore confirmation dialog. */
 export function BackupsTab() {
   const q = useBackups();
   const create = useCreateBackup();
   const restore = useRestoreBackup();
   const toast = useToast();
+  // Hidden <input type="file">; the visible button forwards its click to it.
   const fileRef = useRef<HTMLInputElement>(null);
+  // What the owner chose to restore (null = dialog closed). The dialog is open exactly while this is set.
   const [target, setTarget] = useState<RestoreInput | null>(null);
 
   const targetLabel = target ? (target.kind === 'name' ? target.name : target.file.name) : '';
 
+  // Closing is blocked while the restore is running, so the owner cannot dismiss the dialog mid-operation.
   const closeDialog = () => {
     if (restore.isPending) return;
     setTarget(null);
@@ -70,6 +82,7 @@ export function BackupsTab() {
       title="Backups"
       actions={
         <div className="flex flex-wrap gap-2">
+          {/* Native file picker kept invisible (but still labelled for screen readers). Only ".db" files are offered. */}
           <input
             ref={fileRef}
             type="file"
@@ -79,6 +92,7 @@ export function BackupsTab() {
             aria-label="Choose a backup file to restore"
             onChange={(e) => {
               const f = e.target.files?.[0];
+              // Clear the input so choosing the same file again later still triggers onChange.
               e.target.value = '';
               if (f) { restore.reset(); setTarget({ kind: 'file', file: f }); }
             }}
@@ -100,6 +114,7 @@ export function BackupsTab() {
         <DataTable columns={columns} rows={q.data.items} rowKey={(b) => b.name} emptyTitle="No backups yet" emptyHint="Use Backup now to create the first one." />
       )}
 
+      {/* Typing RESTORE is required: this replaces every current record, so a stray click must not be enough. */}
       <ConfirmDialog
         open={target !== null}
         title="Restore data from backup?"

@@ -1,3 +1,16 @@
+// Stocktake API (POST/PUT/GET /stocktakes, complete, void) - API level (Fastify inject, real temp database).
+// Protects R2/R3 (BUSINESS_RULES sections 3 and 11) and R1/C6/C10:
+// - a stocktake is a draft (a working list of counted quantities, no stock effect) until it is COMPLETED;
+// - completing compares each count with the LIVE pool at that moment (not with what the screen showed earlier): a shortage is
+//   a loss at the current average, a surplus a gain at the current average (or an entered unit cost when there is nothing to
+//   average, C10), one stock movement per difference, all in one transaction;
+// - the stored per-line figures never change afterwards; a void writes exact reversal movements on the original business date
+//   (C6) and is refused if the gained units were already used (INSUFFICIENT_STOCK);
+// - a stocktake covers one book only (segments are disjoint); R-FD for dates; clientRef idempotency; audit rows with
+//   businessDate/backdated; and full rollback when any step fails.
+// Organised as: create, edit draft, complete, void, list/get, audit, atomic rollback, long reconciliation sequence.
+// Money is in cents; the hand calculation is next to each figure.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { auditRows, breakAudit, get, post, put } from './helpers/catalog.ts';
@@ -11,15 +24,18 @@ import {
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
+// Silences the expected server error log lines while tests deliberately force failures.
 const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
 
 const bl = (productId: number, units: number, lineTotalCents: number) => ({ productId, packs: 1, packSize: units, lineTotalCents });
+// (Fixture: 10 units / 300,000 = Rs 3,000, so the average is 30,000 per unit.)
 /** 10 units for Rs 3,000: 10 / 300000 (average 30000). */
 async function p10(s: ApiBase, mk = mkProduct): Promise<number> {
   const p = await mk(s);
   await buy(s, [bl(p.id, 10, 300000)]);
   return p.id;
 }
+// (Fixture: 20 units / 700,000, average 35,000.)
 /** 10 @ 3,000 + 10 @ 4,000: 20 / 700000 (average 35000). */
 async function p20(s: ApiBase): Promise<number> {
   const id = await p10(s);
@@ -27,11 +43,14 @@ async function p20(s: ApiBase): Promise<number> {
   return id;
 }
 
+// Exact field list of a stocktake in API responses (contract check).
 const ST_KEYS = ['backdated', 'book', 'businessDate', 'clientRef', 'completedAt', 'id', 'items', 'notes', 'postedAt', 'status', 'voidReason', 'voidedAt'];
 const ITEM_KEYS = ['countedQty', 'differenceQty', 'expectedQty', 'gainUnitCostCents', 'id', 'productCode', 'productId', 'productName', 'valueDeltaCents'];
 
 // =============================================================================================
+// Creating a draft stocktake: it records what was counted but changes no stock.
 describe('POST /stocktakes - create', () => {
+  // A draft has no stock effect at all; counting can be saved in stages.
   it('201 draft with exact shape; no items needed; no stock effect', async () => {
     const s = await setup();
     const before = snap(s);
@@ -50,6 +69,7 @@ describe('POST /stocktakes - create', () => {
     await reconOk(s);
   });
 
+  // While a draft is open it shows the LIVE expected quantity and difference; money figures stay null until completion.
   it('with items: live expectedQty / difference, valueDeltaCents null, product name and code', async () => {
     const s = await setup();
     const p = await mkProduct(s, { code: 'SKU-1', name: 'Cable' });
@@ -64,6 +84,7 @@ describe('POST /stocktakes - create', () => {
     expect(poolOf(s, p.id)).toEqual({ qty: 10, value: 300000 });
   });
 
+  // Double-click protection (section 12): one draft, not two.
   it('the same clientRef returns the original with 200 and creates nothing new', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -86,6 +107,7 @@ describe('POST /stocktakes - create', () => {
     expect(r.body.item.book).toBe('telecom');
   });
 
+  // A shop stocktake cannot count telecom products or services (segments are disjoint, services have no stock).
   it('item validation: service / other-book -> 400 PRODUCT_NOT_IN_BOOK with the item path', async () => {
     const s = await setup();
     const shop = await mkProduct(s);
@@ -167,6 +189,7 @@ describe('POST /stocktakes - create', () => {
     expect((await stNew(s, { items: many })).status).toBe(400);
   });
 
+  // R-FD: future dates refused with the exact message; past dates accepted and flagged backdated.
   it('dates: impossible date -> 400 VALIDATION_ERROR; future -> FUTURE_DATE_NOT_ALLOWED with the exact message; past accepted as backdated', async () => {
     const s = await setup();
     const impossible = await stNew(s, { businessDate: '2026-02-31' });
@@ -189,6 +212,7 @@ describe('POST /stocktakes - create', () => {
 });
 
 // =============================================================================================
+// While still a draft, the counted list and notes can be replaced.
 describe('PUT /stocktakes/:id - draft edits', () => {
   it('replaces the whole item list, updates notes, keeps the product pool untouched', async () => {
     const s = await setup();
@@ -229,6 +253,7 @@ describe('PUT /stocktakes/:id - draft edits', () => {
     expect((await get(s.app, `/stocktakes/${d.id}`)).body.item.items.map((i: any) => i.productId)).toEqual([p]);
   });
 
+  // Completed or voided stocktakes are history and can no longer be edited (R1).
   it('after complete or void: 409 NOT_DRAFT and nothing changes', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -246,6 +271,7 @@ describe('PUT /stocktakes/:id - draft edits', () => {
     expect((await get(s.app, `/stocktakes/${d1.id}`)).body.item.items[0]).toMatchObject({ countedQty: 8, expectedQty: 10, differenceQty: -2 });
   });
 
+  // A purchase made while the draft is open changes the expected quantity shown, but nothing is stored until completion.
   it('a draft shows the LIVE expected quantity: a purchase while it is open changes it; nothing is stored', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -262,7 +288,11 @@ describe('PUT /stocktakes/:id - draft edits', () => {
 });
 
 // =============================================================================================
+// Completion posts the stock differences, valued at the live pool's weighted average (or an entered cost for gains at zero value, C10).
 describe('POST /stocktakes/:id/complete', () => {
+  // Hand calculation: B 10 / 300,000 counted 12 -> gain 2 = 300,000 x 2 / 10 = 60,000;
+  // A 20 / 700,000 counted 17 -> loss 3 = 700,000 x 3 / 20 = 105,000; C counted equal -> no movement; D not counted -> untouched.
+  // One movement per difference, in item order.
   it('multi-item in item order: gain, loss, equal, untouched product; stores per-item figures; one movement per difference', async () => {
     const s = await setup();
     const A = await p20(s);                 // 20 / 700000
@@ -296,6 +326,7 @@ describe('POST /stocktakes/:id/complete', () => {
     await reconOk(s);
   });
 
+  // Telecom 10 / 300,000 counted 9 -> loss 30,000 -> 9 / 270,000; the shop product is untouched.
   it('book isolation: a telecom stocktake changes only the telecom product', async () => {
     const s = await setup();
     const shop = await p10(s);
@@ -306,6 +337,7 @@ describe('POST /stocktakes/:id/complete', () => {
     expect(poolOf(s, shop)).toEqual({ qty: 10, value: 300000 });
   });
 
+  // Counting 0 where the system has 0 changes nothing; counting 0 on 10 units / 300,000 removes everything (value -300,000, no residue).
   it('counted 0 on an EMPTY product is a no-op; on a stocked product it removes everything', async () => {
     const s = await setup();
     const empty = await mkProduct(s);
@@ -321,6 +353,7 @@ describe('POST /stocktakes/:id/complete', () => {
     await reconOk(s);
   });
 
+  // Count entered as 17 against 20, but 5 were sold meanwhile (15 / 525,000). At completion the difference is +2 = 525,000 x 2 / 15 = 70,000 -> 17 / 595,000.
   it('is judged against the LIVE pool at completion time (a sale after the count was entered)', async () => {
     const s = await setup();
     const A = await p20(s);
@@ -332,6 +365,7 @@ describe('POST /stocktakes/:id/complete', () => {
     await reconOk(s);
   });
 
+  // The recorded expected quantity, difference and value (-2 / -60,000) stay as they were even after a later purchase.
   it('after completion the stored figures are static (later purchases do not change them)', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -371,6 +405,7 @@ describe('POST /stocktakes/:id/complete', () => {
     expect(noBody.statusCode).toBe(200);
   });
 
+  // C10: no stock to average from, so the owner must enter a unit cost; the stocktake stays a draft and completes once the cost is supplied.
   it('a gain without cost on a zero-stock product: 422 UNIT_COST_REQUIRED, exact field path, still a draft; fixing the cost completes it', async () => {
     const s = await setup();
     const A = await p10(s);
@@ -394,6 +429,7 @@ describe('POST /stocktakes/:id/complete', () => {
     await reconOk(s);
   });
 
+  // R7: the movements use the stocktake's business date (reports), but are posted now (costing order).
   it('backdated stocktake: movements carry the business date, are posted now, and the record says backdated', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -413,6 +449,7 @@ describe('POST /stocktakes/:id/complete', () => {
 });
 
 // =============================================================================================
+// R1 / C6: voiding reverses a completed stocktake exactly; a draft is simply cancelled.
 describe('POST /stocktakes/:id/void', () => {
   it('draft: cancelled, no movements, expected/difference null, reason stored', async () => {
     const s = await setup();
@@ -428,6 +465,7 @@ describe('POST /stocktakes/:id/void', () => {
     await reconOk(s);
   });
 
+  // Loss of 3 (-105,000) voided = +3 / +105,000 on the original business date; the pool returns to 20 / 700,000 exactly.
   it('completed loss: reversal movement has the same type, negated qty/value, original business date; pool back exactly', async () => {
     const s = await setup();
     const A = await p20(s);
@@ -467,6 +505,8 @@ describe('POST /stocktakes/:id/void', () => {
     await reconOk(s);
   });
 
+  // Counted 12 of 10 (gain 2 = 60,000 -> 12 / 360,000), then 11 sold -> 1 / 30,000. The gain's 2 units can no longer be removed,
+  // so the void is refused and nothing changes.
   it('completed gain whose units were already sold: 422 INSUFFICIENT_STOCK, nothing changes, still completed', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -485,6 +525,7 @@ describe('POST /stocktakes/:id/void', () => {
     await reconOk(s);
   });
 
+  // 12 / 360,000 -> 4 sold (8 / 240,000) -> void of the gain removes 2 / 60,000 -> 6 / 180,000: still enough stock, so allowed.
   it('a later partial use that still leaves enough stock does not block the void', async () => {
     const s = await setup();
     const p = await p10(s);
@@ -525,6 +566,7 @@ describe('POST /stocktakes/:id/void', () => {
 });
 
 // =============================================================================================
+// Listing and fetching stocktakes with filters and paging.
 describe('GET /stocktakes', () => {
   async function many(s: ApiBase) {
     const p = await p10(s);
@@ -581,6 +623,7 @@ describe('GET /stocktakes', () => {
 });
 
 // =============================================================================================
+// Every real change writes one audit entry with business date and backdated flag; repeats and failures write none.
 describe('audit', () => {
   it('create / update / complete / void write entity "stocktake" rows with businessDate and backdated', async () => {
     const s = await setup();
@@ -617,6 +660,7 @@ describe('audit', () => {
 });
 
 // =============================================================================================
+// Each step is forced to fail in turn; stock, status and audit must end up exactly as before, and a retry must work.
 describe('atomic rollback', () => {
   it('complete: failing audit rolls back every movement and the status change; retry works after the trigger is removed', async () => {
     const s = await setup();
@@ -688,6 +732,7 @@ describe('atomic rollback', () => {
   });
 });
 
+// A longer mixed run where stock cache = ledger is re-checked after every step.
 describe('reconciliation across a long sequence', () => {
   it('stays ok after every step of a mixed stocktake sequence', async () => {
     const s = await setup();

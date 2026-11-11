@@ -1,10 +1,25 @@
+/**
+ * routes/inventory.ts - HTTP endpoints for stock reports.
+ *
+ *   GET /inventory/valuation?book=&categoryId=&asOf=&includeZero=&includeInactive=   stock on hand and value
+ *   GET /products/:id/movements?from=&to=&type=&limit=&offset=                        one product's stock history
+ *   GET /inventory/reconciliation                                                     cache vs movements check
+ *
+ * Layer: route (thin) -> `inventory.service.ts`, which holds the weighted-average rules (BUSINESS_RULES
+ * section 3). These are READ-only endpoints: stock only changes through the write services.
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { isIsoDate } from '../lib/dates.ts';
 import { listProductMovements, MOVEMENT_TYPES, reconciliation, valuation } from '../services/inventory.service.ts';
 import type { MovementType } from '../services/inventory.service.ts';
-import { boolQuery, bookQuery, fail, idParamsSchema, intQuery, parseBool, parseId } from './catalog-query.ts';
-import { checkQueryDates, dateQuery } from './purchases.ts';
+import {
+  boolQuery, bookQuery, checkQueryDates, dateQuery, fail, idParamsSchema, intQuery, parseBool, parseId,
+  parsePaging,
+} from './catalog-query.ts';
+
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 const movementsQuery = {
   type: 'object',
@@ -30,6 +45,7 @@ const valuationQuery = {
   },
 } as const;
 
+/** Registers the inventory endpoints under the `/api/v1` prefix. */
 export function registerInventoryRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/inventory/valuation', { schema: { querystring: valuationQuery } }, async (request) => {
     const raw = request.query as {
@@ -51,9 +67,7 @@ export function registerInventoryRoutes(app: FastifyInstance, ctx: AppContext): 
   app.get('/products/:id/movements', { schema: { params: idParamsSchema, querystring: movementsQuery } }, async (request) => {
     const raw = request.query as { from?: string; to?: string; type?: MovementType; limit?: string; offset?: string };
     checkQueryDates(raw);
-    const limit = raw.limit === undefined ? 50 : Number(raw.limit);
-    const offset = raw.offset === undefined ? 0 : Number(raw.offset);
-    if (limit < 1 || limit > 200) fail({ limit: 'must be between 1 and 200' });
+    const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: { from?: string; to?: string; type?: MovementType; limit: number; offset: number } = { limit, offset };
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;

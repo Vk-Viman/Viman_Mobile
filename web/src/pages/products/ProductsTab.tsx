@@ -1,5 +1,12 @@
+/**
+ * Products > Products tab (route "/products", the default tab): searchable, filterable, paged catalogue with
+ * add/edit and a per-product stock history.
+ * API: GET /categories (for the category filter), GET /products (api/catalog.ts); stock history opens
+ * MovementsDialog (GET /products/:id/movements). Quantities, values and averages shown are calculated by the
+ * server; this screen only formats them.
+ */
 import { useEffect, useState } from 'react';
-import { History, Pencil, Plus, Search } from 'lucide-react';
+import { History, Pencil, Plus } from 'lucide-react';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -7,46 +14,55 @@ import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
+import { BookFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
+import { Pager } from '../../components/Pager';
+import { SearchField } from '../../components/SearchField';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
-import { TextField } from '../../components/TextField';
+import { ActiveBadge, BookBadge } from '../../components/StatusBadges';
 import { useCategories, useProducts } from '../../api/catalog';
+import { useDebounced } from '../../hooks/useDebounced';
+import { BOOK_LABEL, CHECKBOX_CLASS, PAGE_SIZE } from '../../lib/constants';
 import type { Book, Product, ProductQuery } from '../../types/api';
 import { ProductDialog } from './ProductDialog';
 import { MovementsDialog } from '../purchases/MovementsDialog';
-import { BOOK_LABEL, CHECKBOX_CLASS, useDebounced } from './shared';
+import { StatusFilterOptions, statusToActive } from './shared';
+import type { StatusFilter } from './shared';
 
-const LIMIT = 50;
-type StatusFilter = 'active' | 'inactive' | 'all';
-
+/** The tab: filter bar, product table, pager and the add/edit and history dialogs. */
 export function ProductsTab() {
+  // ---- Filter and paging state ("" means "no filter") ----
   const [search, setSearch] = useState('');
   const [book, setBook] = useState<'' | Book>('');
   const [categoryId, setCategoryId] = useState('');
   const [status, setStatus] = useState<StatusFilter>('active');
   const [lowOnly, setLowOnly] = useState(false);
   const [page, setPage] = useState(0);
+  // Dialog state: null = closed; { product: null } = "new product"; { product: p } = editing p.
   const [dialog, setDialog] = useState<{ product: Product | null } | null>(null);
   const [history, setHistory] = useState<Product | null>(null);
 
-  const q = useDebounced(search.trim(), 300);
+  // Debounced search text: the box updates instantly, the server is queried once typing pauses.
+  const q = useDebounced(search.trim());
   const cats = useCategories();
 
-  // Back to the first page whenever a filter changes.
+  // Back to the first page whenever a filter changes (otherwise page 3 of a smaller result could be empty).
   useEffect(() => { setPage(0); }, [q, book, categoryId, status, lowOnly]);
 
+  // Unset filters become undefined so the API helper leaves them out of the URL.
   const query: ProductQuery = {
     q: q || undefined,
     book: book || undefined,
     categoryId: categoryId ? Number(categoryId) : undefined,
-    active: status === 'all' ? undefined : status === 'active',
+    active: statusToActive(status),
     lowStock: lowOnly ? true : undefined,
-    limit: LIMIT,
-    offset: page * LIMIT,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
   };
   const products = useProducts(query);
 
+  // The category filter only offers categories of the selected book.
   const categoryChoices = (cats.data?.items ?? []).filter((c) => !book || c.book === book);
 
   const columns: Column<Product>[] = [
@@ -59,7 +75,7 @@ export function ProductsTab() {
       ),
     },
     { key: 'cat', header: 'Category', render: (p) => p.categoryName },
-    { key: 'book', header: 'Book', render: (p) => <Badge tone={p.book === 'shop' ? 'brand' : 'neutral'}>{BOOK_LABEL[p.book]}</Badge> },
+    { key: 'book', header: 'Book', render: (p) => <BookBadge book={p.book} /> },
     { key: 'kind', header: 'Kind', render: (p) => (p.kind === 'stock' ? 'Stock item' : 'Service') },
     { key: 'sell', header: 'Selling price', align: 'right', render: (p) => <Money cents={p.sellPriceCents} /> },
     { key: 'min', header: 'Min price', align: 'right', render: (p) => <Money cents={p.minPriceCents} /> },
@@ -67,6 +83,7 @@ export function ProductsTab() {
       key: 'qty',
       header: 'Stock',
       align: 'right',
+      // Services hold no stock, so quantity-related columns show a dash for them.
       render: (p) =>
         p.kind === 'service' ? (
           '—'
@@ -79,10 +96,11 @@ export function ProductsTab() {
     },
     { key: 'avg', header: 'Avg cost', align: 'right', render: (p) => (p.avgUnitCostCents === null ? '—' : <Money cents={p.avgUnitCostCents} />) },
     { key: 'reorder', header: 'Reorder level', align: 'right', render: (p) => (p.kind === 'service' ? '—' : p.reorderLevel) },
-    { key: 'status', header: 'Status', render: (p) => <Badge tone={p.active ? 'brand' : 'neutral'}>{p.active ? 'Active' : 'Inactive'}</Badge> },
+    { key: 'status', header: 'Status', render: (p) => <ActiveBadge active={p.active} /> },
     {
       key: 'actions',
       header: 'Actions',
+      // stopPropagation on these buttons: the whole row is also clickable (opens edit); avoid a double action.
       render: (p) => (
         <span className="inline-flex gap-1">
           <Button
@@ -109,8 +127,7 @@ export function ProductsTab() {
   ];
 
   const total = products.data?.total ?? 0;
-  const from = total === 0 ? 0 : page * LIMIT + 1;
-  const to = Math.min(total, (page + 1) * LIMIT);
+  // True when any filter differs from the default view; decides between "nothing yet" and "nothing matches".
   const filtered = Boolean(q || book || categoryId || lowOnly || status !== 'active');
 
   return (
@@ -125,22 +142,9 @@ export function ProductsTab() {
         }
       >
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <div className="relative lg:col-span-2">
-            <TextField
-              label="Search products"
-              placeholder="Search by name or code"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              autoComplete="off"
-              className="[&_input]:pl-9"
-            />
-            <Search size={16} className="pointer-events-none absolute bottom-3 left-3 text-slate-400" aria-hidden="true" />
-          </div>
-          <SelectField label="Book" value={book} onChange={(e) => { setBook(e.target.value as '' | Book); setCategoryId(''); }}>
-            <option value="">All</option>
-            <option value="shop">Shop</option>
-            <option value="telecom">Telecom</option>
-          </SelectField>
+          <SearchField label="Search products" placeholder="Search by name or code" value={search} onChange={setSearch} className="lg:col-span-2" />
+          {/* Changing the book also clears the category, which may belong to the other book. */}
+          <BookFilterSelect value={book} onChange={(b) => { setBook(b); setCategoryId(''); }} />
           <SelectField label="Category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">All categories</option>
             {categoryChoices.map((c) => (
@@ -148,9 +152,7 @@ export function ProductsTab() {
             ))}
           </SelectField>
           <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="all">All</option>
+            <StatusFilterOptions />
           </SelectField>
         </div>
         <label className="mb-4 flex items-center gap-2 text-sm text-slate-700">
@@ -178,17 +180,12 @@ export function ProductsTab() {
               emptyHint="Try a different search or clear a filter."
               onRowClick={(p) => setDialog({ product: p })}
             />
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
-              <span>{total === 0 ? '0 products' : `Showing ${from}–${to} of ${total} products`}</span>
-              <div className="flex gap-2">
-                <Button variant="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Previous</Button>
-                <Button variant="secondary" disabled={to >= total} onClick={() => setPage((p) => p + 1)}>Next</Button>
-              </div>
-            </div>
+            <Pager page={page} total={total} limit={PAGE_SIZE} noun="products" onPage={setPage} />
           </>
         )}
       </Card>
       {history && <MovementsDialog product={history} onClose={() => setHistory(null)} />}
+      {/* Mounted only while open (with a key per product) so the form always starts with fresh values. */}
       {dialog && <ProductDialog key={dialog.product?.id ?? 'new'} product={dialog.product} onClose={() => setDialog(null)} />}
     </>
   );

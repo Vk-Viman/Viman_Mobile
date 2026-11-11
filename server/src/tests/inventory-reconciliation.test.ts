@@ -1,3 +1,15 @@
+// Inventory reconciliation, stock history and the big seeded model check - API level (Fastify inject, real temp
+// database) plus a pure-JS independent model.
+// Protects BUSINESS_RULES section 3: the product's stock cache (qty_on_hand, stock_value_cents) must always equal the sum of
+// its stock_movements ("SUM(movements) = cache, per product"), outflows are costed at the weighted average with the last
+// unit taking the remainder, purchase return/void removes min(purchase cost, pool value) (R4, C7) and sweeps leftovers,
+// and cash follows every purchase, return and void exactly (R1 reversal rows with the same business date).
+// Organised as:
+// 1. GET /inventory/reconciliation - the owner's "is my stock data healthy?" check, including deliberately tampered caches;
+// 2. GET /products/:id/movements - the stock history screen (order, filters, paging, validation);
+// 3. a seeded randomized sequence of 300 operations compared with an independent model (see that describe);
+// 4. persistence across restart and restore of an old (version 3) backup.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -15,21 +27,29 @@ const env = new TestEnv();
 afterEach(() => env.cleanup());
 
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
+// Builds one purchase line: packs x packSize units for a total of lineTotalCents.
 const line = (productId: number, packs: number, packSize: number, lineTotalCents: number) => ({ productId, packs, packSize, lineTotalCents });
 const err = (r: { body: any }) => r.body.error;
 const sql = (s: ApiBase, q: string, ...p: any[]) => s.ctx.database.conn.prepare(q).all(...p) as unknown as Array<Record<string, any>>;
+// There is no sales API yet, so tests sell through the stock engine directly (outflow at the weighted average).
 const engineSell = (s: ApiBase, productId: number, qty: number) =>
   s.ctx.database.tx((c) => issueStock(c, { productId, businessDate: today(), type: 'sale', qty, refTable: null, refId: null, reason: 'test' }));
+// Inserts a value-only 'adjustment' movement (qty 0). Used to make a pool's value differ from the purchase costs,
+// so the R4 cap and sweep paths get exercised.
 const valueMove = (s: ApiBase, productId: number, delta: number) =>
   s.ctx.database.conn.prepare(
     "INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, reason) VALUES (?, ?, 'adjustment', 0, ?, 'test')",
   ).run(productId, today(), delta);
+// Posts a purchase return (goods sent back to the supplier) for the given lines.
 const ret = (s: ApiBase, purchaseId: number, items: Array<{ purchaseItemId: number; units: number }>, over: Record<string, unknown> = {}) =>
   post(s.app, `/purchases/${purchaseId}/returns`, { businessDate: today(), clientRef: ref(), items, ...over });
+// Voids a whole purchase (R1: reversal rows, never deletes).
 const voidP = (s: ApiBase, id: number) => post(s.app, `/purchases/${id}/void`, { reason: 'test' });
 
 // =============================================================================================
+// The reconciliation check compares every product's cache with the sum of its movements.
 describe('GET /inventory/reconciliation', () => {
+  // Nothing to check is a healthy result.
   it('empty database: ok with zero products', async () => {
     const s = await setup();
     const r = await get(s.app, '/inventory/reconciliation');
@@ -43,6 +63,8 @@ describe('GET /inventory/reconciliation', () => {
     expect((await get(s.app, '/inventory/reconciliation')).body).toEqual({ ok: true, checkedProducts: 2, mismatches: [] });
   });
 
+  // Builds a busy history across 5 stock products and 1 service: purchases (one backdated), partial returns, an engine sale,
+  // a void, a value-only adjustment (sweep source) and a full return.
   async function mixedScenario() {
     const s = await setup();
     const a = await mkProduct(s); const b = await mkProduct(s); const c = await mkProduct(s); const t = await mkTelecom(s, { kind: 'stock' });
@@ -64,6 +86,11 @@ describe('GET /inventory/reconciliation', () => {
     return { s, a, b, c, t };
   }
 
+  // Hand calculation for product a:
+  // 10 @ 300,000 + 10 @ 400,000 = 20 / 700,000. Return 3 units of the first purchase (3/10 of 300,000 = 90,000) -> 17 / 610,000.
+  // Sale of 2 -> 610,000 x 2 / 17 = 71,764.7 -> 71,765 -> 15 / 538,235. Void the second purchase (10 units, cost 400,000) -> 5 / 138,235.
+  // Product c: 3 / 100,000, return 1 -> 33,333 -> 2 / 66,667; +2,500 value -> 2 / 69,167; return the last 2 (cost 66,667):
+  // sweep the 2,500 excess first, then remove 66,667 -> 0 / 0 (R4 residual sweep).
   it('is ok after a mixed scenario: purchases, returns, void, engine sales, sweep', async () => {
     const { s, a, b, c, t } = await mixedScenario();
     const r = await get(s.app, '/inventory/reconciliation');
@@ -84,6 +111,7 @@ describe('GET /inventory/reconciliation', () => {
     ]);
   });
 
+  // Proves the check can fail: bumping qty_on_hand by 1 behind the system's back is reported with both numbers.
   it('reports an exact mismatch when the quantity cache is tampered with', async () => {
     const { s, a } = await mixedScenario();
     s.ctx.database.conn.prepare('UPDATE products SET qty_on_hand = qty_on_hand + 1 WHERE id = ?').run(a.id);
@@ -96,6 +124,7 @@ describe('GET /inventory/reconciliation', () => {
     }]);
   });
 
+  // Value drift of 7 cents on one product and a wrong quantity/value on another are both reported; restoring the cache makes it ok again.
   it('reports value tampering, and several products at once; ok again after restoring the cache', async () => {
     const { s, a, b } = await mixedScenario();
     const conn = s.ctx.database.conn;
@@ -113,6 +142,7 @@ describe('GET /inventory/reconciliation', () => {
     expect((await get(s.app, '/inventory/reconciliation')).body.ok).toBe(true);
   });
 
+  // Stock that appears without any movement (5 units / Rs 1.00 from nowhere) is exactly what the ledger rule forbids.
   it('a stock product with a cache but no movements is a mismatch', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -123,7 +153,10 @@ describe('GET /inventory/reconciliation', () => {
 });
 
 // =============================================================================================
+// The stock history of one product, as the owner sees it on the product screen.
 describe('GET /products/:id/movements', () => {
+  // Hand calculation: buy 10 for 1,000 (unit 100); sell 2 -> 200; return 1 of the 10 -> refund 100.
+  // Pool 10 / 1,000 -> 8 / 800 -> 7 / 700. Newest movement comes first; each row has the exact contract fields.
   it('posting order (newest first), shape, product block equals GET /products/:id', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -158,6 +191,8 @@ describe('GET /products/:id/movements', () => {
     expect((await get(s.app, `/products/${q.id}/movements`)).body.total).toBe(1);
   });
 
+  // Section 12: reports follow the business date, costing follows posting order. A purchase backdated 30 days is listed
+  // at its entry position (newest) but is found by date filters under its business date.
   it('a backdated purchase shows its business date but keeps its posting-order position', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -171,6 +206,7 @@ describe('GET /products/:id/movements', () => {
     expect((await get(s.app, `/products/${p.id}/movements?from=${daysAgo(10)}`)).body.items.map((m: any) => m.refId)).toEqual([first.id]);
   });
 
+  // Date filters include both end days; type and date filters can be combined; paging keeps the same total.
   it('filters: from/to inclusive, type, combined; paging with stable total', async () => {
     const s = await setup();
     const p = await mkProduct(s);
@@ -211,7 +247,13 @@ describe('GET /products/:id/movements', () => {
 });
 
 // =============================================================================================
+// MODEL CHECK. Idea: run a long, pseudo-random but REPEATABLE series of real API calls (purchases, returns, voids,
+// sales, value adjustments) while a tiny independent model in plain JavaScript tracks what the stock pools and cash books
+// should be, using its own BigInt rounding. After every step the real database must equal the model.
+// Why a seeded generator (mulberry32 with a fixed seed): the sequence is random enough to hit odd combinations nobody would
+// think to write by hand, yet identical on every run, so a failure can be reproduced exactly instead of being a flaky test.
 describe('randomized sequence (seeded): model-checked pools, reconciliation, no negative stock', () => {
+  // Small deterministic pseudo-random number generator: the same seed always gives the same sequence of numbers in [0, 1).
   function mulberry32(seed: number): () => number {
     let a = seed >>> 0;
     return () => {
@@ -223,12 +265,20 @@ describe('randomized sequence (seeded): model-checked pools, reconciliation, no 
     };
   }
   /** Independent half-up division of (v * q) / n using BigInt. */
+  // (Independent half-up division, deliberately NOT the production helper, so the model cannot share a bug with the code under test.)
   const roundDiv = (v: number, q: number, n: number): number => Number((2n * BigInt(v) * BigInt(q) + BigInt(n)) / (2n * BigInt(n)));
 
+  // Model types: Pool = what the model believes a product holds; PItem/PRec = the model's own copy of purchase lines and purchases.
   interface Pool { qty: number; value: number }
   interface PItem { id: number; productId: number; units: number; total: number; returned: number; ret?: number }
   interface PRec { id: number; book: string; offset: number; total: number; status: 'posted' | 'void'; items: PItem[] }
 
+  // Operation mix per step: ~38% purchase, ~20% return, ~10% void, ~25% sale, ~7% value adjustment.
+  // After every step (checkAll): each product's quantity and value equal the model, never negative, and value is 0 whenever quantity is 0.
+  // Every 25 steps the API reconciliation endpoint must report ok. Rejected operations (e.g. returning stock that was already
+  // sold) must fail with the documented error and change nothing. At the end: cash books equal the model's totals, every void
+  // has a reversal row with the same business date, and API statuses/returned units match. Counters (stats) make sure every
+  // kind of operation really happened, so the test cannot pass by doing nothing.
   it('300 operations of every kind keep the DB equal to an independent model', async () => {
     const s = await setup();
     const rnd = mulberry32(20261110);
@@ -243,6 +293,7 @@ describe('randomized sequence (seeded): model-checked pools, reconciliation, no 
     const stats: Record<string, number> = {};
     const bump = (k: string) => { stats[k] = (stats[k] ?? 0) + 1; };
 
+    // Model of R4: remove min(cost, pool value) with the units; when the quantity reaches 0, any value left is swept to 0.
     const removeCapped = (productId: number, units: number, maxValue: number) => {
       const m = model.get(productId)!;
       const removed = Math.min(maxValue, m.value);
@@ -250,6 +301,7 @@ describe('randomized sequence (seeded): model-checked pools, reconciliation, no 
       m.value = m.qty === 0 ? 0 : m.value - removed; // value left with qty 0 is swept
     };
 
+    // Compares every product in the database with the model and re-asserts the physical invariants.
     const checkAll = (label: string) => {
       const rows = sql(s, 'SELECT id, qty_on_hand AS q, stock_value_cents AS v FROM products');
       for (const r of rows) {
@@ -406,7 +458,11 @@ describe('randomized sequence (seeded): model-checked pools, reconciliation, no 
 });
 
 // =============================================================================================
+// Data and idempotency keys must survive a restart, and an old-version backup must restore and then work.
 describe('persistence and restore', () => {
+  // Hand calculation: buy 2 packs x 5 = 10 units for 400,000; return 3 (3/10 x 400,000 = 120,000) -> 7 / 280,000. A second purchase is
+  // bought and voided (net zero). After restart the lists, movements, cash rows and audit count are identical, the same clientRef
+  // returns the SAME return (no double return), and returning the last 7 units empties the pool to 0 / 0.
   it('everything survives closing and reopening the app on the same data directory', async () => {
     const first = await env.build();
     const s1 = await apiBase(first);
@@ -443,6 +499,7 @@ describe('persistence and restore', () => {
     expect((await get(s2.app, '/inventory/reconciliation')).body.ok).toBe(true);
   });
 
+  // Buying 1 pack of 6 for Rs 12.00 (1,200) gives a unit cost of 200 -> 6 / 1,200, proving the restored old database accepts new purchases.
   it('restoring a version-3 backup migrates it to the latest schema and Phase 3 works on it', async () => {
     const s = await setup();
     // build a v3 database file with a supplier and a stock product

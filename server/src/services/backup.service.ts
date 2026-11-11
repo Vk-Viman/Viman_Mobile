@@ -1,3 +1,18 @@
+/**
+ * services/backup.service.ts - database backups and restores.
+ *
+ * Layer: service (route -> SERVICE -> repository -> database). Protects the shop's data (ARCHITECTURE.md
+ * "Backup / restore" and "Startup & crash safety"):
+ *  - A backup is a consistent snapshot made with `VACUUM INTO`. A plain file copy would be unsafe, because in
+ *    WAL mode recent commits may still live in `viman.db-wal` and not in `viman.db`.
+ *  - Backups are created at start-up and on demand; the newest 30 are kept (and the newest 10 safety copies
+ *    that are made just before a restore), older ones are removed.
+ *  - A restore never touches the live database until the candidate file has passed every check: SQLite header,
+ *    read-only open, integrity check, required tables, schema version not newer than this system. Then a safety
+ *    backup is made, the file is swapped with an atomic rename, and the audit log records the restore.
+ *    If anything fails after the swap began, the previous data is put back automatically.
+ *  - While a restore runs `ctx.isRestoring` is true and `app.ts` answers every /api request with 503.
+ */
 import { DatabaseSync } from 'node:sqlite';
 import {
   closeSync, copyFileSync, existsSync, openSync, readdirSync, readSync, renameSync, rmSync, statSync,
@@ -9,19 +24,29 @@ import { backupStamp } from '../lib/dates.ts';
 import { currentVersion, latestVersion, migrate, REQUIRED_TABLES } from '../db/migrate.ts';
 import { logAudit } from './audit.service.ts';
 
+/** Why a backup was made: at start-up, by the owner, or automatically just before a restore. */
 export type BackupReason = 'startup' | 'manual' | 'pre-restore';
 export interface BackupInfo { name: string; reason: BackupReason; sizeBytes: number; createdAt: string }
 
+/**
+ * The only file names the system recognises as its own backups: `viman-YYYYMMDD-HHmmss-<reason>[-n].db`.
+ * The route also uses it to reject a path-like name (so a restore request can never point outside the
+ * backups folder).
+ */
 export const BACKUP_NAME_RE = /^viman-\d{8}-\d{6}-(startup|manual|pre-restore)(-\d{1,3})?\.db$/;
+/** How many start-up/manual backups are kept. */
 export const KEEP_REGULAR = 30;
+/** How many pre-restore safety copies are kept. */
 export const KEEP_PRE_RESTORE = 10;
 
+/** First 16 bytes of every SQLite file; checked before opening an uploaded file as a database. */
 const SQLITE_HEADER = 'SQLite format 3\u0000';
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Describes one file in the backups folder, or null when it is not one of our backups (or not a plain file). */
 function infoFor(ctx: AppContext, name: string): BackupInfo | null {
   const m = BACKUP_NAME_RE.exec(name);
   if (!m) return null;
@@ -39,15 +64,27 @@ function infoFor(ctx: AppContext, name: string): BackupInfo | null {
   }
 }
 
+/** The `YYYYMMDD-HHmmss` part of a backup name, used for ordering. */
 function stampOf(name: string): string {
   // "viman-" + "YYYYMMDD-HHmmss"
   return name.slice(6, 21);
 }
 
+/**
+ * Makes a consistent snapshot of the live database in the backups folder, then trims old backups.
+ *
+ * The snapshot is written to a `.tmp` file first and renamed into place, so a power cut can never leave a
+ * half-written file that looks like a good backup (leftover `.tmp` files are removed at the next start-up).
+ *
+ * @param reason 'startup' | 'manual' | 'pre-restore' (becomes part of the file name).
+ * @param now    Time used in the file name (tests pass a fixed value).
+ * @throws AppError 500 BACKUP_FAILED.
+ */
 export function createBackup(ctx: AppContext, reason: BackupReason, now: Date = new Date()): BackupInfo {
   try {
     const base = `viman-${backupStamp(now)}-${reason}`;
     let name = `${base}.db`;
+    // Two backups in the same second get "-2", "-3" ... instead of overwriting each other.
     for (let n = 2; existsSync(join(ctx.backupsDir, name)); n++) name = `${base}-${n}.db`;
     const finalPath = join(ctx.backupsDir, name);
     const tmpPath = `${finalPath}.tmp`;
@@ -69,6 +106,7 @@ export function createBackup(ctx: AppContext, reason: BackupReason, now: Date = 
   }
 }
 
+/** Lists the backups in the folder, newest first (by the stamp in the name, then file time, then name). */
 export function listBackups(ctx: AppContext): BackupInfo[] {
   let names: string[];
   try {
@@ -91,6 +129,13 @@ export function listBackups(ctx: AppContext): BackupInfo[] {
   return items;
 }
 
+/**
+ * Deletes backups beyond the retention limits: the 30 newest start-up/manual ones and the 10 newest
+ * pre-restore ones are kept. A file that cannot be deleted (e.g. locked on Windows) is skipped and retried
+ * on the next rotation.
+ *
+ * @returns The names that were deleted.
+ */
 export function rotateBackups(ctx: AppContext): string[] {
   const all = listBackups(ctx);
   const regular = all.filter((b) => b.reason !== 'pre-restore');
@@ -108,6 +153,15 @@ export function rotateBackups(ctx: AppContext): string[] {
   return deleted;
 }
 
+/**
+ * Checks that a file is a usable Viman Mobile database WITHOUT changing it.
+ * Gates in order: (1) SQLite header, (2) opens read-only, (3) `integrity_check` = ok, (4) required tables exist,
+ * (5) its schema version is not newer than this system's.
+ *
+ * @returns The file's schema version.
+ * @throws AppError 422 RESTORE_INVALID_FILE / RESTORE_INTEGRITY_FAILED / RESTORE_SCHEMA_MISSING /
+ *   RESTORE_SCHEMA_TOO_NEW.
+ */
 export function validateDatabaseFile(filePath: string): { schemaVersion: number } {
   const notDb = (): AppError =>
     new AppError(422, 'RESTORE_INVALID_FILE', 'This file is not a Viman Mobile database.');
@@ -173,11 +227,23 @@ export function validateDatabaseFile(filePath: string): { schemaVersion: number 
   }
 }
 
+/** Removes the `-wal` / `-shm` side files of a database file (they belong to the OLD file and must not outlive it). */
 function removeSidecars(dbPath: string): void {
   rmSync(`${dbPath}-wal`, { force: true });
   rmSync(`${dbPath}-shm`, { force: true });
 }
 
+/**
+ * Replaces the live database with the contents of `sourcePath` (a backup or an uploaded file).
+ *
+ * Sequence: copy to a candidate file next to the live DB -> validate it (live DB untouched if it fails) ->
+ * safety backup of the current data -> close, remove stale `-wal`/`-shm`, atomic rename over `viman.db` ->
+ * reopen -> migrate (an older backup is upgraded to this version) -> audit entry. If anything fails after the
+ * swap began, the safety backup is copied back and the owner sees "nothing was lost".
+ *
+ * @param label What to show in the audit log (a backup name, or `upload:<file name>`).
+ * @throws AppError 409 RESTORE_IN_PROGRESS, 422 RESTORE_* (validation), 500 RESTORE_FAILED.
+ */
 export function restoreFromFile(
   ctx: AppContext,
   sourcePath: string,
@@ -186,6 +252,7 @@ export function restoreFromFile(
   if (ctx.isRestoring) {
     throw new AppError(409, 'RESTORE_IN_PROGRESS', 'Another restore is already running.');
   }
+  // From here until `finally`, app.ts answers every /api request with 503 so nothing writes mid-swap.
   ctx.isRestoring = true;
   const candidate = join(ctx.dataDir, 'restore-candidate.tmp.db');
   try {
@@ -232,6 +299,7 @@ export function restoreFromFile(
         'The restore failed and your previous data was put back. Nothing was lost.');
     }
   } finally {
+    // Always clean up the candidate (and any -wal/-shm opened on it) and let requests through again.
     rmSync(candidate, { force: true });
     removeSidecars(candidate);
     ctx.isRestoring = false;
@@ -241,6 +309,12 @@ export function restoreFromFile(
 /** Temp files a crash (power cut) could leave behind; safe to delete at startup. */
 const STALE_TEMP_RE = /^(upload-\d+\.tmp\.db|restore-candidate\.tmp\.db(-wal|-shm)?|viman\.db\.rollback\.tmp)$/;
 
+/**
+ * Removes leftovers of an interrupted backup/restore/upload from the data and backups folders.
+ * Only files matching the exact temp-file name patterns are touched; real backups and `viman.db` never match.
+ *
+ * @returns The names that were removed.
+ */
 export function cleanupStaleTempFiles(ctx: AppContext): string[] {
   const removed: string[] = [];
   const sweep = (dir: string, match: (name: string) => boolean): void => {
@@ -256,7 +330,10 @@ export function cleanupStaleTempFiles(ctx: AppContext): string[] {
   return removed;
 }
 
-/** Newest backup names in a backups folder, readable without an open database (for recovery messages). */
+/**
+ * Newest backup names in a backups folder, readable without an open database (for recovery messages when the
+ * live database is damaged and the system cannot start).
+ */
 export function newestBackupNames(backupsDir: string, limit: number): string[] {
   let names: string[];
   try { names = readdirSync(backupsDir); } catch { return []; }

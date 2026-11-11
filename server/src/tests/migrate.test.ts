@@ -1,3 +1,10 @@
+// Schema migrations (db/migrate.ts) - database level, in-memory SQLite and temp migration folders.
+// Protects data safety across app upgrades: migrations run once, in order, inside a transaction (a failing one rolls back
+// completely), each applied file's checksum is stored so a changed historical migration is detected, a database from a
+// NEWER app is refused, and old databases upgrade without losing data. Also checks the table-level guards created by
+// the early migrations (audit_logs append-only, settings/audit JSON validity).
+// Organised as a single list of migration scenarios.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -13,6 +20,7 @@ afterEach(async () => {
   await env.cleanup();
 });
 
+// Empty in-memory database (not yet migrated), registered for cleanup.
 function mem(): DatabaseSync {
   const c = new DatabaseSync(':memory:');
   conns.push(c);
@@ -26,6 +34,7 @@ function codeOf(fn: () => unknown): { code?: string; message: string } {
   throw new Error('expected throw');
 }
 
+// Applying, repeating, upgrading and rejecting migrations.
 describe('migrate', () => {
   it('fresh database migrates to the latest version with the Phase 1 tables', () => {
     const c = mem();
@@ -38,6 +47,7 @@ describe('migrate', () => {
     expect(latestVersion()).toBeGreaterThanOrEqual(2);
   });
 
+  // Starting the app twice must not re-run migrations (idempotent).
   it('second run applies nothing', () => {
     const c = mem();
     migrate(c);
@@ -46,6 +56,7 @@ describe('migrate', () => {
     expect(r.version).toBe(latestVersion());
   });
 
+  // Windows (CRLF) and Linux (LF) copies of one migration must count as identical, so a git line-ending change is not mistaken for tampering.
   it('checksum is the same for CRLF and LF text and differs for different text', () => {
     expect(checksumOf('a\r\nb\r\n')).toBe(checksumOf('a\nb\n'));
     expect(checksumOf('a\nb\n')).not.toBe(checksumOf('a\nc\n'));
@@ -53,6 +64,7 @@ describe('migrate', () => {
     expect(m.checksum).toBe(checksumOf(m.sql.replaceAll('\n', '\r\n')));
   });
 
+  // If an already-applied migration file no longer matches what was recorded, stop: the database history is not what the app expects.
   it('tampered checksum row -> MIGRATION_CHECKSUM_MISMATCH', () => {
     const c = mem();
     migrate(c);
@@ -60,6 +72,7 @@ describe('migrate', () => {
     expect(codeOf(() => migrate(c)).code).toBe('MIGRATION_CHECKSUM_MISMATCH');
   });
 
+  // Never run an older app on a newer database; it could corrupt data it does not understand.
   it('db version newer than the app -> MIGRATION_DB_TOO_NEW', () => {
     const c = mem();
     migrate(c);
@@ -67,6 +80,7 @@ describe('migrate', () => {
     expect(codeOf(() => migrate(c)).code).toBe('MIGRATION_DB_TOO_NEW');
   });
 
+  // A broken migration is rolled back in full and reports which file failed; the database stays at version 1.
   it('a failing 002 file aborts with its name, rolls back, and version stays 1', () => {
     const dir = env.newDir();
     const sql1 = readFileSync(join(MIGRATIONS_DIR, '001_foundation.sql'), 'utf8');
@@ -108,6 +122,7 @@ describe('migrate', () => {
     expect(loadMigrations(dir).map((m) => m.version)).toEqual([1]);
   });
 
+  // Audit rows can never be changed or removed (section 12), enforced by triggers.
   it('audit_logs is append-only: UPDATE and DELETE are refused, INSERT works', () => {
     const c = mem();
     migrate(c);
@@ -122,6 +137,7 @@ describe('migrate', () => {
     expect(trg).toEqual(expect.arrayContaining(['audit_logs_no_update', 'audit_logs_no_delete']));
   });
 
+  // An early install upgrades to the latest schema, gains the append-only triggers, and keeps its existing audit row.
   it('a version-1 database upgrades to latest and gains the triggers; data is kept', () => {
     const dir = env.newDir();
     writeFileSync(join(dir, '001_foundation.sql'), readFileSync(join(MIGRATIONS_DIR, '001_foundation.sql'), 'utf8'));

@@ -1,3 +1,9 @@
+// Supplier API (GET/POST/PUT /suppliers) - API level (Fastify inject, real temp database).
+// Protects the supplier contract: unique names ignoring case, field length limits, no hard deletes (suppliers are
+// deactivated instead, section 12), one audit row per real change and none for no-ops, and rollback when the audit
+// write fails. Suppliers are referenced by purchases, so an accidental duplicate or deletion would corrupt history.
+// Organised by endpoint: list/search, create, update, then persistence.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { auditRows, breakAudit, count, get, post, put, raw, SUPPLIER_KEYS } from './helpers/catalog.ts';
@@ -5,6 +11,7 @@ import { auditRows, breakAudit, count, get, post, put, raw, SUPPLIER_KEYS } from
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 
+// Listing and searching suppliers.
 describe('GET /suppliers', () => {
   it('empty list', async () => {
     const { app } = await env.build();
@@ -47,6 +54,7 @@ describe('GET /suppliers', () => {
   });
 });
 
+// Creating suppliers: trimming, limits, duplicates and audit.
 describe('POST /suppliers', () => {
   it('201 with exact shape, trimmed fields, defaults for phone/notes', async () => {
     const { app } = await env.build();
@@ -127,6 +135,7 @@ describe('POST /suppliers', () => {
   });
 });
 
+// Editing, activating/deactivating suppliers.
 describe('PUT /suppliers/:id', () => {
   const mk = async (app: Parameters<typeof post>[0], name = 'Acme') =>
     (await post(app, '/suppliers', { name, phone: '111', notes: 'n' })).body.item;
@@ -221,6 +230,7 @@ describe('PUT /suppliers/:id', () => {
   });
 });
 
+// Data must still be there after the app is stopped and started again on the same folder.
 describe('persistence', () => {
   it('suppliers survive re-opening the same data directory', async () => {
     const first = await env.build();

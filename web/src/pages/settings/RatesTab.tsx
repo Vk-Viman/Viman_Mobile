@@ -1,3 +1,10 @@
+/**
+ * Settings > Commission rates tab (route "/settings/rates"): the share of each mobile reload and each EZCash bill
+ * payment that the shop keeps as commission.
+ * API: GET /settings and PUT /settings with only the `rates` section (api/settings.ts).
+ * The owner types percentages ("6.25"); they are sent as integer basis points (625 = 6.25%) so rates are never
+ * stored or calculated as floating-point numbers (BUSINESS_RULES.md section 0).
+ */
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Card } from '../../components/Card';
@@ -14,16 +21,22 @@ import { errorMessage, serverFields } from './formUtils';
 type Key = keyof RateSettings;
 const LABELS: Record<Key, string> = { reloadCommissionBp: 'Reload commission (%)', ezcashCommissionBp: 'EZCash commission (%)' };
 
+/** 100.00% expressed in basis points; a commission above this makes no sense. */
+const MAX_RATE_BP = 10000;
+
+/** Returns an error message for a typed percentage, or undefined when it is valid. */
 function checkRate(s: string): string | undefined {
   const bp = percentToBp(s);
   if (bp === null) return 'Enter a percentage like 6, 0.8 or 6.25 (up to 2 decimals).';
-  if (bp > 10000) return 'Must be between 0 and 100.';
+  if (bp > MAX_RATE_BP) return 'Must be between 0 and 100.';
   return undefined;
 }
 
+/** The editable form. Values are held as text so the owner can type freely; conversion to basis points happens on Save. */
 function RatesForm({ initial }: { initial: RateSettings }) {
   const init = { reloadCommissionBp: bpToPercent(initial.reloadCommissionBp), ezcashCommissionBp: bpToPercent(initial.ezcashCommissionBp) };
   const [v, setV] = useState<Record<Key, string>>(init);
+  // Errors are hidden until the first Save attempt.
   const [touched, setTouched] = useState(false);
   const update = useUpdateSettings();
   const toast = useToast();
@@ -67,6 +80,7 @@ function RatesForm({ initial }: { initial: RateSettings }) {
   );
 }
 
+/** The tab: loading spinner, error with retry, or the form (re-created after each save, see GeneralTab). */
 export function RatesTab() {
   const q = useSettings();
   return (

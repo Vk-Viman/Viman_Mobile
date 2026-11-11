@@ -1,24 +1,29 @@
+/**
+ * routes/purchases.ts - HTTP endpoints for supplier purchases and purchase returns.
+ *
+ * Layer: route (thin). Validates the request shape with JSON schema, calls `purchases.service.ts`, shapes the
+ * response. All business rules (R4 return value, R11 one book per bill, R-FD, R-RD, C7) are in the service.
+ *
+ *   POST /purchases              create (201; 200 when `clientRef` was already used - idempotent retry)
+ *   GET  /purchases              list with filters       GET /purchases/:id   one purchase
+ *   POST /purchases/:id/void     void (R1)               POST /purchases/:id/returns   return goods
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
-import { isIsoDate } from '../lib/dates.ts';
 import {
   createPurchase, createPurchaseReturn, getPurchase, listPurchases, voidPurchase,
 } from '../services/purchases.service.ts';
 import type { PurchaseCreate, PurchaseReturnCreate } from '../services/purchases.service.ts';
-import { fail, idParamsSchema, intQuery, parseId } from './catalog-query.ts';
+import {
+  checkQueryDates, clientRef, dateField, dateQuery, bookQuery, idParamsSchema, intQuery, parseId, parsePaging,
+  voidBody,
+} from './catalog-query.ts';
 
-export const dateQuery = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } as const;
+// Re-exported: other route files historically import these two from here.
+export { checkQueryDates, dateQuery };
 
-/** Digit-pattern dates must also be real calendar dates (400 VALIDATION_ERROR). */
-export function checkQueryDates(raw: { from?: string; to?: string }): void {
-  const bad: Record<string, string> = {};
-  if (raw.from !== undefined && !isIsoDate(raw.from)) bad.from = 'must be a valid date (YYYY-MM-DD)';
-  if (raw.to !== undefined && !isIsoDate(raw.to)) bad.to = 'must be a valid date (YYYY-MM-DD)';
-  if (Object.keys(bad).length > 0) fail(bad);
-}
-
-const clientRef = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' } as const;
-const dateField = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } as const;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 const listQuery = {
   type: 'object',
@@ -26,7 +31,7 @@ const listQuery = {
   properties: {
     from: dateQuery,
     to: dateQuery,
-    book: { type: 'string', enum: ['shop', 'telecom'] },
+    book: bookQuery,
     supplierId: intQuery,
     status: { type: 'string', enum: ['posted', 'void'] },
     q: { type: 'string', maxLength: 200 },
@@ -35,6 +40,7 @@ const listQuery = {
   },
 } as const;
 
+// The numeric maximums keep every later sum (bill total, pool value) inside JavaScript's safe-integer range.
 const createBody = {
   type: 'object',
   additionalProperties: false,
@@ -64,13 +70,6 @@ const createBody = {
   },
 } as const;
 
-const voidBody = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['reason'],
-  properties: { reason: { type: 'string' } },
-} as const;
-
 const returnBody = {
   type: 'object',
   additionalProperties: false,
@@ -96,6 +95,7 @@ const returnBody = {
   },
 } as const;
 
+/** Registers the purchase endpoints under the `/api/v1` prefix. */
 export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/purchases', { schema: { body: createBody } }, async (request, reply) => {
     const { item, created } = createPurchase(ctx, request.body as PurchaseCreate);
@@ -108,9 +108,7 @@ export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): v
       q?: string; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
-    const limit = raw.limit === undefined ? 50 : Number(raw.limit);
-    const offset = raw.offset === undefined ? 0 : Number(raw.offset);
-    if (limit < 1 || limit > 200) fail({ limit: 'must be between 1 and 200' });
+    const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listPurchases>[1] = { limit, offset };
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;

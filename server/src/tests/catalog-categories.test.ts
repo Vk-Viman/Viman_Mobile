@@ -1,3 +1,10 @@
+// Category API (GET/POST/PUT /categories) - API level (Fastify inject, real temp database).
+// Protects the catalog contract in API_CONTRACTS.md and the segment rules: default categories are locked, a category's
+// book (shop/telecom) can only change while it has no products (section 0: segments are disjoint), names are unique
+// ignoring case, every real change writes exactly ONE audit row with full before/after (section 12), and a failed
+// audit write rolls the change back (the data and its audit trail are one transaction).
+// Organised by endpoint: list/filter, create, update, then persistence across a restart.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import {
@@ -12,13 +19,16 @@ const DEFAULTS = [
   'SIM', 'Snacks and Drinks', 'Stationery', 'Tempered Glass',
 ];
 
+// Helper: create a product in a category through the API (used to make a category "non-empty").
 async function newProduct(app: Parameters<typeof post>[0], categoryId: number, name = 'Prod') {
   const r = await post(app, '/products', { name, categoryId, kind: 'stock', sellPriceCents: 100, minPriceCents: 50 });
   expect(r.status).toBe(201);
   return r.body.item;
 }
 
+// Listing: defaults, ordering, filters and query validation.
 describe('GET /categories', () => {
+  // The fresh shop shows the 12 seeded categories, shop book first then A-Z, with exactly the contract's fields.
   it('returns the 12 defaults ordered shop first then name, with the exact item shape', async () => {
     const { app } = await env.build();
     const r = await get(app, '/categories');
@@ -69,6 +79,7 @@ describe('GET /categories', () => {
   });
 });
 
+// Creating owner categories: input rules, duplicate names and audit.
 describe('POST /categories', () => {
   it('creates with 201, trims the name, owner category is not default', async () => {
     const { app, ctx } = await env.build();
@@ -114,6 +125,7 @@ describe('POST /categories', () => {
     expect(auditRows(ctx, 'category')).toHaveLength(2);
   });
 
+  // "Perfume", " perfume " and "PERFUME" are all the same name, even if the other book is chosen; nothing is saved.
   it('DUPLICATE_NAME: case-insensitive, after trimming, across books; no audit/partial row', async () => {
     const { app, ctx } = await env.build();
     for (const name of ['Electronics', 'electronics', '  ELECTRONICS  ', 'scratch cards']) {
@@ -135,6 +147,7 @@ describe('POST /categories', () => {
     expect(rows[0]!.after).toEqual(r.body.item);
   });
 
+  // breakAudit forces the audit insert to fail; the category must not exist afterwards (one transaction).
   it('rolls back the row when its audit write fails', async () => {
     const { app, ctx } = await env.build();
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -147,6 +160,7 @@ describe('POST /categories', () => {
   });
 });
 
+// Renaming, activating/deactivating and moving between books, with the lock rules for default categories.
 describe('PUT /categories/:id', () => {
   it('renames an owner category (trimmed), 200 with item, one audit row with full before/after', async () => {
     const { app, ctx } = await env.build();
@@ -183,6 +197,7 @@ describe('PUT /categories/:id', () => {
     expect((await get(app, '/categories')).body.items.find((i: any) => i.id === c.id).name).toBe('Mine');
   });
 
+  // Seeded categories are part of the report structure, so their name and book are locked (409).
   it('default categories: name, case-only rename and book changes -> 409 DEFAULT_CATEGORY_LOCKED', async () => {
     const { app, ctx } = await env.build();
     const ids = await catIds(app);
@@ -217,6 +232,7 @@ describe('PUT /categories/:id', () => {
     expect(auditRows(ctx).map((a) => a.action)).toEqual(['update', 'update', 'update']);
   });
 
+  // Saving unchanged values must not create noise in the audit log.
   it('no-op PUT returns the item and writes no audit row', async () => {
     const { app, ctx } = await env.build();
     const c = (await post(app, '/categories', { name: 'Mine', book: 'shop' })).body.item;
@@ -229,6 +245,7 @@ describe('PUT /categories/:id', () => {
     expect(auditRows(ctx)).toHaveLength(n);
   });
 
+  // A category with products (even inactive ones) cannot switch book, otherwise those products would move between P&L segments.
   it('book: changes only while productCount = 0, else 409 CATEGORY_HAS_PRODUCTS (inactive products count)', async () => {
     const { app, ctx } = await env.build();
     const c = (await post(app, '/categories', { name: 'Mine', book: 'shop' })).body.item;
@@ -252,6 +269,7 @@ describe('PUT /categories/:id', () => {
     expect(auditRows(ctx, 'category').filter((a) => a.action === 'update')).toHaveLength(3);
   });
 
+  // Deactivating hides a category from new products but never touches existing ones (no hard deletes).
   it('deactivate keeps products; productCount includes inactive; new products cannot use it', async () => {
     const { app } = await env.build();
     const c = (await post(app, '/categories', { name: 'Mine', book: 'shop' })).body.item;
@@ -311,6 +329,7 @@ describe('PUT /categories/:id', () => {
   });
 });
 
+// Data must still be there after the app is stopped and started again on the same folder.
 describe('persistence', () => {
   it('categories survive re-opening the same data directory', async () => {
     const first = await env.build();

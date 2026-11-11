@@ -1,3 +1,15 @@
+// Randomized model check for Phase 4 stock logic - API level plus an independent BigInt model.
+// IDEA: run a long, pseudo-random but fully repeatable series of REAL API operations (purchases, purchase returns and voids,
+// stocktakes - gain/loss/zero - with complete and void, stock losses, goods drawings with void, engine sales). In parallel an
+// independent model, written only from the documented rules (BUSINESS_RULES section 3, API_CONTRACTS) and NOT from the
+// implementation, predicts each product's pool (quantity and value) using its own BigInt rounding. After EVERY step the real
+// database must equal the model, the movement ledger must equal the cache, nothing may be negative, quantity 0 must mean value 0,
+// and the reconciliation check must be ok. Blocked operations (e.g. a loss bigger than stock) must change nothing.
+// WHY a seeded PRNG (mulberry32): the sequence looks random and finds odd combinations nobody would write by hand, yet the same
+// seed always produces the same run, so any failure can be replayed exactly. Three different seeds are used; a final test makes
+// sure every kind of operation and every blocked path was actually exercised across the runs (so the test cannot pass by
+// accident while doing nothing).
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { AppError } from '../lib/errors.ts';
 import { issueStock, reconcileStock } from '../services/inventory.service.ts';
@@ -17,6 +29,7 @@ import { ledgerOf, num, poolOf, sql } from './helpers/phase4.ts';
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 
+// Deterministic random numbers: the same seed always gives the same sequence in [0, 1).
 // ---------- seeded PRNG ----------
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -29,6 +42,7 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+// The independent model: a pool (quantity, value) per product plus a list of movements, all in BigInt.
 // ---------- model ----------
 interface Pool { q: bigint; v: bigint }
 interface Mov { pid: number; date: string; dq: bigint; dv: bigint }
@@ -60,12 +74,17 @@ class Model {
   }
 }
 
+// Bookkeeping records the test keeps about what it has created (purchases, stocktakes, losses, drawings), so it
+// can later return, void or reverse them.
 interface PurchaseRec { id: number; itemId: number; pid: number; units: number; total: number; date: string; age: number; returnedUnits: number; returnedValue: number; voided: boolean }
 interface StocktakeRec { id: number; movs: Array<{ pid: number; dq: bigint; dv: bigint }>; date: string; voided: boolean }
 interface RowRec { id: number; pid: number; q: number; cost: number; date: string; voided: boolean }
 
 interface Setup { s: ApiBase; shop: number[]; tel: number[]; names: Map<number, string> }
 
+// Runs one seeded scenario of 'steps' operations and returns how many times each kind of operation happened.
+// Each loop iteration picks an operation by probability, performs it through the API, applies the SAME business rule to the model,
+// and then checks database == model (dbEqualsModel).
 async function runModel(seed: number, steps: number): Promise<Record<string, number>> {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   const rnd = mulberry32(seed);
@@ -92,6 +111,8 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
   const hit = (k: string): void => { stats[k] = (stats[k] ?? 0) + 1; };
   const randDay = (): number => (chance(0.5) ? 0 : ri(1, 20));
 
+  // The per-step comparison: pool in the database cache == model, ledger sum == cache, never negative, value 0 when quantity is 0,
+  // reconciliation endpoint ok.
   const dbEqualsModel = async (label: string): Promise<void> => {
     for (const pid of all) {
       const p = m.pool(pid);
@@ -391,9 +412,11 @@ async function runModel(seed: number, steps: number): Promise<Record<string, num
   return stats;
 }
 
+// Three seeds of 400 operations each, then a coverage check over all of them.
 describe('randomized model check (seeded)', () => {
   const seeds: Array<[number, number]> = [[20261111, 400], [7, 400], [424242, 400]];
   const total: Record<string, number> = {};
+  // Runs one seed. The minimum counts make sure the run really contained purchases, stocktakes, losses and drawings.
   it.each(seeds)('seed %i: %i operations keep the database equal to the independent model', async (seed, steps) => {
     const stats = await runModel(seed, steps);
     for (const [k, n] of Object.entries(stats)) total[k] = (total[k] ?? 0) + n;
@@ -404,6 +427,8 @@ describe('randomized model check (seeded)', () => {
     expect(stats.draw).toBeGreaterThan(3);
   }, 300000);
 
+  // Coverage guard: every kind of operation (including the blocked ones such as a loss larger than stock, or a gain needing a cost)
+  // happened at least once across the seeds.
   it('across the seeds every operation kind and every blocked path was exercised', () => {
     for (const k of ['purchase', 'return', 'pvoid', 'stocktake', 'stocktake-gain', 'stocktake-loss', 'stocktake-zero', 'stocktake-void',
       'loss', 'loss-void', 'draw', 'draw-void', 'sale', 'loss-blocked', 'draw-blocked', 'sale-blocked', 'stocktake-cost-required']) {

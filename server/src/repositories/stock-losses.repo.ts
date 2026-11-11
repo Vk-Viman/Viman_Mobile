@@ -1,10 +1,20 @@
+/**
+ * repositories/stock-losses.repo.ts - SQL for `stock_losses` (damaged / lost / expired / other stock write-offs).
+ *
+ * Layer: repository. A loss removes stock at the weighted-average cost (BUSINESS_RULES section 11, R2/R3) and
+ * counts in the "Stock adjustments (net)" line of the product's book. The cost is frozen on the row when it is
+ * saved. Rows are never deleted: a void marks `status = 'void'` (R1); migration 005 triggers forbid any other
+ * change. `source = 'damaged_return'` is reserved for losses created by a damaged sales return (section 4, R5).
+ */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { SQL_NOW_UTC } from './sql-helpers.ts';
 
 export type LossBook = 'shop' | 'telecom';
 export type LossReason = 'damaged' | 'lost' | 'expired' | 'other';
 export type LossSource = 'manual' | 'damaged_return';
 export type LossStatus = 'posted' | 'void';
 
+/** One stock loss with its product name. */
 export interface StockLossRow {
   id: number; businessDate: string; postedAt: string; productId: number; productName: string; book: LossBook;
   qty: number; costCents: number; reason: LossReason; note: string; source: LossSource; status: LossStatus;
@@ -31,6 +41,7 @@ function map(r: Raw): StockLossRow {
   };
 }
 
+/** Inserts a loss (status 'posted'; source defaults to 'manual') and returns its id. */
 export function insertStockLoss(conn: DatabaseSync, l: {
   businessDate: string; productId: number; book: LossBook; qty: number; costCents: number; reason: LossReason;
   note: string; clientRef: string; source?: LossSource;
@@ -42,16 +53,22 @@ export function insertStockLoss(conn: DatabaseSync, l: {
   return Number(res.lastInsertRowid);
 }
 
+/** One loss by id, or undefined. */
 export function getStockLoss(conn: DatabaseSync, id: number): StockLossRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE l.id = ?`).get(id) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** The loss already saved under this client reference (idempotent retry), or undefined. */
 export function getStockLossByClientRef(conn: DatabaseSync, ref: string): StockLossRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE l.client_ref = ?`).get(ref) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/**
+ * Lists losses, newest business date first, with the total count and the total cost of POSTED losses
+ * (voided rows are listed but not summed). `from`/`to` are inclusive business dates.
+ */
 export function listStockLosses(conn: DatabaseSync, q: {
   from?: string; to?: string; productId?: number; book?: LossBook; reason?: LossReason; status?: LossStatus;
   limit: number; offset: number;
@@ -76,6 +93,6 @@ export function listStockLosses(conn: DatabaseSync, q: {
 /** posted -> void; the DB triggers forbid anything else. voided_at is the DB clock. */
 export function markStockLossVoid(conn: DatabaseSync, id: number, reason: string): void {
   conn.prepare(
-    `UPDATE stock_losses SET status = 'void', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), void_reason = ? WHERE id = ?`,
+    `UPDATE stock_losses SET status = 'void', voided_at = ${SQL_NOW_UTC}, void_reason = ? WHERE id = ?`,
   ).run(reason, id);
 }

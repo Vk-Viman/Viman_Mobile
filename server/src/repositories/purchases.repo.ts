@@ -1,13 +1,26 @@
+/**
+ * repositories/purchases.repo.ts - SQL for supplier purchases and purchase returns.
+ *
+ * Tables: `purchases` (bill header), `purchase_items` (lines), `purchase_returns` and
+ * `purchase_return_items` (goods sent back). Layer: repository - no business rules; `purchases.service.ts`
+ * implements R4 (return/void removal value), R11 (paid in full in cash, one book per bill), R-FD (no future
+ * dates) and R-RD (return not before the original). The database triggers of migration 004 are the backstop:
+ * a purchase can only go posted -> void, its date and amounts never change, returns are append-only, and
+ * `client_ref` is unique so a repeated submission cannot create a second purchase.
+ */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { escapeLike, SQL_NOW_UTC } from './sql-helpers.ts';
 
 export type PurchaseBook = 'shop' | 'telecom';
 export type PurchaseStatus = 'posted' | 'void';
 
+/** Purchase header with the supplier name (null when no supplier was chosen). */
 export interface PurchaseHeaderRow {
   id: number; businessDate: string; postedAt: string; supplierId: number | null; supplierName: string | null;
   billNo: string; book: PurchaseBook; totalCents: number; status: PurchaseStatus; clientRef: string;
   notes: string; voidedAt: string | null; voidReason: string | null;
 }
+/** One bought line: `units = packs x packSize`; `lineTotalCents` is the exact price paid for the line. */
 export interface PurchaseItemRow {
   id: number; purchaseId: number; productId: number; productName: string; packs: number; packSize: number;
   units: number; lineTotalCents: number; returnedUnits: number;
@@ -50,10 +63,7 @@ function mapHeader(r: RawHeader): PurchaseHeaderRow {
   };
 }
 
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (m) => `\\${m}`);
-}
-
+/** Inserts a purchase header (status 'posted') and returns its id. */
 export function insertPurchase(conn: DatabaseSync, p: {
   businessDate: string; supplierId: number | null; billNo: string; book: PurchaseBook; totalCents: number;
   notes: string; clientRef: string;
@@ -65,6 +75,7 @@ export function insertPurchase(conn: DatabaseSync, p: {
   return Number(res.lastInsertRowid);
 }
 
+/** Inserts one purchase line and returns its id. */
 export function insertPurchaseItem(conn: DatabaseSync, i: {
   purchaseId: number; productId: number; packs: number; packSize: number; units: number; lineTotalCents: number;
 }): number {
@@ -75,16 +86,19 @@ export function insertPurchaseItem(conn: DatabaseSync, i: {
   return Number(res.lastInsertRowid);
 }
 
+/** One purchase header by id, or undefined. */
 export function getPurchase(conn: DatabaseSync, id: number): PurchaseHeaderRow | undefined {
   const r = conn.prepare(`${HEADER_SELECT} WHERE p.id = ?`).get(id) as unknown as RawHeader | undefined;
   return r ? mapHeader(r) : undefined;
 }
 
+/** The purchase already saved under this client reference (idempotent retry), or undefined. */
 export function getPurchaseByClientRef(conn: DatabaseSync, ref: string): PurchaseHeaderRow | undefined {
   const r = conn.prepare(`${HEADER_SELECT} WHERE p.client_ref = ?`).get(ref) as unknown as RawHeader | undefined;
   return r ? mapHeader(r) : undefined;
 }
 
+/** The lines of one purchase in entry order. */
 export function listPurchaseItems(conn: DatabaseSync, purchaseId: number): PurchaseItemRow[] {
   const rows = conn.prepare(
     `SELECT i.id, i.purchase_id, i.product_id, pr.name AS product_name, i.packs, i.pack_size, i.units,
@@ -98,6 +112,10 @@ export function listPurchaseItems(conn: DatabaseSync, purchaseId: number): Purch
   }));
 }
 
+/**
+ * Lists purchase headers, newest business date first, with the total number of matches.
+ * `q` searches the bill number; `from`/`to` are inclusive business dates.
+ */
 export function listPurchases(conn: DatabaseSync, q: {
   from?: string; to?: string; book?: PurchaseBook; supplierId?: number; status?: PurchaseStatus; q?: string;
   limit: number; offset: number;
@@ -120,14 +138,19 @@ export function listPurchases(conn: DatabaseSync, q: {
 /** posted -> void; the DB triggers forbid anything else. voided_at is the DB clock (= void posting time). */
 export function markPurchaseVoid(conn: DatabaseSync, id: number, reason: string): void {
   conn.prepare(
-    `UPDATE purchases SET status = 'void', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), void_reason = ? WHERE id = ?`,
+    `UPDATE purchases SET status = 'void', voided_at = ${SQL_NOW_UTC}, void_reason = ? WHERE id = ?`,
   ).run(reason, id);
 }
 
+/**
+ * Adds to a line's returned-units counter. The trigger `trg_purchase_items_immutable` allows only this
+ * column to change and only upwards, and the table CHECK keeps it within the units bought.
+ */
 export function addReturnedUnits(conn: DatabaseSync, itemId: number, units: number): void {
   conn.prepare('UPDATE purchase_items SET returned_units = returned_units + ? WHERE id = ?').run(units, itemId);
 }
 
+/** Inserts a purchase-return header and returns its id. Triggers enforce R-FD, R-RD and "not a voided purchase". */
 export function insertPurchaseReturn(conn: DatabaseSync, r: {
   purchaseId: number; businessDate: string; refundCents: number; note: string; clientRef: string;
 }): number {
@@ -137,6 +160,7 @@ export function insertPurchaseReturn(conn: DatabaseSync, r: {
   return Number(res.lastInsertRowid);
 }
 
+/** Inserts one returned line (units and the value credited for them) and returns its id. */
 export function insertPurchaseReturnItem(conn: DatabaseSync, i: {
   purchaseReturnId: number; purchaseItemId: number; units: number; valueCents: number;
 }): number {
@@ -155,21 +179,25 @@ function mapReturn(r: RawReturn): PurchaseReturnRow {
 
 const RETURN_SELECT = 'SELECT id, purchase_id, business_date, posted_at, refund_cents, note, client_ref FROM purchase_returns';
 
+/** The return already saved under this client reference (idempotent retry), or undefined. */
 export function getPurchaseReturnByClientRef(conn: DatabaseSync, ref: string): PurchaseReturnRow | undefined {
   const r = conn.prepare(`${RETURN_SELECT} WHERE client_ref = ?`).get(ref) as unknown as RawReturn | undefined;
   return r ? mapReturn(r) : undefined;
 }
 
+/** One return header by id, or undefined. */
 export function getPurchaseReturn(conn: DatabaseSync, id: number): PurchaseReturnRow | undefined {
   const r = conn.prepare(`${RETURN_SELECT} WHERE id = ?`).get(id) as unknown as RawReturn | undefined;
   return r ? mapReturn(r) : undefined;
 }
 
+/** All returns of one purchase in posting order (partial returns may be dated in any order, so not by date). */
 export function listPurchaseReturns(conn: DatabaseSync, purchaseId: number): PurchaseReturnRow[] {
   const rows = conn.prepare(`${RETURN_SELECT} WHERE purchase_id = ? ORDER BY posted_at, id`).all(purchaseId) as unknown as RawReturn[];
   return rows.map(mapReturn);
 }
 
+/** The lines of one return, with product names. */
 export function listPurchaseReturnItems(conn: DatabaseSync, purchaseReturnId: number): PurchaseReturnItemRow[] {
   const rows = conn.prepare(
     `SELECT ri.id, ri.purchase_return_id, ri.purchase_item_id, pi.product_id, pr.name AS product_name, ri.units, ri.value_cents
@@ -184,6 +212,7 @@ export function listPurchaseReturnItems(conn: DatabaseSync, purchaseReturnId: nu
   }));
 }
 
+/** Total value already credited by earlier returns of one purchase line (used to price the final unit, C7). */
 export function returnedValueSoFar(conn: DatabaseSync, purchaseItemId: number): number {
   const r = conn.prepare('SELECT COALESCE(SUM(value_cents), 0) AS v FROM purchase_return_items WHERE purchase_item_id = ?')
     .get(purchaseItemId) as unknown as { v: N };

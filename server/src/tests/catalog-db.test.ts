@@ -1,3 +1,13 @@
+// Catalog database rules (migration 003: categories, products, suppliers) - database level, raw SQL on
+// in-memory SQLite, no HTTP.
+// Protects the "last line of defence" in the schema (DATABASE_SCHEMA.md): even if a bug in the API let a bad write
+// through, SQLite itself refuses it. Covers: unique names/codes ignoring case, price rules (min <= sell, no negatives),
+// services never hold stock, a product's book always equals its category's book (segments are disjoint, section 0),
+// default categories are locked, kind never changes after creation.
+// Also proves the upgrade path: an old (version 2) database migrates forward without losing data, and a version-2
+// backup can still be restored through the API.
+// Organised by table: migration, categories, products, suppliers, restore.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -14,6 +24,7 @@ afterEach(async () => {
   await env.cleanup();
 });
 
+// Fresh in-memory database with every migration applied (the same schema the shop uses).
 function mem(): DatabaseSync {
   const c = new DatabaseSync(':memory:');
   c.exec('PRAGMA foreign_keys = ON');
@@ -22,6 +33,7 @@ function mem(): DatabaseSync {
   return c;
 }
 
+// The 11 shop categories seeded on first run, in seed order (Scratch Cards, the telecom one, is checked separately).
 const DEFAULTS = [
   'Phone Accessories', 'Tempered Glass', 'Phone Covers', 'Electronics', 'Stationery',
   'Snacks and Drinks', 'Party Items', 'Perfume', 'Pooja Items', 'SIM', 'Other',
@@ -30,12 +42,14 @@ const DEFAULTS = [
 const catId = (c: DatabaseSync, name: string): number =>
   Number((c.prepare('SELECT id FROM categories WHERE name = ?').get(name) as { id: number | bigint }).id);
 
+// Raw-SQL helper: insert a category and return its id.
 function addCat(c: DatabaseSync, name: string, book = 'shop'): number {
   return Number(c.prepare('INSERT INTO categories (name, book) VALUES (?, ?)').run(name, book).lastInsertRowid);
 }
 
 interface P { code?: string | null; name?: string; cat?: number; kind?: string; book?: string; sell?: number; min?: number; reorder?: number; qty?: number; value?: number }
 let seq = 0;
+// Raw-SQL helper: insert a product (book copied from its category unless a test overrides it to provoke an error).
 function addProd(c: DatabaseSync, p: P = {}): number {
   const cat = p.cat ?? catId(c, 'Other');
   const book = p.book ?? (c.prepare('SELECT book FROM categories WHERE id = ?').get(cat) as { book: string }).book;
@@ -51,6 +65,8 @@ const msg = (fn: () => unknown): string => {
   throw new Error('expected throw');
 };
 
+// Builds a database that only has migrations 001-002 applied, i.e. what an older install looked like,
+// so upgrade and restore tests start from a realistic old file.
 function v2Db(dir: string, path: string): DatabaseSync {
   const v2dir = join(dir, 'mig');
   mkdirSync(v2dir, { recursive: true });
@@ -62,7 +78,9 @@ function v2Db(dir: string, path: string): DatabaseSync {
   return c;
 }
 
+// The migration creates the catalog tables, guard triggers and indexes, and upgrades old data safely.
 describe('migration 003', () => {
+  // A new database ends at the latest schema version and has every table, trigger and index the app relies on.
   it('fresh DB reaches latestVersion with the catalog tables, triggers and indexes', () => {
     const c = mem();
     expect(latestVersion()).toBeGreaterThanOrEqual(3);
@@ -77,6 +95,7 @@ describe('migration 003', () => {
     expect(names('index')).toEqual(expect.arrayContaining(['idx_products_category', 'idx_products_active_name']));
   });
 
+  // Owner-facing starting list: 11 shop categories plus "Scratch Cards" in the telecom book, none with products yet.
   it('seeds 12 default categories (11 shop + Scratch Cards telecom), all is_default=1, active', () => {
     const c = mem();
     const rows = c.prepare('SELECT name, book, is_default, active FROM categories ORDER BY id').all() as
@@ -89,6 +108,7 @@ describe('migration 003', () => {
     expect((c.prepare('SELECT COUNT(*) AS n FROM products').get() as { n: number }).n).toBe(0);
   });
 
+  // Upgrading must keep existing settings rows and be safe to run twice (second run applies nothing).
   it('upgrades a v2-only database to v3 keeping existing data', () => {
     const dir = env.newDir();
     const c = v2Db(dir, join(dir, 'v2.db'));
@@ -105,7 +125,9 @@ describe('migration 003', () => {
   });
 });
 
+// Rules enforced by the database on categories (names, books, default-category locking).
 describe('categories constraints', () => {
+  // "Electronics" and "electronics" are the same category to the owner, in any book; blank names and unknown books are refused.
   it('names are unique case-insensitively; blank names rejected; book enum enforced', () => {
     const c = mem();
     expect(msg(() => addCat(c, 'electronics'))).toMatch(/UNIQUE/);
@@ -118,6 +140,7 @@ describe('categories constraints', () => {
     expect(msg(() => c.prepare("UPDATE categories SET name = '  ' WHERE name = 'Mine'").run())).toMatch(/CHECK/);
   });
 
+  // Seeded categories keep their name and book forever (reports depend on them) but can be deactivated and reactivated.
   it('default categories: name (incl. case-only) and book locked; active changeable; same-value update ok', () => {
     const c = mem();
     expect(msg(() => c.prepare("UPDATE categories SET name = 'Elec' WHERE name = 'Electronics'").run())).toMatch(/DEFAULT_CATEGORY_LOCKED/);
@@ -130,6 +153,7 @@ describe('categories constraints', () => {
     c.prepare("UPDATE categories SET active = 1 WHERE name = 'Electronics'").run();
   });
 
+  // A category's book decides which cash book/P&L its products belong to, so it can only change while empty (CATEGORY_HAS_PRODUCTS).
   it('owner category: rename ok; book change ok only without products (CATEGORY_HAS_PRODUCTS)', () => {
     const c = mem();
     const id = addCat(c, 'Mine');
@@ -142,6 +166,7 @@ describe('categories constraints', () => {
     c.prepare('UPDATE categories SET active = 0 WHERE id = ?').run(id);
   });
 
+  // Categories are never hard-deleted while products reference them (no hard deletes, section 12).
   it('FK restrict: a category with products cannot be deleted; an empty owner category can', () => {
     const c = mem();
     const id = addCat(c, 'Mine');
@@ -152,7 +177,9 @@ describe('categories constraints', () => {
   });
 });
 
+// Rules enforced by the database on products (uniqueness, price/stock checks, book/kind consistency).
 describe('products constraints', () => {
+  // Two items can never share a name or a code ("AbC" = "abc"); products without a code are unlimited.
   it('names and codes unique case-insensitively; multiple NULL codes allowed', () => {
     const c = mem();
     addProd(c, { name: 'Cable', code: 'AbC' });
@@ -169,6 +196,8 @@ describe('products constraints', () => {
     expect(msg(() => addProd(c, { name: 'A', code: '' }))).toMatch(/CHECK/);
   });
 
+  // Minimum price may equal but never exceed the selling price (R13 warns at sale time, the catalog itself stays consistent);
+  // no negative prices, reorder level, quantity or value.
   it('price/reorder/qty/value CHECKs', () => {
     const c = mem();
     expect(msg(() => addProd(c, { name: 'a', sell: 100, min: 101 }))).toMatch(/CHECK/);
@@ -185,6 +214,7 @@ describe('products constraints', () => {
     expect(msg(() => c.prepare('UPDATE products SET sell_price_cents = 10 WHERE id = ?').run(id))).toMatch(/CHECK/);
   });
 
+  // Services (photocopy, printing) have no stock pool, so they can never carry quantity or value.
   it('services cannot hold qty or value, even via update', () => {
     const c = mem();
     expect(msg(() => addProd(c, { name: 's1', kind: 'service', qty: 1 }))).toMatch(/CHECK/);
@@ -197,6 +227,8 @@ describe('products constraints', () => {
     expect([Number(row.q), Number(row.v)]).toEqual([0, 0]);
   });
 
+  // Segments are disjoint (section 0): a product must sit in the same book as its category, and neither kind nor book can be
+  // changed afterwards (stock history would no longer make sense).
   it('PRODUCT_BOOK_MISMATCH on insert and on category move; kind/book immutable', () => {
     const c = mem();
     expect(msg(() => addProd(c, { name: 'x', cat: catId(c, 'Scratch Cards'), book: 'shop' }))).toMatch(/PRODUCT_BOOK_MISMATCH/);
@@ -218,6 +250,7 @@ describe('products constraints', () => {
   });
 });
 
+// Suppliers: unique name (any case), not blank.
 describe('suppliers constraints', () => {
   it('unique case-insensitive name, blank rejected, defaults', () => {
     const c = mem();
@@ -229,7 +262,10 @@ describe('suppliers constraints', () => {
   });
 });
 
+// End-to-end proof that an old backup file can be restored and then used.
 describe('restore of a v2 backup', () => {
+  // Restore accepts an older-version file, migrates it to the latest version, keeps its settings (rates) and the
+  // catalog works afterwards (a product can be created).
   it('uploaded v2 database restores, migrates to latest, catalog works', async () => {
     const dir = env.newDir();
     const v2 = join(dir, 'v2.db');

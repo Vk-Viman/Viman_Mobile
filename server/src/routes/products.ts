@@ -1,10 +1,25 @@
+/**
+ * routes/products.ts - HTTP endpoints for products.
+ *
+ *   GET /products?q=&book=&categoryId=&lowStock=&active=&limit=&offset=   list (default 100, max 500)
+ *   GET /products/:id    one product        POST /products   create (201)        PUT /products/:id   edit
+ *
+ * Layer: route (thin) -> `catalog.service.ts`. Rules (book comes from the category, kind/book never change,
+ * C12 selling price is owner-entered, unique names/codes) live in the service and migration 003 triggers.
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import {
   createProduct, getProductItem, listProductItems, updateProductItem,
 } from '../services/catalog.service.ts';
 import type { Book, ProductCreate, ProductListQuery, ProductUpdate } from '../services/catalog.service.ts';
-import { bookQuery, boolQuery, fail, idParamsSchema, intQuery, parseBool, parseId } from './catalog-query.ts';
+import {
+  bookQuery, boolQuery, idParamsSchema, intQuery, parseBool, parseId, parsePaging,
+} from './catalog-query.ts';
+
+// Product lists are larger than other lists: the POS and stock screens load the whole catalog.
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
 
 const listQuery = {
   type: 'object',
@@ -20,6 +35,7 @@ const listQuery = {
   },
 } as const;
 
+// Money fields are plain integers here; the service applies the exact range (0..MAX_CENTS) and C12 rules.
 const createBody = {
   type: 'object',
   additionalProperties: false,
@@ -36,6 +52,7 @@ const createBody = {
   },
 } as const;
 
+// No `kind` or `book` here: a product's kind and book can never be changed.
 const updateBody = {
   type: 'object',
   additionalProperties: false,
@@ -52,14 +69,13 @@ const updateBody = {
   },
 } as const;
 
+/** Registers the product endpoints under the `/api/v1` prefix. */
 export function registerProductRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/products', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
       q?: string; book?: Book; categoryId?: string; lowStock?: string; active?: string; limit?: string; offset?: string;
     };
-    const limit = raw.limit === undefined ? 100 : Number(raw.limit);
-    const offset = raw.offset === undefined ? 0 : Number(raw.offset);
-    if (limit < 1 || limit > 500) fail({ limit: 'must be between 1 and 500' });
+    const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: ProductListQuery = { limit, offset };
     const text = raw.q?.trim();
     if (text) q.q = text;

@@ -1,3 +1,14 @@
+/**
+ * app.ts - builds the web server (Fastify) and wires every layer together.
+ *
+ * Layer: composition root. It opens the database, runs the migrations, registers the HTTP routes under
+ * `/api/v1`, serves the built web app, and turns every error into the JSON envelope documented in
+ * API_CONTRACTS.md (`{ error: { code, message, fields? } }`). `index.ts` calls `buildApp` for the real server;
+ * the tests call it with a temporary data folder, so nothing here may depend on global state.
+ *
+ * Request flow: route (validates JSON) -> service (business rules, transaction, audit) -> repository (SQL)
+ * -> database.
+ */
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -7,6 +18,7 @@ import { join, resolve } from 'node:path';
 import { AppDatabase } from './db/db.ts';
 import { migrate } from './db/migrate.ts';
 import { AppError } from './lib/errors.ts';
+import { FILE_TOO_LARGE_MESSAGE, MAX_UPLOAD_BYTES } from './lib/limits.ts';
 import { registerHealthRoutes } from './routes/health.ts';
 import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerAuditLogRoutes } from './routes/audit-logs.ts';
@@ -20,7 +32,21 @@ import { registerStocktakeRoutes } from './routes/stocktakes.ts';
 import { registerStockLossRoutes } from './routes/stock-losses.ts';
 import { registerDrawingRoutes } from './routes/drawings.ts';
 
-export interface AppOptions { dataDir: string; webDistDir?: string | null; logger?: boolean }
+/** Options of `buildApp`. */
+export interface AppOptions {
+  /** Folder holding `viman.db` and the `backups/` folder (env `VIMAN_DATA_DIR` in production). */
+  dataDir: string;
+  /** Folder of the built web app to serve; null/omitted = API only (tests). */
+  webDistDir?: string | null;
+  /** Turn on Fastify's request logging (off by default; the shop PC has no use for it). */
+  logger?: boolean;
+}
+
+/**
+ * Shared state handed to every route and service (one per running server).
+ * `isRestoring` is true while a backup restore swaps the database file: during that time every /api request
+ * is refused with 503 so nothing can write to a half-swapped database.
+ */
 export interface AppContext {
   database: AppDatabase;
   dataDir: string;
@@ -30,6 +56,7 @@ export interface AppContext {
   isRestoring: boolean;
 }
 
+/** One problem reported by Fastify's JSON-schema validator (ajv). Only the fields we use are listed. */
 interface ValidationIssue {
   instancePath?: string;
   keyword?: string;
@@ -37,6 +64,7 @@ interface ValidationIssue {
   params?: Record<string, unknown>;
 }
 
+/** Reads the version from `server/package.json` (shown by /health); '0.0.0' if it cannot be read. */
 function readAppVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, '../package.json'), 'utf8')) as { version?: string };
@@ -46,6 +74,11 @@ function readAppVersion(): string {
   }
 }
 
+/**
+ * Converts ajv validation issues into the API's `fields` map (field path -> message).
+ * Paths use dots (`items.0.productId`). A missing/unknown property is reported against that property's own
+ * name, and the first message for a path wins. Problems with the body itself are reported under `body`.
+ */
 function validationFields(issues: ValidationIssue[]): Record<string, string> {
   const fields: Record<string, string> = {};
   for (const issue of issues) {
@@ -63,6 +96,7 @@ function validationFields(issues: ValidationIssue[]): Record<string, string> {
   return fields;
 }
 
+/** The JSON error body: `{ error: { code, message, fields?, ...extra } }`. `extra` never overrides the base keys. */
 function errorEnvelope(
   code: string, message: string, fields?: Record<string, string>, extra?: Record<string, unknown>,
 ) {
@@ -70,8 +104,47 @@ function errorEnvelope(
   return { error: extra ? { ...extra, ...base } : base };
 }
 
+/** Matches `/api` and `/api/...` (also with a query string) - the only paths that must never fall back to HTML. */
 const API_PATH_RE = /^\/api(?:[/?]|$)/;
 
+/** A mapped error: the HTTP status and the JSON body to send. */
+interface ErrorResponse { status: number; body: ReturnType<typeof errorEnvelope> }
+
+/**
+ * Decides how an error is shown to the client. Order matters: our own `AppError`s first, then schema
+ * validation, then known Fastify/multipart failures; anything else is a bug and becomes a generic 500 whose
+ * details are only written to the console (never sent to the browser).
+ */
+function toErrorResponse(error: unknown): ErrorResponse | null {
+  if (error instanceof AppError) {
+    return { status: error.statusCode, body: errorEnvelope(error.code, error.message, error.fields, error.extra) };
+  }
+  const e = error as { validation?: ValidationIssue[]; code?: string; statusCode?: number; message?: string };
+  if (Array.isArray(e.validation)) {
+    return { status: 400, body: errorEnvelope('VALIDATION_ERROR', 'Some fields are invalid.', validationFields(e.validation)) };
+  }
+  if (e.code === 'FST_REQ_FILE_TOO_LARGE' || e.statusCode === 413) {
+    return { status: 413, body: errorEnvelope('FILE_TOO_LARGE', FILE_TOO_LARGE_MESSAGE) };
+  }
+  // FST_ERR_CTP_* = content-type-parser problems (missing/empty/oversized body); other FST_* 400s are malformed requests.
+  if (typeof e.code === 'string' && e.code.startsWith('FST_ERR_CTP_') && e.statusCode === 400) {
+    return { status: 400, body: errorEnvelope('VALIDATION_ERROR', 'The request body is missing or not valid JSON.') };
+  }
+  if (typeof e.code === 'string' && e.code.startsWith('FST_') && e.statusCode === 400) {
+    return { status: 400, body: errorEnvelope('VALIDATION_ERROR', 'The request is not valid.') };
+  }
+  return null;
+}
+
+/**
+ * Creates the server: opens the database (creating the data folder), applies migrations, registers the
+ * routes, the error handling and (when present) the web app.
+ *
+ * @param opts See `AppOptions`.
+ * @returns The Fastify instance (not yet listening) and the shared context.
+ * @throws The migration error (code `MIGRATION_DB_TOO_NEW` / `MIGRATION_CHECKSUM_MISMATCH` ...) after closing
+ *   the database, so `index.ts` can print a friendly message.
+ */
 export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance; ctx: AppContext }> {
   const dataDir = resolve(opts.dataDir);
   const backupsDir = join(dataDir, 'backups');
@@ -81,6 +154,7 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
   try {
     migrate(database.conn);
   } catch (err) {
+    // Do not leave the file open (it would stay locked on Windows) when start-up fails.
     database.close();
     throw err;
   }
@@ -113,10 +187,12 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     }
   });
 
+  // Backup restore uploads: one file, a few small text fields, capped at MAX_UPLOAD_BYTES.
   await app.register(fastifyMultipart, {
-    limits: { fileSize: 200 * 1024 * 1024, files: 1, fields: 5 },
+    limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 5 },
   });
 
+  // While a restore is swapping the database file, refuse API calls (503) instead of touching a closed database.
   app.addHook('onRequest', async (request, reply) => {
     if (ctx.isRestoring && API_PATH_RE.test(request.url)) {
       return reply.code(503).send(errorEnvelope('RESTORE_IN_PROGRESS',
@@ -125,28 +201,14 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     return undefined;
   });
 
+  // Closing the server also closes the database (folds the WAL file back into viman.db).
   app.addHook('onClose', async () => {
     database.close();
   });
 
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof AppError) {
-      return reply.code(error.statusCode).send(errorEnvelope(error.code, error.message, error.fields, error.extra));
-    }
-    const e = error as { validation?: ValidationIssue[]; code?: string; statusCode?: number; message?: string };
-    if (Array.isArray(e.validation)) {
-      return reply.code(400).send(errorEnvelope('VALIDATION_ERROR',
-        'Some fields are invalid.', validationFields(e.validation)));
-    }
-    if (e.code === 'FST_REQ_FILE_TOO_LARGE' || e.statusCode === 413) {
-      return reply.code(413).send(errorEnvelope('FILE_TOO_LARGE', 'The file is too large (limit is 200 MB).'));
-    }
-    if (typeof e.code === 'string' && e.code.startsWith('FST_ERR_CTP_') && e.statusCode === 400) {
-      return reply.code(400).send(errorEnvelope('VALIDATION_ERROR', 'The request body is missing or not valid JSON.'));
-    }
-    if (typeof e.code === 'string' && e.code.startsWith('FST_') && e.statusCode === 400) {
-      return reply.code(400).send(errorEnvelope('VALIDATION_ERROR', 'The request is not valid.'));
-    }
+    const mapped = toErrorResponse(error);
+    if (mapped) return reply.code(mapped.status).send(mapped.body);
     console.error('Unexpected error handling', request.method, request.url, error);
     return reply.code(500).send(errorEnvelope('INTERNAL_ERROR', 'Something went wrong. Please try again.'));
   });

@@ -1,63 +1,81 @@
-import { useMemo, useRef, useState } from 'react';
+/**
+ * StockOutDialog: one form for the two ways stock leaves the shelf without a sale:
+ *  - mode "loss": damaged / lost / expired stock written off   (POST /stock-losses)
+ *  - mode "use":  goods the owner takes for personal use       (POST /drawings, kind "goods")
+ * Opened from Stock > Stock losses and Stock > Personal use. API hooks: api/stock.ts.
+ *
+ * Rules reflected here (the server enforces them and is authoritative):
+ *  - R-FD: the date cannot be in the future (picker max = today); backdating is allowed and audited.
+ *  - Quantity is a whole number of at least 1 and cannot exceed stock on hand; the server values the removal at
+ *    the product's average cost, so no price is entered here.
+ */
+import { useState } from 'react';
 import { FormDialog } from '../../components/FormDialog';
 import { SelectField } from '../../components/SelectField';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
-import { useProducts } from '../../api/catalog';
-import { useHealth } from '../../api/health';
 import { useCreateDrawing, useCreateStockLoss } from '../../api/stock';
+import { useBusinessDate } from '../../hooks/useBusinessDate';
+import { useClientRef } from '../../hooks/useClientRef';
+import { useDebounced } from '../../hooks/useDebounced';
+import { BOOK_LABEL } from '../../lib/constants';
+import { errorBanner, fieldError } from '../../lib/errors';
 import { parseIntStrict } from '../purchases/helpers';
-import { BOOK_LABEL, useDebounced } from '../products/shared';
-import { errorBanner, fieldError } from './shared';
+import { useStockProductChoices } from './shared';
 import type { StockLossReason } from '../../types/api';
 
+/** Largest quantity accepted (matches the server's limit). */
 const MAX_QTY = 1_000_000_000;
+const MAX_NOTE = 500;
 
-/** Record a stock loss (mode "loss") or personal use / goods drawing (mode "use"). */
+/**
+ * Record a stock loss (mode "loss") or personal use / goods drawing (mode "use").
+ * Mount only while open so each opening has a fresh form and a fresh clientRef.
+ */
 export function StockOutDialog({ mode, onClose }: { mode: 'loss' | 'use'; onClose: () => void }) {
-  const health = useHealth();
   const toast = useToast();
   const createLoss = useCreateStockLoss();
   const createUse = useCreateDrawing();
+  // Both mutations are always created (hooks cannot be conditional); `mut` is the one in use for this mode.
   const mut = mode === 'loss' ? createLoss : createUse;
-  const clientRef = useRef(crypto.randomUUID());
+  // Generated once per opening so a retried Save is recognised by the server and cannot post the entry twice.
+  const clientRef = useClientRef();
 
-  const [date, setDate] = useState('');
+  const { today, date: effDate, setDate } = useBusinessDate();
   const [search, setSearch] = useState('');
   const [productId, setProductId] = useState('');
   const [qty, setQty] = useState('');
   const [reason, setReason] = useState<StockLossReason>('damaged');
   const [note, setNote] = useState('');
+  // Field errors for empty required fields appear only after a Save attempt, not while the form is still blank.
   const [showErrors, setShowErrors] = useState(false);
 
-  const today = health.data?.today ?? '';
-  const effDate = date || today;
-  const q = useDebounced(search.trim(), 300);
-  const products = useProducts({ q: q || undefined, limit: 500 });
-  const stockProducts = useMemo(() => (products.data?.items ?? []).filter((p) => p.kind === 'stock'), [products.data]);
+  const q = useDebounced(search.trim());
+  const stockProducts = useStockProductChoices(q);
   const selected = stockProducts.find((p) => String(p.id) === productId);
 
   const qtyN = parseIntStrict(qty);
   const qtyOk = qtyN !== null && qtyN >= 1 && qtyN <= MAX_QTY;
-  const canSubmit = Boolean(effDate) && productId !== '' && qtyOk && note.length <= 500 && !mut.isPending;
+  const canSubmit = Boolean(effDate) && productId !== '' && qtyOk && note.length <= MAX_NOTE && !mut.isPending;
 
   const submit = () => {
     if (!canSubmit || qtyN === null) { setShowErrors(true); return; }
     const done = { onSuccess: () => { toast.success(mode === 'loss' ? 'Stock loss recorded.' : 'Personal use recorded.'); onClose(); } };
     if (mode === 'loss') {
       createLoss.mutate(
-        { businessDate: effDate, productId: Number(productId), qty: qtyN, reason, note: note.trim() || undefined, clientRef: clientRef.current },
+        { businessDate: effDate, productId: Number(productId), qty: qtyN, reason, note: note.trim() || undefined, clientRef },
         done,
       );
     } else {
       createUse.mutate(
-        { kind: 'goods', businessDate: effDate, productId: Number(productId), qty: qtyN, note: note.trim() || undefined, clientRef: clientRef.current },
+        { kind: 'goods', businessDate: effDate, productId: Number(productId), qty: qtyN, note: note.trim() || undefined, clientRef },
         done,
       );
     }
   };
 
   const err = mut.error;
+  // Server fields shown under their own inputs; anything else goes into the banner.
   const handled = ['businessDate', 'productId', 'qty', 'reason', 'note'];
 
   return (
@@ -107,7 +125,7 @@ export function StockOutDialog({ mode, onClose }: { mode: 'loss' | 'use'; onClos
           <option value="other">Other</option>
         </SelectField>
       )}
-      <TextField label="Note (optional)" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} autoComplete="off" error={fieldError(err, 'note')} />
+      <TextField label="Note (optional)" value={note} maxLength={MAX_NOTE} onChange={(e) => setNote(e.target.value)} autoComplete="off" error={fieldError(err, 'note')} />
     </FormDialog>
   );
 }

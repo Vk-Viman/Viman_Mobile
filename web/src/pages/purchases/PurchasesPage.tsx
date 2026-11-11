@@ -1,5 +1,11 @@
+/**
+ * Purchases screen (route "/purchases"): filterable, paged list of stock purchases with "New purchase" and a
+ * details dialog (void / return).
+ * API: GET /suppliers (supplier filter), GET /purchases (api/catalog.ts, api/purchases.ts).
+ * Totals shown are the server's integer cents. Voided purchases stay in the list (status "Void") for the audit trail.
+ */
 import { useEffect, useState } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -7,21 +13,25 @@ import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
+import { BookFilterSelect, DateRangeFields, PostedStatusFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
 import { PageHeader } from '../../components/PageHeader';
+import { Pager } from '../../components/Pager';
+import { SearchField } from '../../components/SearchField';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
-import { TextField } from '../../components/TextField';
+import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSuppliers } from '../../api/catalog';
 import { usePurchases } from '../../api/purchases';
+import { useDebounced } from '../../hooks/useDebounced';
+import { PAGE_SIZE } from '../../lib/constants';
 import type { Book, Purchase, PurchaseQuery, PurchaseStatus } from '../../types/api';
-import { BOOK_LABEL, useDebounced } from '../products/shared';
 import { NewPurchaseDialog } from './NewPurchaseDialog';
 import { PurchaseDetailDialog } from './PurchaseDetailDialog';
 
-const LIMIT = 50;
-
+/** The screen: header with "New purchase", filter bar, purchase table, pager and the two dialogs. */
 export function PurchasesPage() {
+  // ---- Filter and paging state ("" means "no filter") ----
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [book, setBook] = useState<'' | Book>('');
@@ -29,13 +39,17 @@ export function PurchasesPage() {
   const [supplierId, setSupplierId] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
+  // Dialog state: `creating` shows the new-purchase form; `openId` shows the details of that purchase.
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
 
-  const q = useDebounced(search.trim(), 300);
+  // Debounced bill-number search: the box updates instantly, the server is queried once typing pauses.
+  const q = useDebounced(search.trim());
   const suppliers = useSuppliers();
+  // Back to the first page whenever a filter changes.
   useEffect(() => { setPage(0); }, [from, to, book, status, supplierId, q]);
 
+  // Unset filters become undefined so the API helper leaves them out of the URL.
   const query: PurchaseQuery = {
     from: from || undefined,
     to: to || undefined,
@@ -43,10 +57,11 @@ export function PurchasesPage() {
     status: status || undefined,
     supplierId: supplierId ? Number(supplierId) : undefined,
     q: q || undefined,
-    limit: LIMIT,
-    offset: page * LIMIT,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
   };
   const list = usePurchases(query);
+  // True when any filter is set; decides between "no purchases yet" and "no purchases match".
   const filtered = Boolean(from || to || book || status || supplierId || q);
 
   const columns: Column<Purchase>[] = [
@@ -55,6 +70,7 @@ export function PurchasesPage() {
       header: 'Date',
       render: (p) => (
         <span className="inline-flex flex-wrap items-center gap-2">
+          {/* A real button inside the row so keyboard users can open details (row click is mouse-only). */}
           <button type="button" className="font-medium text-brand-700 underline-offset-2 hover:underline" onClick={(e) => { e.stopPropagation(); setOpenId(p.id); }}>
             {p.businessDate}
           </button>
@@ -64,15 +80,11 @@ export function PurchasesPage() {
     },
     { key: 'bill', header: 'Bill no', render: (p) => p.billNo || '—' },
     { key: 'sup', header: 'Supplier', render: (p) => p.supplierName ?? '—' },
-    { key: 'book', header: 'Book', render: (p) => <Badge tone={p.book === 'shop' ? 'brand' : 'neutral'}>{BOOK_LABEL[p.book]}</Badge> },
+    { key: 'book', header: 'Book', render: (p) => <BookBadge book={p.book} /> },
     { key: 'items', header: 'Items', align: 'right', render: (p) => p.items.length },
     { key: 'total', header: 'Total (Rs.)', align: 'right', render: (p) => <Money cents={p.totalCents} /> },
-    { key: 'status', header: 'Status', render: (p) => <Badge tone={p.status === 'void' ? 'red' : 'brand'}>{p.status === 'void' ? 'Void' : 'Posted'}</Badge> },
+    { key: 'status', header: 'Status', render: (p) => <PostedStatusBadge status={p.status} /> },
   ];
-
-  const total = list.data?.total ?? 0;
-  const first = total === 0 ? 0 : page * LIMIT + 1;
-  const last = Math.min(total, (page + 1) * LIMIT);
 
   return (
     <>
@@ -83,26 +95,14 @@ export function PurchasesPage() {
       />
       <Card>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-          <TextField label="From date" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
-          <TextField label="To date" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
-          <SelectField label="Book" value={book} onChange={(e) => setBook(e.target.value as '' | Book)}>
-            <option value="">All</option>
-            <option value="shop">Shop</option>
-            <option value="telecom">Telecom</option>
-          </SelectField>
-          <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value as '' | PurchaseStatus)}>
-            <option value="">All</option>
-            <option value="posted">Posted</option>
-            <option value="void">Void</option>
-          </SelectField>
+          <DateRangeFields from={from} to={to} onFrom={setFrom} onTo={setTo} />
+          <BookFilterSelect value={book} onChange={setBook} />
+          <PostedStatusFilterSelect value={status} onChange={setStatus} />
           <SelectField label="Supplier" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
             <option value="">All suppliers</option>
             {(suppliers.data?.items ?? []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}{s.active ? '' : ' (inactive)'}</option>)}
           </SelectField>
-          <div className="relative">
-            <TextField label="Bill no" placeholder="Search bill no" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" className="[&_input]:pl-9" />
-            <Search size={16} className="pointer-events-none absolute bottom-3 left-3 text-slate-400" aria-hidden="true" />
-          </div>
+          <SearchField label="Bill no" placeholder="Search bill no" value={search} onChange={setSearch} />
         </div>
 
         {list.isPending ? (
@@ -125,16 +125,11 @@ export function PurchasesPage() {
               emptyHint="Try a different date range or clear a filter."
               onRowClick={(p) => setOpenId(p.id)}
             />
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
-              <span>{total === 0 ? '0 purchases' : `Showing ${first}–${last} of ${total} purchases`}</span>
-              <div className="flex gap-2">
-                <Button variant="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Previous</Button>
-                <Button variant="secondary" disabled={last >= total} onClick={() => setPage((p) => p + 1)}>Next</Button>
-              </div>
-            </div>
+            <Pager page={page} total={list.data.total} limit={PAGE_SIZE} noun="purchases" onPage={setPage} />
           </>
         )}
       </Card>
+      {/* Dialogs are mounted only while open so each opening starts fresh (new clientRef, empty form). */}
       {creating && <NewPurchaseDialog onClose={() => setCreating(false)} />}
       {openId !== null && <PurchaseDetailDialog key={openId} id={openId} onClose={() => setOpenId(null)} />}
     </>

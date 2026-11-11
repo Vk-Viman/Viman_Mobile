@@ -1,3 +1,10 @@
+// Settings API (GET/PUT /settings) - API level (Fastify inject, real temp database).
+// Protects: the shop's default settings (name, commission rates in basis points - reload 600 bp = 6%, EZCash 80 bp = 0.8%,
+// section 5 - and the printing price/cost list, R12), strict validation (C11: every rate 0..10000 bp, whole cents, no
+// coercion of strings/null), and the audit rule that every settings change writes before/after JSON (section 12) while
+// an unchanged save writes nothing.
+// Organised as: defaults, update + audit behaviour, boundary values, a big table of invalid inputs, persistence.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { TestEnv } from './helpers/tmp.ts';
@@ -5,6 +12,8 @@ import { TestEnv } from './helpers/tmp.ts';
 const env = new TestEnv();
 afterEach(() => env.cleanup());
 
+// Factory print/photocopy price list in cents, e.g. B/W one side: price Rs 15.00, standard cost Rs 6.50
+// (R12: revenue - standard cost = gross profit per page).
 const DEFAULT_PRINT = [
   { code: 'BW_1S', name: 'B/W print – one side', priceCents: 1500, costCents: 650 },
   { code: 'BW_2S', name: 'B/W print – double side', priceCents: 2500, costCents: 900 },
@@ -24,6 +33,7 @@ const validShop = { name: 'Shop', address: 'a', phone: 'p', email: '' };
 const validRates = { reloadCommissionBp: 600, ezcashCommissionBp: 80 };
 const validPd = { code: 'A1', name: 'n', priceCents: 1, costCents: 1 };
 
+// A new installation must show the agreed defaults.
 describe('GET /settings', () => {
   it('returns the exact defaults', async () => {
     const { app } = await env.build();
@@ -44,6 +54,7 @@ describe('GET /settings', () => {
   });
 });
 
+// Saving settings: partial updates, audit rows, boundaries and validation.
 describe('PUT /settings', () => {
   it('shop: trims name, leaves other sections, sets updatedAt, writes ONE audit row', async () => {
     const { app } = await env.build();
@@ -67,6 +78,7 @@ describe('PUT /settings', () => {
     expect(get).toEqual(b);
   });
 
+  // Re-saving the same values is not a change, so the audit log is not filled with noise.
   it('identical values do not create a new audit row', async () => {
     const { app } = await env.build();
     const body = { shop: { name: 'X', address: '', phone: '', email: '' } };
@@ -84,6 +96,7 @@ describe('PUT /settings', () => {
     expect((await audit(app)).items).toHaveLength(0);
   });
 
+  // One audit row per changed settings section, so each change can be traced separately.
   it('rates + printDefaults produce two audit rows', async () => {
     const { app } = await env.build();
     const res = await put(app, {
@@ -101,6 +114,7 @@ describe('PUT /settings', () => {
     expect(rates.after).toEqual({ reloadCommissionBp: 700, ezcashCommissionBp: 90 });
   });
 
+  // Maximum lengths, rate 0 and 10000 bp (100%), 30 print items and Rs 1,000,000.00 prices are all valid (C11: 0 <= rateBp <= 10000).
   it('accepts boundary values', async () => {
     const { app } = await env.build();
     const res = await put(app, {
@@ -111,6 +125,8 @@ describe('PUT /settings', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  // Table of invalid requests: [description, body, fields the error must name]. Each must give 400 VALIDATION_ERROR
+  // and leave the stored settings untouched. Rates may not be negative, above 10000 bp, fractional, null or text (no coercion).
   type Case = [string, unknown, string[]];
   const cases: Case[] = [
     ['empty body {}', {}, ['body']],
@@ -182,6 +198,7 @@ describe('PUT /settings', () => {
     expect(res.json().error.code).toBe('VALIDATION_ERROR');
   });
 
+  // Saved settings must survive a restart of the app on the same data folder.
   it('settings persist across app rebuild on the same dataDir', async () => {
     const first = await env.build();
     await put(first.app, { rates: { reloadCommissionBp: 123, ezcashCommissionBp: 45 } });

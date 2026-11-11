@@ -1,3 +1,13 @@
+/**
+ * Route table of the whole application: which screen appears at which address (URL).
+ *
+ * Everything sits inside <AppLayout/> (sidebar + page area); the matching page renders where AppLayout shows its
+ * <Outlet/>. Screens with tabs (Products, Stock, Settings) are "parent" routes: the parent page draws the tab
+ * strip and the active tab renders as its child route.
+ *
+ * Sidebar entries that are not built yet (`built: false` in layout/navItems.ts) get a "Coming soon" placeholder
+ * automatically, so the menu and the routes can never disagree. Unknown addresses redirect to the Dashboard.
+ */
 import { Navigate, Route, Routes } from 'react-router';
 import { AppLayout } from './layout/AppLayout';
 import { NAV_ITEMS } from './layout/navItems';
@@ -21,11 +31,13 @@ import { StockLossesTab } from './pages/stock/StockLossesTab';
 import { PersonalUseTab } from './pages/stock/PersonalUseTab';
 import { SuppliersTab } from './pages/products/SuppliersTab';
 
+/** Root component: declares every route. Renders no markup of its own. */
 export function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={<Dashboard />} />
+        {/* Placeholder pages for menu items whose screens are planned but not built yet */}
         {NAV_ITEMS.filter((n) => !n.built).map((n) => (
           <Route key={n.to} path={n.to.slice(1)} element={<ComingSoon title={n.label} icon={n.icon} phase={n.phase} description={n.description} />} />
         ))}
@@ -49,6 +61,7 @@ export function App() {
           <Route path="backups" element={<BackupsTab />} />
           <Route path="audit" element={<AuditTab />} />
         </Route>
+        {/* Anything unknown goes home (replace: the bad address is not kept in the back-button history) */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

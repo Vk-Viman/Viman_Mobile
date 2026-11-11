@@ -1,3 +1,11 @@
+// Product API (GET/POST/PUT /products) - API level (Fastify inject, real temp database).
+// Protects the catalog contract and business rules: a product's book comes from its category (cannot be sent),
+// selling price >= minimum price, services have reorder level 0 and no stock, kind is immutable, names/codes unique
+// ignoring case, stock fields (qtyOnHand, stockValueCents) are read-only here (only inventory movements change them,
+// section 3), and the derived fields avgUnitCostCents (value/qty, display only) and lowStock.
+// Every real change writes exactly one audit row (section 12); failed or no-op writes write none.
+// Organised by endpoint: create, derived fields, get one, list/search/filter/paging, update, persistence.
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { TestEnv } from './helpers/tmp.ts';
@@ -9,12 +17,14 @@ import {
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
 
+// Test context: the app, its database context and the seeded category ids by name.
 interface Base { app: FastifyInstance; ctx: AppContext; ids: Record<string, number> }
 async function setup(): Promise<Base> {
   const b = await env.build();
   return { app: b.app, ctx: b.ctx, ids: await catIds(b.app) };
 }
 
+// Default valid product body: sells for Rs 10.00 (1000 cents), minimum Rs 8.00 (800).
 const body = (ids: Record<string, number>, over: Record<string, unknown> = {}) => ({
   name: 'Widget', categoryId: ids.Electronics, kind: 'stock', sellPriceCents: 1000, minPriceCents: 800, ...over,
 });
@@ -28,6 +38,7 @@ function setStock(s: Base, id: number, qty: number, value: number) {
 }
 const names = (r: { body: any }) => r.body.items.map((i: any) => i.name);
 
+// Creating products: shape, derived fields, validation, duplicates, audit.
 describe('POST /products', () => {
   it('creates with 201, exact shape, defaults, derived book/categoryName, zero stock', async () => {
     const s = await setup();
@@ -46,6 +57,7 @@ describe('POST /products', () => {
     expect((await get(s.app, `/products/${p.id}`)).body.item).toEqual(p);
   });
 
+  // A product in "Scratch Cards" is automatically a telecom product; sending a book is refused (cannot be spoofed).
   it('book is derived from the category (telecom) and cannot be sent', async () => {
     const s = await setup();
     const p = await mk(s, { name: 'Dialog 100', categoryId: s.ids['Scratch Cards'], kind: 'service' });
@@ -117,6 +129,7 @@ describe('POST /products', () => {
     }
   });
 
+  // Prices are whole cents from 0 to Rs 9,999,999.99; strings, decimals and nulls are rejected rather than coerced.
   it('price bounds: 0 and 999999999 accepted; 1000000000, negative, 1.5, "5", null, missing -> 400, no coercion', async () => {
     const s = await setup();
     expect((await mk(s, { name: 'Zero', sellPriceCents: 0, minPriceCents: 0 })).sellPriceCents).toBe(0);
@@ -144,6 +157,7 @@ describe('POST /products', () => {
     expect(count(s.ctx, 'products')).toBe(2);
   });
 
+  // A minimum price above the selling price would make every sale a warning (R13); equal is fine.
   it('minPriceCents must not exceed sellPriceCents (exact message), equal is fine', async () => {
     const s = await setup();
     const r = await post(s.app, '/products', body(s.ids, { sellPriceCents: 100, minPriceCents: 101 }));
@@ -179,6 +193,7 @@ describe('POST /products', () => {
     expect(count(s.ctx, 'products')).toBe(0);
   });
 
+  // Stock and book are controlled by the system; a client cannot set them through the catalog.
   it('extra / read-only fields are rejected (qtyOnHand, stockValueCents, id, active, book)', async () => {
     const s = await setup();
     for (const f of ['qtyOnHand', 'stockValueCents', 'id', 'active', 'book', 'lowStock', 'avgUnitCostCents', 'createdAt']) {
@@ -191,6 +206,7 @@ describe('POST /products', () => {
     expect(count(s.ctx, 'products')).toBe(0);
   });
 
+  // Same name or code in any letter case is a duplicate, even after trimming; the failed request saves nothing.
   it('DUPLICATE_NAME / DUPLICATE_CODE: case-insensitive after trim; nothing written; no audit', async () => {
     const s = await setup();
     await mk(s, { name: 'Cable', code: 'AbC' });
@@ -236,7 +252,10 @@ describe('POST /products', () => {
   });
 });
 
+// The two computed fields the owner sees on the stock screen (display only; costing is done by the stock engine).
 describe('derived fields: avgUnitCostCents and lowStock', () => {
+  // average = value / qty rounded half away from zero (R0): 1000/3 = 333.33 -> 333; 2000/3 = 666.67 -> 667;
+  // 1/2 = 0.5 -> 1; 3/2 = 1.5 -> 2; 5/2 = 2.5 -> 3. No quantity -> null (no average exists); quantity with value 0 -> 0.
   it('avgUnitCostCents rounds half away from zero; null when qty is 0; large values exact', async () => {
     const s = await setup();
     const p = await mk(s);
@@ -270,6 +289,8 @@ describe('derived fields: avgUnitCostCents and lowStock', () => {
     expect(auditRows(s.ctx).at(-1)!.after.avgUnitCostCents).toBe(333);
   });
 
+  // Low-stock alert: only for active stock items with a reorder level set, when qty is at or below it.
+  // Services and items with reorder level 0 never alert; deactivated items never alert.
   it('lowStock = stock AND active AND reorderLevel > 0 AND qty <= reorderLevel', async () => {
     const s = await setup();
     const p = await mk(s, { reorderLevel: 5 });
@@ -293,6 +314,7 @@ describe('derived fields: avgUnitCostCents and lowStock', () => {
   });
 });
 
+// Fetching one product: found, not found, bad id.
 describe('GET /products/:id', () => {
   it('200 / 404 / bad id', async () => {
     const s = await setup();
@@ -309,6 +331,7 @@ describe('GET /products/:id', () => {
   });
 });
 
+// The product list: ordering, search (wildcards are literal), filters and paging.
 describe('GET /products (list)', () => {
   async function seed(s: Base) {
     const out: Record<string, any> = {};
@@ -417,6 +440,7 @@ describe('GET /products (list)', () => {
   });
 });
 
+// Editing products: partial updates validated against the merged result, category moves, activate/deactivate, audit chain.
 describe('PUT /products/:id', () => {
   it('updates any subset, trims, 200 { item }, full before/after audit; others unchanged', async () => {
     const s = await setup();
@@ -517,6 +541,7 @@ describe('PUT /products/:id', () => {
     expect(r.body.error.fields.description).toBe('Description must be at most 500 characters.');
   });
 
+  // Changing only the sell price must still respect the stored minimum (and vice versa).
   it('price rules are validated against merged (existing + patch) values', async () => {
     const s = await setup();
     const p = await mk(s, { sellPriceCents: 100, minPriceCents: 50 });
@@ -562,6 +587,7 @@ describe('PUT /products/:id', () => {
     expect((await put(s.app, `/products/${svc.id}`, { name: 'Svc renamed' })).body.item.kind).toBe('service');
   });
 
+  // A product may only move to a category of the same book (segments are disjoint).
   it('category moves: same book OK; other book -> CATEGORY_BOOK_MISMATCH; inactive -> CATEGORY_INACTIVE; unknown -> Choose a category.', async () => {
     const s = await setup();
     const p = await mk(s);
@@ -597,6 +623,7 @@ describe('PUT /products/:id', () => {
     expect(r.body.item.name).toBe('Still editable');
   });
 
+  // Retiring an item is allowed even with stock on hand; history is never deleted.
   it('deactivate / reactivate always allowed, even with stock and in an inactive category', async () => {
     const s = await setup();
     const p = await mk(s);
@@ -627,6 +654,7 @@ describe('PUT /products/:id', () => {
     expect(auditRows(s.ctx)).toHaveLength(n);
   });
 
+  // The audit trail chains: each entry's "before" is the previous entry's "after".
   it('one real change = exactly one audit row; each subsequent change chains before -> after', async () => {
     const s = await setup();
     const p = await mk(s);
@@ -665,6 +693,7 @@ describe('PUT /products/:id', () => {
   });
 });
 
+// Data must still be there after the app is stopped and started again on the same folder.
 describe('persistence', () => {
   it('products survive re-opening the same data directory', async () => {
     const first = await env.build();

@@ -1,3 +1,11 @@
+/**
+ * routes/categories.ts - HTTP endpoints for product categories.
+ *
+ *   GET /categories?active=&book=   list       POST /categories   create (201)       PUT /categories/:id   edit
+ *
+ * Layer: route (thin) -> `catalog.service.ts`. The rules (default categories locked, a category's book fixed
+ * once it has products, unique names) live in the service and the migration 003 triggers.
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { createCategory, listCategoryItems, updateCategoryItem } from '../services/catalog.service.ts';
@@ -16,7 +24,7 @@ const createBody = {
   required: ['name', 'book'],
   properties: {
     name: { type: 'string' },
-    book: { type: 'string', enum: ['shop', 'telecom'] },
+    book: bookQuery,
   },
 } as const;
 
@@ -26,11 +34,12 @@ const updateBody = {
   minProperties: 1,
   properties: {
     name: { type: 'string' },
-    book: { type: 'string', enum: ['shop', 'telecom'] },
+    book: bookQuery,
     active: { type: 'boolean' },
   },
 } as const;
 
+/** Registers the category endpoints under the `/api/v1` prefix. */
 export function registerCategoryRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/categories', { schema: { querystring: listQuery } }, async (request) => {
     const q = request.query as { active?: string; book?: Book };

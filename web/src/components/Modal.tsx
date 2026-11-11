@@ -1,9 +1,11 @@
-import { useEffect, useId, useRef } from 'react';
+/**
+ * Modal: a read-only pop-up window (details view with a close "X"), e.g. purchase details or stock movements.
+ * For pop-ups with a form use FormDialog; for yes/no questions use ConfirmDialog.
+ */
+import { useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
-
-const FOCUSABLE =
-  'button:not([disabled]), input:not([disabled]), [href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface Props {
   title: string;
@@ -11,42 +13,20 @@ interface Props {
   onClose: () => void;
   /** Set while another dialog is open on top, so Esc / Tab are left to that dialog. */
   paused?: boolean;
+  /** Tailwind max-width class for the panel (default max-w-3xl). */
   widthClass?: string;
 }
 
-/** Read-only modal (no form): focus trapped, Esc closes. Mount only while open. */
+/**
+ * Read-only modal (no form): focus trapped, Esc closes. Mount only while open.
+ * "Mount only while open" is why there is no `open` prop: the parent renders `{selected && <Modal .../>}`, so the
+ * dialog's state and data fetching start fresh each time and nothing runs while it is hidden.
+ */
 export function Modal({ title, children, onClose, paused = false, widthClass = 'max-w-3xl' }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    panel.current?.querySelector<HTMLElement>('button')?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (pausedRef.current) return;
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== 'Tab' || !panel.current) return;
-      const els = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (els.length === 0) return;
-      const a = els[0] as HTMLElement;
-      const z = els[els.length - 1] as HTMLElement;
-      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
-      else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('keydown', onKey, true);
-      previouslyFocused?.focus?.();
-    };
-  }, []);
+  // First focus goes to the close button, so keyboard users can dismiss immediately.
+  useDialogFocusTrap(panel, { onClose, paused, initialFocusSelector: 'button' });
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4">

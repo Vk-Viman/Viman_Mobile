@@ -1,8 +1,19 @@
+/**
+ * repositories/products.repo.ts - SQL for the `products` table (everything the shop sells).
+ *
+ * Layer: repository. A product is either a `stock` item (counted) or a `service` (printing etc.). The table
+ * also holds the STOCK CACHE: `qty_on_hand` and `stock_value_cents` (BUSINESS_RULES section 3). Those two
+ * columns are never written here - the database trigger `trg_stock_movements_cache` updates them whenever a
+ * stock movement is inserted, so "sum of movements = cache" always holds. Business rules (price checks,
+ * duplicate names, category book) live in `catalog.service.ts`; migration 003 triggers are the backstop.
+ */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { SQL_NOW_UTC, escapeLike } from './sql-helpers.ts';
 
 export type Book = 'shop' | 'telecom';
 export type Kind = 'stock' | 'service';
 
+/** A product with its category name and current stock cache. */
 export interface ProductRow {
   id: number; code: string | null; name: string; description: string;
   categoryId: number; categoryName: string; kind: Kind; book: Book;
@@ -10,6 +21,7 @@ export interface ProductRow {
   qtyOnHand: number; stockValueCents: number; createdAt: string; updatedAt: string;
 }
 
+/** Filters and paging for `listProducts`. `q` searches name and code. */
 export interface ProductQuery {
   q?: string; book?: Book; categoryId?: number; lowStock?: boolean; active?: boolean;
   limit: number; offset: number;
@@ -39,10 +51,7 @@ function map(r: Raw): ProductRow {
   };
 }
 
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (m) => `\\${m}`);
-}
-
+/** Lists products A-Z with the total number of matches (before paging). */
 export function listProducts(conn: DatabaseSync, q: ProductQuery): { items: ProductRow[]; total: number } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
@@ -55,6 +64,7 @@ export function listProducts(conn: DatabaseSync, q: ProductQuery): { items: Prod
   if (q.categoryId !== undefined) { where.push('p.category_id = ?'); params.push(q.categoryId); }
   if (q.active !== undefined) { where.push('p.active = ?'); params.push(q.active ? 1 : 0); }
   if (q.lowStock === true) {
+    // Low stock = an active stock product with a reorder level set and quantity at or below it.
     where.push("(p.kind = 'stock' AND p.active = 1 AND p.reorder_level > 0 AND p.qty_on_hand <= p.reorder_level)");
   }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';
@@ -64,21 +74,25 @@ export function listProducts(conn: DatabaseSync, q: ProductQuery): { items: Prod
   return { items: rows.map(map), total };
 }
 
+/** One product by id, or undefined. */
 export function getProduct(conn: DatabaseSync, id: number): ProductRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE p.id = ?`).get(id) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** One product by name (NOCASE unique), or undefined - used for duplicate-name checks. */
 export function findProductByName(conn: DatabaseSync, name: string): ProductRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE p.name = ?`).get(name) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** One product by code (NOCASE unique), or undefined - used for duplicate-code checks. */
 export function findProductByCode(conn: DatabaseSync, code: string): ProductRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE p.code = ?`).get(code) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** Inserts a product with zero stock and returns its id. Stock arrives only through stock movements. */
 export function insertProduct(conn: DatabaseSync, p: {
   code: string | null; name: string; description: string; categoryId: number; kind: Kind; book: Book;
   sellPriceCents: number; minPriceCents: number; reorderLevel: number;
@@ -90,6 +104,10 @@ export function insertProduct(conn: DatabaseSync, p: {
   return Number(res.lastInsertRowid);
 }
 
+/**
+ * Updates only the fields present in `patch` and stamps `updated_at`; an empty patch does nothing.
+ * Note: there is no way to set kind or the stock columns here, by design (triggers would refuse it anyway).
+ */
 export function updateProduct(conn: DatabaseSync, id: number, patch: {
   code?: string | null; name?: string; description?: string; categoryId?: number; book?: Book;
   sellPriceCents?: number; minPriceCents?: number; reorderLevel?: number; active?: boolean;
@@ -107,6 +125,6 @@ export function updateProduct(conn: DatabaseSync, id: number, patch: {
   if (patch.reorderLevel !== undefined) add('reorder_level', patch.reorderLevel);
   if (patch.active !== undefined) add('active', patch.active ? 1 : 0);
   if (sets.length === 0) return;
-  sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+  sets.push(`updated_at = ${SQL_NOW_UTC}`);
   conn.prepare(`UPDATE products SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
 }

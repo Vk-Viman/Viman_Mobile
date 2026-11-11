@@ -1,3 +1,11 @@
+// Phase 4 persistence and restore - API level with real temp data folders.
+// Protects the owner's confidence that stocktakes, stock losses, owner drawings, their stock movements, audit rows and the
+// clientRef idempotency keys all survive a restart of the app, that open drafts remain usable afterwards, and that a backup
+// (version 4 = before Phase 4, or version 5 = with Phase 4 data) restores correctly: an older backup is upgraded to the latest
+// schema and Phase 4 works on it; a newer backup brings back exactly the data that existed when it was taken and discards
+// later changes.
+// Organised as: reopen the app on the same folder, then restore scenarios.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -15,7 +23,10 @@ afterEach(() => env.cleanup());
 
 const bl = (productId: number, units: number, lineTotalCents: number) => ({ productId, packs: 1, packSize: units, lineTotalCents });
 
+// Close the app, open it again on the same data folder, and compare.
 describe('persistence across app reopen', () => {
+  // Everything written before the restart (a completed stocktake, a voided one, a draft, losses, drawings, audit) must be identical afterwards;
+  // reusing an old clientRef must still return the original (no duplicate), and the draft can still be completed.
   it('stocktakes (draft / completed / void), losses, drawings, movements, audit and idempotency keys survive; drafts stay usable', async () => {
     const first = await env.build();
     const s1 = await apiBase(first);
@@ -84,7 +95,9 @@ describe('persistence across app reopen', () => {
 });
 
 // =============================================================================================
+// Restoring backups taken at different schema versions.
 describe('restore', () => {
+  // A backup made before Phase 4 has none of the Phase 4 tables; after restore they are created by migration and stocktakes/losses/drawings work.
   it('restoring a version-4 backup migrates it to the latest schema and Phase 4 works on it', async () => {
     const b = await env.build();
     const s: ApiBase = await apiBase(b);
@@ -130,6 +143,9 @@ describe('restore', () => {
     await reconOk(s);
   });
 
+  // Backup taken at 8 / 240,000 (10 / 300,000 -> stocktake loss 1 = 30,000 -> 9 / 270,000 -> stock loss 1 = 30,000 -> 8 / 240,000).
+  // Later a drawing and a stocktake void are made; the restore must undo both (0 drawings, pool back to 8 / 240,000, stocktake completed again),
+  // and afterwards voiding that stocktake works: +1 / +30,000 -> 9 / 270,000.
   it('a version-5 backup keeps stocktakes, losses and drawings when restored over newer changes', async () => {
     const b = await env.build();
     const s = await apiBase(b);

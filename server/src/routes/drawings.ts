@@ -1,12 +1,24 @@
+/**
+ * routes/drawings.ts - HTTP endpoints for owner drawings (the owner taking goods for personal use).
+ *
+ * Layer: route (thin): JSON-schema validation -> `drawings.service.ts` -> response.
+ * Business rules (section 9: stock removed at cost, no P&L; R-FD; R1 void by reversal) live in the service.
+ *
+ *   POST /drawings            create (201; 200 on a repeated `clientRef`)     GET /drawings   list
+ *   GET  /drawings/:id        one drawing                                     POST /drawings/:id/void   void
+ */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { createDrawing, getDrawing, listDrawings, voidDrawing } from '../services/drawings.service.ts';
 import type { DrawingCreate } from '../services/drawings.service.ts';
-import { bookQuery, fail, idParamsSchema, intQuery, parseId } from './catalog-query.ts';
-import { checkQueryDates, dateQuery } from './purchases.ts';
+import {
+  bookQuery, checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging,
+  voidBody,
+} from './catalog-query.ts';
 
-const clientRef = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' } as const;
-const dateField = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } as const;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
 const kindEnum = { type: 'string', enum: ['goods', 'cash'] } as const;
 
 // productId / qty are required by the service for goods, so that kind "cash" is answered NOT_AVAILABLE_YET.
@@ -24,13 +36,6 @@ const createBody = {
   },
 } as const;
 
-const voidBody = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['reason'],
-  properties: { reason: { type: 'string' } },
-} as const;
-
 const listQuery = {
   type: 'object',
   additionalProperties: false,
@@ -46,6 +51,7 @@ const listQuery = {
   },
 } as const;
 
+/** Registers the drawing endpoints under the `/api/v1` prefix. */
 export function registerDrawingRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/drawings', { schema: { body: createBody } }, async (request, reply) => {
     const { item, created } = createDrawing(ctx, request.body as DrawingCreate);
@@ -58,9 +64,7 @@ export function registerDrawingRoutes(app: FastifyInstance, ctx: AppContext): vo
       status?: 'posted' | 'void'; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
-    const limit = raw.limit === undefined ? 50 : Number(raw.limit);
-    const offset = raw.offset === undefined ? 0 : Number(raw.offset);
-    if (limit < 1 || limit > 200) fail({ limit: 'must be between 1 and 200' });
+    const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listDrawings>[1] = { limit, offset };
     if (raw.kind !== undefined) q.kind = raw.kind;
     if (raw.from !== undefined) q.from = raw.from;

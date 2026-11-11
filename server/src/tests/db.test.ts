@@ -1,3 +1,10 @@
+// AppDatabase wrapper (db/db.ts) - database level, real SQLite files in temp folders.
+// Protects the safety guarantees every money write relies on: WAL + foreign keys + synchronous FULL (a power cut
+// must not lose or corrupt a posted sale), and the transaction helper tx() that makes "all rows of one business
+// action are saved together or not at all" (R1 reversals, "every stock change writes one movement in the same
+// transaction", BUSINESS_RULES section 3). Organised as one small table "t" per test: commit, rollback, nesting,
+// misuse, close/reopen (reopen is what restore uses).
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { AppDatabase } from '../db/db.ts';
@@ -11,6 +18,7 @@ afterEach(async () => {
   await env.cleanup();
 });
 
+// Helper: a fresh database file with a tiny table "t", registered so afterEach closes it before the folder is deleted.
 function open(): AppDatabase {
   const d = new AppDatabase(join(env.newDir(), 'x.db'));
   dbs.push(d);
@@ -19,13 +27,16 @@ function open(): AppDatabase {
 }
 const count = (d: AppDatabase) => (d.conn.prepare('SELECT COUNT(*) AS c FROM t').get() as { c: number }).c;
 
+// Connection settings and the transaction behaviour of the database wrapper.
 describe('AppDatabase', () => {
+  // WAL = crash-safe journal; foreign keys ON = a sale line can never point at a missing product.
   it('uses WAL and foreign keys', () => {
     const d = open();
     expect((d.conn.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode).toBe('wal');
     expect((d.conn.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys).toBe(1);
   });
 
+  // FULL means every commit is flushed to disk, so a posted sale survives a sudden power cut.
   it('uses synchronous = FULL (2)', () => {
     const d = open();
     expect((d.conn.prepare('PRAGMA synchronous').get() as { synchronous: number }).synchronous).toBe(2);
@@ -38,6 +49,7 @@ describe('AppDatabase', () => {
     expect(count(d)).toBe(1);
   });
 
+  // One failing step must undo the whole action (no half-posted sale), and the next action must still work.
   it('tx rolls back on throw and rethrows', () => {
     const d = open();
     expect(() => d.tx((c) => { c.exec("INSERT INTO t (v) VALUES ('a')"); throw new Error('boom'); })).toThrow('boom');
@@ -46,6 +58,8 @@ describe('AppDatabase', () => {
     expect(count(d)).toBe(1);
   });
 
+  // A service may call another service inside one action; a failure in the inner part is rolled back
+  // alone (savepoint) and the outer work is kept if the caller handles the error.
   it('nested tx: inner throw rolls back only inner work', () => {
     const d = open();
     d.tx((c) => {
@@ -56,6 +70,7 @@ describe('AppDatabase', () => {
     expect(rows.map((r) => r.v)).toEqual(['outer']);
   });
 
+  // Inner work only becomes permanent when the outer action commits: outer failure removes both.
   it('nested tx: inner success commits with outer; outer throw rolls back both', () => {
     const d = open();
     expect(() => d.tx((c) => {
@@ -66,6 +81,7 @@ describe('AppDatabase', () => {
     expect(count(d)).toBe(0);
   });
 
+  // A transaction must be synchronous; an async callback would commit too early, so it is refused.
   it('rejects an async function and the connection stays usable', () => {
     const d = open();
     let caught: unknown;
@@ -78,6 +94,7 @@ describe('AppDatabase', () => {
     expect(count(d)).toBe(1);
   });
 
+  // Closing twice is harmless; using a closed connection fails with a clear DB_CLOSED error (restore relies on this).
   it('close() is idempotent; conn after close throws DB_CLOSED', () => {
     const d = open();
     expect(d.isOpen).toBe(true);
@@ -89,6 +106,7 @@ describe('AppDatabase', () => {
     expect(code).toBe('DB_CLOSED');
   });
 
+  // Restore closes and reopens the database file; existing rows must still be there afterwards.
   it('reopen() keeps data, also when already closed', () => {
     const d = open();
     d.tx((c) => c.exec("INSERT INTO t (v) VALUES ('keep')"));

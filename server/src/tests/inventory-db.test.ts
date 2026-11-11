@@ -1,3 +1,15 @@
+// Inventory / purchasing database rules (migration 004) - database level, raw SQL on in-memory SQLite, no HTTP.
+// Protects the schema-level guarantees that keep stock and cash trustworthy even if application code has a bug:
+// - stock_movements is the append-only ledger and a trigger keeps the product cache (qty_on_hand, stock_value_cents)
+//   equal to the sum of the movements (BUSINESS_RULES section 3); the cache can never go negative, and never keep value
+//   with zero quantity (STOCK_VALUE_WITHOUT_QTY);
+// - R-FD: no future business dates on stock, cash or purchases (FUTURE_DATE_NOT_ALLOWED); backdating is allowed;
+// - R-RD: a purchase return may not be dated before its purchase (RETURN_BEFORE_ORIGINAL_DATE);
+// - purchases are immutable except posted -> void (R1: history is reversed, never edited), clientRef is unique
+//   (no double submission), pack arithmetic (units = packs x pack size) and returned_units only ever grow;
+// - cash_entries and audit_logs are append-only; cash types/books/funds follow the allowed combinations (section 2).
+// Organised by table, one describe per table. Small raw-SQL helpers (addMove, addPurchase, ...) build rows directly.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -14,20 +26,24 @@ afterEach(async () => {
   await env.cleanup();
 });
 
+// Counter for unique client references (the duplicate-submission guard needs a distinct value per row).
 let seq = 0;
 const uniq = () => `cref-${seq++}-${Math.random().toString(36).slice(2, 8)}`;
 
+// Raw-SQL helper: insert one stock movement (default type 'adjustment', dated today). Returns its id.
 function addMove(c: DatabaseSync, productId: number, qty: number, value: number, o: { type?: string; date?: string } = {}): number {
   return Number(c.prepare(
     `INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents)
      VALUES (?, ?, ?, ?, ?)`,
   ).run(productId, o.date ?? today(), o.type ?? 'adjustment', qty, value).lastInsertRowid);
 }
+// Raw-SQL helper: insert a purchase header (shop book, Rs 10.00 total, today unless overridden).
 function addPurchase(c: DatabaseSync, o: { date?: string; book?: string; total?: number } = {}): number {
   return Number(c.prepare(
     `INSERT INTO purchases (business_date, book, total_cents, client_ref) VALUES (?, ?, ?, ?)`,
   ).run(o.date ?? today(), o.book ?? 'shop', o.total ?? 1000, uniq()).lastInsertRowid);
 }
+// Raw-SQL helper: insert a purchase line (default 1 pack of 10 = 10 units, Rs 10.00).
 function addItem(c: DatabaseSync, purchaseId: number, productId: number, o: { packs?: number; packSize?: number; units?: number; total?: number; returned?: number } = {}): number {
   const packs = o.packs ?? 1; const packSize = o.packSize ?? 10;
   return Number(c.prepare(
@@ -35,18 +51,22 @@ function addItem(c: DatabaseSync, purchaseId: number, productId: number, o: { pa
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(purchaseId, productId, packs, packSize, o.units ?? packs * packSize, o.total ?? 1000, o.returned ?? 0).lastInsertRowid);
 }
+// Raw-SQL helper: insert a purchase return header for a given business date.
 function addReturn(c: DatabaseSync, purchaseId: number, date: string): number {
   return Number(c.prepare(
     `INSERT INTO purchase_returns (purchase_id, business_date, refund_cents, client_ref) VALUES (?, ?, 100, ?)`,
   ).run(purchaseId, date, uniq()).lastInsertRowid);
 }
+// Raw-SQL helper: insert a cash entry (default: shop purchase_payment of -Rs 1.00, today).
 function addCash(c: DatabaseSync, o: { book?: string; type?: string; amount?: number; fund?: string | null; date?: string; reverses?: number | null }): number {
   return Number(c.prepare(
     `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, reverses_entry_id) VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(o.book ?? 'shop', o.date ?? today(), o.type ?? 'purchase_payment', o.amount ?? -100, o.fund ?? null, o.reverses ?? null).lastInsertRowid);
 }
 
+// Migration 004 adds the Phase 3 tables (stock ledger, cash, purchases) and guard triggers.
 describe('migration 004', () => {
+  // A new database has every Phase 3 table and every guard trigger, plus the audit columns business_date / backdated.
   it('fresh DB reaches latestVersion >= 4 with all Phase 3 tables, triggers and audit columns', () => {
     const c = memDb(conns);
     expect(latestVersion()).toBeGreaterThanOrEqual(4);
@@ -66,6 +86,8 @@ describe('migration 004', () => {
     expect(cols).toEqual(expect.arrayContaining(['business_date', 'backdated']));
   });
 
+  // Upgrading an older shop database keeps its stock (5 units / Rs 25.00) and audit rows; a new movement of +3 / Rs 3.00
+  // then gives 8 units / Rs 28.00, proving the new cache trigger works on old data.
   it('v3 -> v4 upgrade preserves existing data and gives audit rows the defaults', () => {
     const dir = env.newDir();
     const mdir = join(dir, 'mig');
@@ -98,7 +120,9 @@ describe('migration 004', () => {
   });
 });
 
+// The stock ledger refuses bad dates, unknown types, empty movements and any edit or delete.
 describe('stock_movements checks', () => {
+  // R-FD: the database itself refuses a movement dated after today (Colombo); backdated ones are allowed.
   it('future business date rejected (trigger), today and backdated accepted', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -110,6 +134,7 @@ describe('stock_movements checks', () => {
     expect(pool(c, p)).toEqual({ qty: 3, value: 3 });
   });
 
+  // Only real calendar dates (YYYY-MM-DD) are accepted; 2024-02-29 is a real leap day, 2025-02-29 is not.
   it('malformed / impossible dates rejected by CHECK', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -121,6 +146,7 @@ describe('stock_movements checks', () => {
     expect(movements(c, p)).toHaveLength(1);
   });
 
+  // Only the 12 known movement types are allowed; a movement must change quantity or value; the product must exist.
   it('type enum, empty movement and unknown product are rejected', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -134,6 +160,7 @@ describe('stock_movements checks', () => {
     expect(pool(c, p)).toEqual({ qty: 12, value: 12 });
   });
 
+  // The ledger is never edited or deleted; corrections are new reversal rows (R1, C6).
   it('append-only: UPDATE and DELETE refused', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -146,7 +173,9 @@ describe('stock_movements checks', () => {
   });
 });
 
+// The product's qty_on_hand / stock_value_cents is a cache maintained by a trigger on every movement.
 describe('stock cache trigger', () => {
+  // +10 / 1,000 then -4 / -400 gives 6 / 600; a value-only movement (qty 0, -100) leaves 6 / 500.
   it('each movement adds its deltas to the product cache; other products untouched', () => {
     const c = memDb(conns);
     const a = sqlProduct(c); const b = sqlProduct(c);
@@ -159,6 +188,7 @@ describe('stock cache trigger', () => {
     expect(pool(c, a)).toEqual({ qty: 6, value: 500 });
   });
 
+  // An outflow bigger than the stock fails as a whole: the cache AND the ledger both stay unchanged.
   it('negative quantity aborts the insert and leaves the cache AND movements unchanged', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -187,6 +217,7 @@ describe('stock cache trigger', () => {
     expect(movements(c, s)).toHaveLength(0);
   });
 
+  // Quantity 0 with value left would be "free money" stuck in an empty pool, so the database refuses it.
   it('STOCK_VALUE_WITHOUT_QTY: quantity reaching 0 while value remains is refused', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -197,6 +228,7 @@ describe('stock cache trigger', () => {
     expect(movements(c, p)).toHaveLength(1);
   });
 
+  // R4: pool 3 / 7,500; sweep -2,500 first (value only) -> 3 / 5,000; then remove 3 units / 5,000 -> 0 / 0.
   it('sweep-then-removal is valid: value-only -X first, then qty/value removal to 0/0', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -207,6 +239,7 @@ describe('stock cache trigger', () => {
     expect(pool(c, p)).toEqual({ qty: 0, value: 0 });
   });
 
+  // Free goods or fully written-down stock: units can exist with value 0.
   it('qty > 0 with value 0 is a legal state', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -215,6 +248,7 @@ describe('stock cache trigger', () => {
     expect(pool(c, p)).toEqual({ qty: 3, value: 0 });
   });
 
+  // One business action is all-or-nothing: if the second movement fails, the first (and its cache change) is undone.
   it('database transaction rollback: 2nd insert fails -> the 1st is rolled back (cache and movement)', async () => {
     const { ctx } = await env.build();
     const conn = ctx.database.conn;
@@ -233,6 +267,7 @@ describe('stock cache trigger', () => {
   });
 });
 
+// Cash ledger rules: dates, allowed book/type/fund combinations, reversals, append-only (BUSINESS_RULES section 2).
 describe('cash_entries checks', () => {
   it('future dates rejected, backdated and malformed handled', () => {
     const c = memDb(conns);
@@ -244,6 +279,7 @@ describe('cash_entries checks', () => {
     expect(scalar(c, 'SELECT COUNT(*) FROM cash_entries')).toBe(2);
   });
 
+  // Inventory purchases are paid from the shop or telecom cash book, never from ice cream.
   it('purchase_payment / purchase_refund only in shop or telecom', () => {
     const c = memDb(conns);
     expect(msgOf(() => addCash(c, { book: 'icecream', fund: 'cost', type: 'purchase_payment' }))).toMatch(/CHECK/);
@@ -252,6 +288,7 @@ describe('cash_entries checks', () => {
     addCash(c, { book: 'shop', type: 'purchase_refund', amount: 5 });
   });
 
+  // Section 10.2: every ice cream cash entry names one fund; other books have no funds.
   it('icecream book needs a fund; fund only for icecream', () => {
     const c = memDb(conns);
     expect(msgOf(() => addCash(c, { book: 'icecream', type: 'icecream_sale', fund: null }))).toMatch(/CHECK/);
@@ -261,6 +298,7 @@ describe('cash_entries checks', () => {
     addCash(c, { book: 'icecream', type: 'expense', fund: 'profit', amount: -5 });
   });
 
+  // Ice cream cash types cannot appear in the shop or telecom books (segments are disjoint).
   it('icecream_* types only in the icecream book', () => {
     const c = memDb(conns);
     for (const t of ['icecream_sale', 'icecream_materials_payment', 'icecream_electricity_payment', 'icecream_other_cost']) {
@@ -277,6 +315,7 @@ describe('cash_entries checks', () => {
     expect(msgOf(() => addCash(c, { book: 'icecream', fund: 'nope', type: 'icecream_sale' }))).toMatch(/CHECK/);
   });
 
+  // R1: a void is a new row pointing at the original; here -500 and its +500 reversal sum to 0, and rows can never be edited.
   it('reverses_entry_id must reference a real entry; append-only', () => {
     const c = memDb(conns);
     expect(msgOf(() => addCash(c, { reverses: 9999 }))).toMatch(/FOREIGN KEY/);
@@ -289,6 +328,7 @@ describe('cash_entries checks', () => {
   });
 });
 
+// Purchase header rules: dates, immutability, voiding, duplicate protection.
 describe('purchases', () => {
   it('future date, malformed date, bad enums, negative total, void without reason', () => {
     const c = memDb(conns);
@@ -303,6 +343,7 @@ describe('purchases', () => {
       .run(today(), uniq()))).toMatch(/CHECK/);
   });
 
+  // The same clientRef twice means a double submission; the database refuses the second purchase.
   it('client_ref is unique', () => {
     const c = memDb(conns);
     c.prepare("INSERT INTO purchases (business_date, book, total_cents, client_ref) VALUES (?, 'shop', 1, 'same-ref-1')").run(today());
@@ -310,6 +351,7 @@ describe('purchases', () => {
       .toMatch(/UNIQUE/);
   });
 
+  // A posted purchase can never be edited (R1); mistakes are fixed by void or return.
   it('PURCHASE_IMMUTABLE for every financial/descriptive column', () => {
     const c = memDb(conns);
     const sup = Number(c.prepare("INSERT INTO suppliers (name) VALUES ('S')").run().lastInsertRowid);
@@ -328,6 +370,7 @@ describe('purchases', () => {
     expect(scalar(c, 'SELECT total_cents FROM purchases WHERE id = ?', id)).toBe(1000);
   });
 
+  // The only allowed change is posted -> void with a reason and time; it never goes back to posted and a void row is frozen.
   it('allowed: posted -> void; never void -> posted; void row frozen; posted cannot carry a reason', () => {
     const c = memDb(conns);
     const id = addPurchase(c);
@@ -345,6 +388,7 @@ describe('purchases', () => {
     expect(scalar(c, "SELECT COUNT(*) FROM purchases WHERE status = 'void' AND void_reason = 'oops'")).toBe(1);
   });
 
+  // Section 12: the business date and the posting timestamp are fixed when saved (writing the same value back is not a change).
   it('POSTED_AT_IMMUTABLE and BUSINESS_DATE_IMMUTABLE', () => {
     const c = memDb(conns);
     const id = addPurchase(c);
@@ -355,7 +399,9 @@ describe('purchases', () => {
   });
 });
 
+// Purchase lines: pack arithmetic and the returned-units counter.
 describe('purchase_items', () => {
+  // Section 3 pack rule: 2 packs x 5 = 10 units; 11 units or zero packs are refused.
   it('units must equal packs x pack_size; packs/pack_size >= 1', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -368,6 +414,7 @@ describe('purchase_items', () => {
     expect(scalar(c, 'SELECT units FROM purchase_items WHERE id = ?', id)).toBe(10);
   });
 
+  // A line of 10 can have 0..10 units returned, the counter only grows (4 -> 10 ok, 10 -> 9 refused), nothing else on the line may change.
   it('returned_units bounded 0..units and never decreasing; other columns immutable', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -386,7 +433,9 @@ describe('purchase_items', () => {
   });
 });
 
+// Purchase return rules (R-RD, R4): dates, voided purchases, matching lines, append-only.
 describe('purchase_returns', () => {
+  // Purchase dated 5 days ago: a return 6 days ago is refused; same day, 2 days ago and today are allowed.
   it('R-RD: before the original date fails; same day and later pass', () => {
     const c = memDb(conns);
     const pu = addPurchase(c, { date: daysAgo(5) });
@@ -406,6 +455,7 @@ describe('purchase_returns', () => {
     expect(scalar(c, 'SELECT COUNT(*) FROM purchase_returns')).toBe(0);
   });
 
+  // A voided purchase has already been reversed; returning goods against it would double-count.
   it('return on a void purchase -> PURCHASE_VOID', () => {
     const c = memDb(conns);
     const pu = addPurchase(c);
@@ -419,6 +469,7 @@ describe('purchase_returns', () => {
     expect(msgOf(() => addReturn(c, 4242, today()))).toMatch(/FOREIGN KEY|NOT NULL|constraint/i);
   });
 
+  // A return can only list lines of its own purchase, with at least 1 unit and a non-negative value.
   it('RETURN_ITEM_MISMATCH: item of another purchase', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -436,6 +487,7 @@ describe('purchase_returns', () => {
     expect(scalar(c, 'SELECT COUNT(*) FROM purchase_return_items')).toBe(1);
   });
 
+  // Returns are history; they can never be edited or removed.
   it('append-only: purchase_returns and purchase_return_items', () => {
     const c = memDb(conns);
     const p = sqlProduct(c);
@@ -453,6 +505,7 @@ describe('purchase_returns', () => {
   });
 });
 
+// The audit table gained business_date and backdated columns without losing its append-only protection.
 describe('audit_logs after migration 004', () => {
   it('new columns default correctly and the append-only triggers still hold', () => {
     const c = memDb(conns);

@@ -1,3 +1,11 @@
+// Real server start-up (index.ts run as a child process) - process level, real ports and temp data folders.
+// Protects the owner's double-click experience (Start-Viman-Shop.bat): the server starts, takes a startup backup,
+// refuses to run twice on the same port, keeps data across restarts, and REFUSES to start (exit code 1, clear message,
+// database untouched, never listening) when viman.db is damaged or fails SQLite's quick_check - so a damaged file is never
+// silently overwritten. A healthy database that was closed cleanly (WAL mode) must not trigger a false alarm, and stale
+// temp files from a crash are cleaned up while unrelated files are kept.
+// These tests spawn real Node processes, so they are slower and use long timeouts.
+
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -9,13 +17,17 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+// Path of the real server entry point that the launcher runs, and the server folder used as its working directory.
 const INDEX = resolve(import.meta.dirname, '../index.ts');
 const SERVER_DIR = resolve(import.meta.dirname, '../..');
 
+// A started server process: handle, its collected console output and a promise for its exit code.
 interface Proc { child: ChildProcess; out: () => string; exited: Promise<number | null> }
 const procs: Proc[] = [];
 const dirs: string[] = [];
 
+// Starts the real server on a given data folder and port (the same environment variables the launcher uses),
+// collecting stdout/stderr so tests can read the messages the owner would see.
 function start(dataDir: string, port: number): Proc {
   const child = spawn(process.execPath, [INDEX], {
     cwd: SERVER_DIR,
@@ -35,6 +47,7 @@ function start(dataDir: string, port: number): Proc {
   return p;
 }
 
+// Picks a random unused local port so parallel test files never clash.
 async function freePort(): Promise<number> {
   for (let i = 0; i < 50; i++) {
     const port = 20000 + Math.floor(Math.random() * 20000);
@@ -48,6 +61,8 @@ async function freePort(): Promise<number> {
   throw new Error('no free port');
 }
 
+// Polls /api/v1/health until the server answers (the same idea as scripts/open-when-ready.mjs); fails early with the
+// server's output if the process exits.
 async function waitHealthy(port: number, proc: Proc, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = '';
@@ -63,14 +78,17 @@ async function waitHealthy(port: number, proc: Proc, timeoutMs = 15000): Promise
   throw new Error(`server not healthy within ${timeoutMs}ms (${last}): ${proc.out()}`);
 }
 
+// Stops a server process and waits (up to 10 s) for it to exit so the folder can be deleted on Windows.
 async function stop(p: Proc): Promise<void> {
   if (p.child.exitCode === null) p.child.kill();
   await Promise.race([p.exited, new Promise((r) => setTimeout(r, 10000))]);
 }
 
+// Lists the startup-backup files in a data folder.
 const startupBackups = (dir: string) =>
   readdirSync(join(dir, 'backups')).filter((f) => /^viman-\d{8}-\d{6}-startup(-\d+)?\.db$/.test(f));
 
+// The startup backup is written just after the server begins listening, so tests wait for it instead of racing.
 async function waitForStartupBackups(dir: string, n: number, timeoutMs = 10000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && startupBackups(dir).length < n) {
@@ -78,11 +96,13 @@ async function waitForStartupBackups(dir: string, n: number, timeoutMs = 10000):
   }
 }
 
+// Kill any leftover server and delete the temp folders (with retries; Windows releases file locks slowly).
 afterAll(async () => {
   for (const p of procs) { try { await stop(p); } catch { /* ignore */ } }
   for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
+// The normal start-up path.
 describe('index.ts startup', () => {
   it('starts, backs up, refuses a second instance on the same port, and persists data across restart', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'viman-startup-'));
@@ -142,6 +162,7 @@ async function exitCode(p: Proc, timeoutMs = 15000): Promise<number | null | 'ti
 }
 const backupFiles = (dir: string) => readdirSync(join(dir, 'backups'));
 
+// Protection against starting on damaged or stale data.
 describe('index.ts startup guards', () => {
   it('garbage viman.db: exits 1, says damaged, lists backups, changes nothing, never listens', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'viman-damaged-'));
@@ -201,6 +222,7 @@ describe('index.ts startup guards', () => {
     await expect(fetch(`http://127.0.0.1:${port}/api/v1/health`)).rejects.toThrow();
   }, 40000);
 
+  // A normally closed WAL database must start without a false "damaged" alarm.
   it('a healthy, cleanly closed (WAL) database starts normally; preflight does not false-alarm', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'viman-healthy-'));
     dirs.push(dir);
@@ -220,6 +242,8 @@ describe('index.ts startup guards', () => {
     await stop(p);
   }, 40000);
 
+  // Leftover temp files from a crash (upload, restore candidate, rollback, half-written backup) are removed - 5 here -
+  // while look-alike files (notes.txt, upload-abc.tmp.db, backups/keep.tmp) are not touched.
   it('healthy start removes planted stale temp files and keeps unrelated ones', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'viman-stale-'));
     dirs.push(dir);

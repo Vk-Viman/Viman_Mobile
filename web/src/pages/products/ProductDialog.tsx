@@ -1,3 +1,10 @@
+/**
+ * ProductDialog: the add / edit form for one product, opened from Products > Products.
+ * API: POST /products (create) and PUT /products/:id (edit, sending only changed fields), plus
+ * GET /categories?active=true for the category choices (api/catalog.ts).
+ * Prices are typed in rupees and converted to integer cents with rupeesToCents() so no floating-point money is
+ * ever sent. All checks here are quick feedback only: the server validates everything again and is authoritative.
+ */
 import { useMemo, useState } from 'react';
 import { FormDialog } from '../../components/FormDialog';
 import { MoneyInput } from '../../components/MoneyInput';
@@ -6,11 +13,19 @@ import { TextField, inputClass } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
 import { useCategories, useCreateProduct, useUpdateProduct } from '../../api/catalog';
+import { BOOK_LABEL, CHECKBOX_CLASS } from '../../lib/constants';
 import { centsToRupees, rupeesToCents } from '../../lib/units';
 import type { Category, Product, ProductCreate, ProductKind, ProductUpdate } from '../../types/api';
-import { BOOK_LABEL, CHECKBOX_CLASS } from './shared';
 
+/** Largest price accepted (in cents), so an accidental extra digit is caught before it reaches the server. */
 const MAX_CENTS = 999999999;
+/** Field length limits, matching the server's validation. */
+const MAX_NAME = 120;
+const MAX_CODE = 30;
+const MAX_DESCRIPTION = 500;
+/** Whole-number pattern for the reorder level (up to 9 digits). */
+const REORDER_RE = /^\d{1,9}$/;
+/** Server field names this dialog shows under their inputs; any other server error becomes the banner. */
 const KNOWN_FIELDS = ['name', 'code', 'categoryId', 'kind', 'description', 'sellPriceCents', 'minPriceCents', 'reorderLevel', 'active'];
 
 interface Props {
@@ -18,6 +33,7 @@ interface Props {
   onClose: () => void;
 }
 
+/** Add/edit product form. Mount only while open so every opening starts from the product's saved values. */
 export function ProductDialog({ product, onClose }: Props) {
   const editing = product !== null;
   const toast = useToast();
@@ -25,6 +41,7 @@ export function ProductDialog({ product, onClose }: Props) {
   const update = useUpdateProduct();
   const cats = useCategories({ active: true });
 
+  // ---- Form fields, held as text exactly as typed ----
   const [name, setName] = useState(product?.name ?? '');
   const [code, setCode] = useState(product?.code ?? '');
   const [categoryId, setCategoryId] = useState(product ? String(product.categoryId) : '');
@@ -43,44 +60,50 @@ export function ProductDialog({ product, onClose }: Props) {
     const list: Category[] = (cats.data?.items ?? []).filter((c) => !product || c.book === product.book);
     return list;
   }, [cats.data, product]);
+  // The product's current category may be inactive and so missing from the list; it is then added back as an option.
   const currentMissing = product && cats.data && !options.some((c) => c.id === product.categoryId);
 
+  // Local validation messages by field. Recomputed only when an input changes (useMemo).
   const errors = useMemo(() => {
     const e: Record<string, string> = {};
     const n = name.trim();
     if (n.length < 1) e.name = 'Enter a product name.';
-    else if (n.length > 120) e.name = 'Name can be at most 120 characters.';
-    if (code.trim().length > 30) e.code = 'Code can be at most 30 characters.';
-    if (description.length > 500) e.description = 'Description can be at most 500 characters.';
+    else if (n.length > MAX_NAME) e.name = `Name can be at most ${MAX_NAME} characters.`;
+    if (code.trim().length > MAX_CODE) e.code = `Code can be at most ${MAX_CODE} characters.`;
+    if (description.length > MAX_DESCRIPTION) e.description = `Description can be at most ${MAX_DESCRIPTION} characters.`;
     if (!categoryId) e.categoryId = 'Choose a category.';
     const sc = rupeesToCents(sell);
     const mc = rupeesToCents(min);
     if (sc === null || sc > MAX_CENTS) e.sellPriceCents = 'Enter a valid selling price (up to 2 decimals).';
     if (mc === null || mc > MAX_CENTS) e.minPriceCents = 'Enter a valid minimum price (up to 2 decimals).';
+    // Cross-field rule: the floor price may not exceed the normal selling price.
     if (sc !== null && mc !== null && !e.sellPriceCents && !e.minPriceCents && mc > sc) {
       e.minPriceCents = 'Minimum price cannot be higher than the selling price.';
     }
-    if (!isService && (!/^\d{1,9}$/.test(reorder.trim()))) e.reorderLevel = 'Enter a whole number, 0 or more.';
+    if (!isService && (!REORDER_RE.test(reorder.trim()))) e.reorderLevel = 'Enter a whole number, 0 or more.';
     return e;
   }, [name, code, description, categoryId, sell, min, reorder, isService]);
 
+  // When editing: the partial update containing ONLY the fields that differ from the saved product.
   const body = useMemo<ProductUpdate>(() => {
     if (!product) return {};
     const b: ProductUpdate = {};
     const sc = rupeesToCents(sell);
     const mc = rupeesToCents(min);
     if (name.trim() !== product.name) b.name = name.trim();
+    // An emptied code box means "remove the code" (null), not an empty-string code.
     if (code.trim() !== (product.code ?? '')) b.code = code.trim() === '' ? null : code.trim();
     if (description !== product.description) b.description = description;
     if (Number(categoryId) !== product.categoryId && categoryId) b.categoryId = Number(categoryId);
     if (sc !== null && sc !== product.sellPriceCents) b.sellPriceCents = sc;
     if (mc !== null && mc !== product.minPriceCents) b.minPriceCents = mc;
-    if (!isService && /^\d{1,9}$/.test(reorder.trim()) && Number(reorder) !== product.reorderLevel) b.reorderLevel = Number(reorder);
+    if (!isService && REORDER_RE.test(reorder.trim()) && Number(reorder) !== product.reorderLevel) b.reorderLevel = Number(reorder);
     if (active !== product.active) b.active = active;
     return b;
   }, [product, name, code, description, categoryId, sell, min, reorder, active, isService]);
 
   const valid = Object.keys(errors).length === 0;
+  // "dirty": creating is always submittable; editing needs at least one change.
   const dirty = !editing || Object.keys(body).length > 0;
   const pending = create.isPending || update.isPending;
 
@@ -90,6 +113,7 @@ export function ProductDialog({ product, onClose }: Props) {
     if (errors[k] && !quiet) return errors[k];
     return serverErr instanceof ApiError ? serverErr.fields[k] : undefined;
   };
+  // Server errors about fields we do not display (or no fields at all) go into one banner.
   const bannerMsg =
     serverErr && !(serverErr instanceof ApiError && Object.keys(serverErr.fields).some((k) => KNOWN_FIELDS.includes(k)))
       ? serverErr.message
@@ -106,6 +130,7 @@ export function ProductDialog({ product, onClose }: Props) {
       update.mutate({ id: product.id, body }, { onSuccess, onError: (e) => setServerErr(e) });
       return;
     }
+    // The text was validated above, so the conversions to cents cannot be null here ("?? 0" only satisfies the type).
     const payload: ProductCreate = {
       name: name.trim(),
       categoryId: Number(categoryId),
@@ -119,6 +144,7 @@ export function ProductDialog({ product, onClose }: Props) {
     create.mutate(payload, { onSuccess, onError: (e) => setServerErr(e) });
   };
 
+  // Category options grouped by book so Shop and Telecom categories are visually separated.
   const grouped = (['shop', 'telecom'] as const).map((b) => ({ book: b, items: options.filter((c) => c.book === b) }));
 
   return (
@@ -140,6 +166,7 @@ export function ProductDialog({ product, onClose }: Props) {
           onChange={(e) => {
             const k = e.target.value as ProductKind;
             setKind(k);
+            // Services hold no stock, so their reorder level is forced to 0.
             if (k === 'service') setReorder('0');
           }}
           disabled={editing}

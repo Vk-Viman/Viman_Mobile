@@ -1,10 +1,19 @@
+/**
+ * repositories/drawings.repo.ts - SQL for `owner_drawings` (the owner taking goods or cash for personal use).
+ *
+ * Layer: repository. Goods drawings remove stock at average cost with no revenue, COGS or expense
+ * (BUSINESS_RULES section 9). Rows are never deleted; a void marks `status = 'void'` (R1) and the triggers of
+ * migration 005 forbid every other edit. `client_ref` is unique so a double submit cannot create two rows.
+ */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
 
 export type DrawingBook = 'shop' | 'telecom' | 'icecream';
 export type DrawingKind = 'cash' | 'goods';
 export type DrawingStatus = 'posted' | 'void';
 export type DrawingFund = 'cost' | 'electricity' | 'profit';
 
+/** One drawing; `productName`/`qty` are set only for goods drawings, `fund` only for the ice-cream book. */
 export interface DrawingRow {
   id: number; businessDate: string; postedAt: string; book: DrawingBook; fund: DrawingFund | null; kind: DrawingKind;
   amountCents: number; productId: number | null; productName: string | null; qty: number | null; note: string;
@@ -25,12 +34,13 @@ const SELECT = `SELECT d.id, d.business_date, d.posted_at, d.book, d.fund, d.kin
 function map(r: Raw): DrawingRow {
   return {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book, fund: r.fund, kind: r.kind,
-    amountCents: Number(r.amount_cents), productId: r.product_id === null ? null : Number(r.product_id),
-    productName: r.product_name, qty: r.qty === null ? null : Number(r.qty), note: r.note, status: r.status,
+    amountCents: Number(r.amount_cents), productId: numberOrNull(r.product_id),
+    productName: r.product_name, qty: numberOrNull(r.qty), note: r.note, status: r.status,
     clientRef: r.client_ref, voidedAt: r.voided_at, voidReason: r.void_reason,
   };
 }
 
+/** Inserts a drawing (status 'posted', posting time from the DB clock) and returns its id. */
 export function insertDrawing(conn: DatabaseSync, d: {
   businessDate: string; book: DrawingBook; fund?: DrawingFund | null; kind: DrawingKind; amountCents: number;
   productId?: number | null; qty?: number | null; note: string; clientRef: string;
@@ -42,16 +52,22 @@ export function insertDrawing(conn: DatabaseSync, d: {
   return Number(res.lastInsertRowid);
 }
 
+/** One drawing by id, or undefined. */
 export function getDrawing(conn: DatabaseSync, id: number): DrawingRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE d.id = ?`).get(id) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/** The drawing already saved under this client reference (idempotent retry), or undefined. */
 export function getDrawingByClientRef(conn: DatabaseSync, ref: string): DrawingRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE d.client_ref = ?`).get(ref) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
+/**
+ * Lists drawings, newest business date first, with the total count and the total of POSTED amounts
+ * (voided rows are listed but not summed). `from`/`to` are inclusive business dates.
+ */
 export function listDrawings(conn: DatabaseSync, q: {
   kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; productId?: number; status?: DrawingStatus;
   limit: number; offset: number;
@@ -76,6 +92,6 @@ export function listDrawings(conn: DatabaseSync, q: {
 /** posted -> void; the DB triggers forbid anything else. voided_at is the DB clock. */
 export function markDrawingVoid(conn: DatabaseSync, id: number, reason: string): void {
   conn.prepare(
-    `UPDATE owner_drawings SET status = 'void', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), void_reason = ? WHERE id = ?`,
+    `UPDATE owner_drawings SET status = 'void', voided_at = ${SQL_NOW_UTC}, void_reason = ? WHERE id = ?`,
   ).run(reason, id);
 }

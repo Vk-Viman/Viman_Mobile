@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+/**
+ * Stock > Stock losses tab (route "/stock/losses"): damaged, lost or expired stock that was written off, with
+ * filters, a total at cost, paging, "Record loss" and "Void".
+ * API: GET /stock-losses, POST /stock-losses (via StockOutDialog), POST /stock-losses/:id/void (api/stock.ts).
+ * The server removes the stock at average cost and reports the total cost; amounts are integer cents. Voiding
+ * puts the stock back at the original cost (and needs a reason; the entry stays in the list as "Void").
+ */
+import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
@@ -7,24 +14,28 @@ import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
+import { BookFilterSelect, DateRangeFields, PostedStatusFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
+import { Pager } from '../../components/Pager';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
+import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
-import { useProducts } from '../../api/catalog';
+import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useStockLosses, useVoidStockLoss } from '../../api/stock';
+import { useDebounced } from '../../hooks/useDebounced';
+import { PAGE_SIZE } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
 import type { Book, PostedStatus, StockLoss, StockLossQuery, StockLossReason } from '../../types/api';
-import { BOOK_LABEL, useDebounced } from '../products/shared';
-import { Pager, REASON_LABEL, VoidRecordDialog } from './shared';
+import { REASON_LABEL, useStockProductChoices } from './shared';
 import { StockOutDialog } from './StockOutDialog';
 
-const LIMIT = 50;
-
+/** The tab: filter bar, losses table with total, pager, and the record / void dialogs. */
 export function StockLossesTab() {
   const toast = useToast();
   const voidMut = useVoidStockLoss();
+  // ---- Filter and paging state ("" means "no filter") ----
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [search, setSearch] = useState('');
@@ -33,14 +44,17 @@ export function StockLossesTab() {
   const [book, setBook] = useState<'' | Book>('');
   const [status, setStatus] = useState<'' | PostedStatus>('');
   const [page, setPage] = useState(0);
+  // Dialog state: `creating` shows the record form; `voiding` holds the loss being voided.
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<StockLoss | null>(null);
 
-  const q = useDebounced(search.trim(), 300);
-  const products = useProducts({ q: q || undefined, limit: 500 });
-  const stockProducts = useMemo(() => (products.data?.items ?? []).filter((p) => p.kind === 'stock'), [products.data]);
+  // The "Find product" box narrows the Product drop-down (debounced so the server is queried once typing pauses).
+  const q = useDebounced(search.trim());
+  const stockProducts = useStockProductChoices(q);
+  // Back to the first page whenever a filter changes.
   useEffect(() => { setPage(0); }, [from, to, productId, reason, book, status]);
 
+  // Unset filters become undefined so the API helper leaves them out of the URL.
   const query: StockLossQuery = {
     from: from || undefined,
     to: to || undefined,
@@ -48,10 +62,11 @@ export function StockLossesTab() {
     reason: reason || undefined,
     book: book || undefined,
     status: status || undefined,
-    limit: LIMIT,
-    offset: page * LIMIT,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
   };
   const list = useStockLosses(query);
+  // True when any filter is set; decides between "no losses yet" and "no losses match".
   const filtered = Boolean(from || to || productId || reason || book || status);
 
   const columns: Column<StockLoss>[] = [
@@ -63,7 +78,7 @@ export function StockLossesTab() {
       ),
     },
     { key: 'prod', header: 'Product', render: (l) => <span className="font-medium text-slate-900">{l.productName}</span> },
-    { key: 'book', header: 'Book', render: (l) => <Badge tone={l.book === 'shop' ? 'brand' : 'neutral'}>{BOOK_LABEL[l.book]}</Badge> },
+    { key: 'book', header: 'Book', render: (l) => <BookBadge book={l.book} /> },
     { key: 'qty', header: 'Qty', align: 'right', render: (l) => l.qty },
     { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (l) => <Money cents={l.costCents} /> },
     { key: 'reason', header: 'Reason', render: (l) => <Badge tone={l.reason === 'other' ? 'neutral' : 'amber'}>{REASON_LABEL[l.reason]}</Badge> },
@@ -73,7 +88,7 @@ export function StockLossesTab() {
       header: 'Status',
       render: (l) => (
         <span>
-          <Badge tone={l.status === 'void' ? 'red' : 'brand'}>{l.status === 'void' ? 'Void' : 'Posted'}</Badge>
+          <PostedStatusBadge status={l.status} />
           {l.status === 'void' && l.voidReason && <span className="mt-1 block text-xs text-slate-500">{l.voidReason}</span>}
         </span>
       ),
@@ -81,6 +96,7 @@ export function StockLossesTab() {
     {
       key: 'act',
       header: 'Actions',
+      // Only live (posted) entries can be voided.
       render: (l) => (l.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(l)} aria-label={`Void loss #${l.id}`}>Void</Button> : null),
     },
   ];
@@ -93,8 +109,7 @@ export function StockLossesTab() {
       >
         <p className="mb-4 text-sm text-slate-500">Damaged, lost or expired stock is removed at its average cost and counted as a stock adjustment.</p>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <TextField label="From date" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
-          <TextField label="To date" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
+          <DateRangeFields from={from} to={to} onFrom={setFrom} onTo={setTo} />
           <TextField label="Find product" placeholder="Name or code" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
           <SelectField label="Product" value={productId} onChange={(e) => setProductId(e.target.value)}>
             <option value="">All products</option>
@@ -107,16 +122,8 @@ export function StockLossesTab() {
             <option value="expired">Expired</option>
             <option value="other">Other</option>
           </SelectField>
-          <SelectField label="Book" value={book} onChange={(e) => setBook(e.target.value as '' | Book)}>
-            <option value="">All</option>
-            <option value="shop">Shop</option>
-            <option value="telecom">Telecom</option>
-          </SelectField>
-          <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value as '' | PostedStatus)}>
-            <option value="">All</option>
-            <option value="posted">Posted</option>
-            <option value="void">Void</option>
-          </SelectField>
+          <BookFilterSelect value={book} onChange={setBook} />
+          <PostedStatusFilterSelect value={status} onChange={setStatus} />
         </div>
 
         {list.isPending ? (
@@ -131,12 +138,14 @@ export function StockLossesTab() {
           />
         ) : (
           <>
+            {/* Total comes from the server (sum of posted losses matching the filters), never added up here. */}
             <p className="mb-3 text-sm font-semibold text-slate-900">Total cost of losses (posted): <span className="num">{formatLKR(list.data.totalCostCents)}</span></p>
             <DataTable columns={columns} rows={list.data.items} rowKey={(l) => l.id} emptyTitle="No losses match these filters" emptyHint="Try a different date range or clear a filter." />
-            <Pager page={page} total={list.data.total} limit={LIMIT} noun="losses" onPage={setPage} />
+            <Pager page={page} total={list.data.total} limit={PAGE_SIZE} noun="losses" onPage={setPage} />
           </>
         )}
       </Card>
+      {/* Dialogs are mounted only while open so each opening starts fresh (new clientRef, empty form). */}
       {creating && <StockOutDialog mode="loss" onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

@@ -1,8 +1,18 @@
+// Money helpers (lib/money.ts) - unit level, pure functions, no database.
+// Protects R0 (BUSINESS_RULES section 0): money is integer cents, and every derived amount (cost of goods removed from
+// stock, partial returns C5/C7/R5, commissions) goes through ONE rounding rule: mulDivRound(a, b, c) = round(a*b/c),
+// exact with BigInt, half away from zero. If this drifts by one cent, profit and stock value drift with it.
+// Also covers applyBp (reload 6% / EZCash 0.8% commissions in basis points, section 5), rupeesToCents (what the
+// owner types) and formatLKR (what the owner reads).
+// Organised as groups of hand-derived vectors; a "pool removal sequence" test mimics how the weighted average
+// (section 3) takes cost out of stock one unit at a time.
+
 // Independent money test vectors (Financial Logic agent).
 // Every expected value was derived by hand, never by calling the implementation.
 import { describe, it, expect } from 'vitest';
 import { isCents, mulDivRound, applyBp, rupeesToCents, formatLKR } from '../../lib/money.ts';
 
+// A "cents" value must be a safe integer; anything else would break exact money arithmetic.
 describe('isCents', () => {
   it('accepts safe integers (positive, negative, zero)', () => {
     expect(isCents(5)).toBe(true);
@@ -21,12 +31,15 @@ describe('isCents', () => {
   });
 });
 
+// The single rounding rule: exact halves go away from zero (0.5 -> 1, -0.5 -> -1), never banker's rounding.
 describe('mulDivRound: half away from zero (R0)', () => {
+  // 1/2 = 0.5 -> 1;  3/2 = 1.5 -> 2;  5/2 = 2.5 -> 3.
   it('R0: rounds half up for positives (0.5 -> 1, 1.5 -> 2, 2.5 -> 3)', () => {
     expect(mulDivRound(1, 1, 2)).toBe(1);
     expect(mulDivRound(3, 1, 2)).toBe(2);
     expect(mulDivRound(5, 1, 2)).toBe(3);
   });
+  // Mirror image for refunds/reversals: -0.5 -> -1, -1.5 -> -2, -2.5 -> -3 (never toward zero).
   it('R0: rounds half away from zero (negative numerator)', () => {
     expect(mulDivRound(-1, 1, 2)).toBe(-1);
     expect(mulDivRound(-3, 1, 2)).toBe(-2);
@@ -41,6 +54,7 @@ describe('mulDivRound: half away from zero (R0)', () => {
     expect(mulDivRound(-1, 1, -2)).toBe(1);
     expect(mulDivRound(-1, -1, 2)).toBe(1);
   });
+  // 2/3 = 0.67 -> 1; 1/3 = 0.33 -> 0; signs mirror for negatives.
   it('R0: below half rounds toward zero, above half away (2/3 -> 1, 1/3 -> 0, -2/3 -> -1, -1/3 -> 0)', () => {
     expect(mulDivRound(2, 1, 3)).toBe(1);
     expect(mulDivRound(1, 1, 3)).toBe(0);
@@ -59,6 +73,7 @@ describe('mulDivRound: half away from zero (R0)', () => {
   });
 });
 
+// Replays how stock cost is removed unit by unit: the last unit takes whatever value is left, so no cent is ever lost.
 describe('mulDivRound: value-pool removal sequences (R0, costing)', () => {
   it('pool 3 units / 1000 cents, removing 1,1,1 -> 333, 334, 333, pool ends 0/0', () => {
     let qty = 3;
@@ -80,6 +95,9 @@ describe('mulDivRound: value-pool removal sequences (R0, costing)', () => {
     expect(removed.reduce((a, b) => a + b, 0)).toBe(1000);
   });
 
+  // Weighted average (section 3): 10 @ Rs 300 + 10 @ Rs 400 = 20 units / Rs 7,000 (700,000 cents) -> average Rs 350.
+  // Selling 2 removes 2/20 of the value = 70,000. Buying 5 @ Rs 420 later gives 23 units / 840,000.
+  // Selling 3 removes 840,000 x 3 / 23 = 109,565.2 -> 109,565 (remainder 5 is under half of 23, so it rounds down).
   it('weighted average: 10@30000 + 10@40000 = pool 20/700000; sell 2 -> 70000', () => {
     let qty = 10 + 10;
     let value = 10 * 30000 + 10 * 40000; // 300000 + 400000 = 700000
@@ -109,12 +127,15 @@ describe('mulDivRound: value-pool removal sequences (R0, costing)', () => {
     expect(value).toBe(730435);
   });
 
+  // Rs 300 + Rs 400 = Rs 700 over 2 units -> Rs 350 per unit (35,000 cents).
   it('simple average: 300 and 400 -> average 350 (value pool 700 over 2)', () => {
     expect(mulDivRound(30000 + 40000, 1, 2)).toBe(35000);
   });
 });
 
+// Pack-size purchases (units = packs x pack size) and proportional partial returns (R5 / C5).
 describe('mulDivRound: pack size and proportional splits', () => {
+  // 1 box of 10 bought for Rs 1,320 = 132,000 cents / 10 units = 13,200 cents (Rs 132) per unit.
   it('R-pack: 1 box of 10 for Rs 1,320 -> unit cost 13200 cents', () => {
     expect(mulDivRound(132000, 1, 10)).toBe(13200);
   });
@@ -133,6 +154,8 @@ describe('mulDivRound: pack size and proportional splits', () => {
     expect(removed).toEqual([33333, 33334, 33333]);
     expect(value).toBe(0);
   });
+  // Returning 1 of 3 units on a Rs 10.00 line gives 333; the later return of the final 2 takes the remainder 667,
+  // so refunds add up to exactly the line total.
   it('R5: partial return takes proportional line total, final unit takes remainder', () => {
     // line total 1000 cents, qty 3. Return 1: 333. Cumulative returns reach 1000 exactly.
     const first = mulDivRound(1000, 1, 3); // 333.33 -> 333
@@ -144,6 +167,7 @@ describe('mulDivRound: pack size and proportional splits', () => {
   });
 });
 
+// Commission = amount x rate in basis points / 10,000 (100 bp = 1%). Used for reload (default 600 bp) and EZCash (80 bp).
 describe('applyBp (commission, rates in basis points)', () => {
   it('R-commission: 6% reload on 50,000.00 = 3,000.00', () => {
     expect(applyBp(5000000, 600)).toBe(300000);
@@ -176,6 +200,7 @@ describe('applyBp (commission, rates in basis points)', () => {
   it('R-commission: 10000 bp is 100% (identity)', () => {
     expect(applyBp(123457, 10000)).toBe(123457);
   });
+  // BUSINESS_RULES section 5 example: Rs 50,000 @ 6% = Rs 3,000, plus Rs 50 extra = Rs 3,050 (the extra is added after rounding).
   it('R-commission: reload 50,000 @ 600 bp + 50 extra = 3,050 (extra added after rounding)', () => {
     expect(applyBp(5000000, 600) + 5000).toBe(305000);
   });
@@ -185,6 +210,7 @@ describe('applyBp (commission, rates in basis points)', () => {
   });
 });
 
+// Very large amounts stay exact (BigInt) and bad input is refused loudly instead of silently giving wrong money.
 describe('mulDivRound: large values and errors', () => {
   it('R0: 9_000_000_000_000 x 3 / 7 = 3_857_142_857_143 (exact)', () => {
     // 9e12*3 = 27e12 = 27,000,000,000,000
@@ -192,6 +218,7 @@ describe('mulDivRound: large values and errors', () => {
     // 6/7 = 0.857 > 0.5 -> round up -> 3,857,142,857,143
     expect(mulDivRound(9_000_000_000_000, 3, 7)).toBe(3_857_142_857_143);
   });
+  // The product a*b would overflow normal floating point; BigInt keeps the result exact.
   it('R0: intermediate product beyond 2^53 is exact (9e12 x 9e12 / 9e12 = 9e12)', () => {
     // product 8.1e25 overflows double precision; BigInt must keep it exact
     expect(mulDivRound(9_000_000_000_000, 9_000_000_000_000, 9_000_000_000_000)).toBe(9_000_000_000_000);
@@ -229,6 +256,7 @@ describe('mulDivRound: large values and errors', () => {
   });
 });
 
+// Converts what a person types ("1,320.50") into integer cents without floating-point drift.
 describe('rupeesToCents', () => {
   it('parses thousands separators and two decimals', () => {
     expect(rupeesToCents('1,320.50')).toBe(132050);
@@ -267,6 +295,7 @@ describe('rupeesToCents', () => {
   });
 });
 
+// Display format "Rs. 12,345.00"; negatives show as "-Rs. 1,234.50" (BUSINESS_RULES section 0).
 describe('formatLKR', () => {
   it('formats with grouping and two decimals', () => {
     expect(formatLKR(1234567)).toBe('Rs. 12,345.67');
