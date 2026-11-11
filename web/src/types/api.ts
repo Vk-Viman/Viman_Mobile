@@ -121,3 +121,110 @@ export interface SupplierItem { item: Supplier }
 export interface SupplierQuery { q?: string; active?: boolean }
 export interface SupplierCreate { name: string; phone?: string; notes?: string }
 export interface SupplierUpdate { name?: string; phone?: string; notes?: string; active?: boolean }
+
+// ---- Phase 3: Purchases, stock movements ----
+export interface PurchaseItem {
+  id: number;
+  productId: number;
+  productName: string;
+  packs: number;
+  packSize: number;
+  units: number;
+  lineTotalCents: number;
+  unitCostCents: number;
+  returnedUnits: number;
+}
+export interface PurchaseReturnItem {
+  id: number;
+  purchaseItemId: number;
+  productId: number;
+  productName: string;
+  units: number;
+  valueCents: number;
+}
+export interface PurchaseReturn {
+  id: number;
+  purchaseId: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  refundCents: number;
+  note: string;
+  clientRef: string;
+  items: PurchaseReturnItem[];
+}
+export type PurchaseStatus = 'posted' | 'void';
+export interface Purchase {
+  id: number;
+  businessDate: string;
+  postedAt: string;
+  backdated: boolean;
+  supplierId: number | null;
+  supplierName: string | null;
+  billNo: string;
+  book: Book;
+  totalCents: number;
+  status: PurchaseStatus;
+  notes: string;
+  voidedAt: string | null;
+  voidReason: string | null;
+  clientRef: string;
+  items: PurchaseItem[];
+  returns: PurchaseReturn[];
+}
+export interface PurchaseList { items: Purchase[]; total: number }
+export interface PurchaseOne { item: Purchase }
+export interface PurchaseQuery {
+  from?: string;
+  to?: string;
+  book?: Book;
+  supplierId?: number;
+  status?: PurchaseStatus;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+export interface PurchaseCreate {
+  businessDate: string;
+  supplierId?: number;
+  billNo?: string;
+  items: { productId: number; packs: number; packSize: number; lineTotalCents: number }[];
+  notes?: string;
+  clientRef: string;
+}
+export interface PurchaseVoidBody { reason: string }
+export interface PurchaseReturnCreate {
+  businessDate: string;
+  items: { purchaseItemId: number; units: number }[];
+  note?: string;
+  clientRef: string;
+}
+export interface PurchaseReturnResult { item: PurchaseReturn; purchase: Purchase }
+
+export type MovementType =
+  | 'opening' | 'purchase' | 'purchase_return' | 'purchase_void' | 'sale' | 'sale_return' | 'sale_void'
+  | 'personal_use' | 'loss' | 'stocktake_gain' | 'stocktake_loss' | 'adjustment';
+export interface StockMovement {
+  id: number;
+  productId: number;
+  businessDate: string;
+  postedAt: string;
+  type: MovementType;
+  qtyDelta: number;
+  valueDeltaCents: number;
+  unitCostCents: number | null;
+  refTable: string | null;
+  refId: number | null;
+  reason: string;
+}
+export interface MovementList { items: StockMovement[]; total: number; product: Product }
+export interface MovementQuery { from?: string; to?: string; type?: MovementType; limit?: number; offset?: number }
+export interface ReconciliationMismatch {
+  productId: number;
+  name: string;
+  cacheQty: number;
+  movementQty: number;
+  cacheValueCents: number;
+  movementValueCents: number;
+}
+export interface InventoryReconciliation { ok: boolean; checkedProducts: number; mismatches: ReconciliationMismatch[] }

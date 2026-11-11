@@ -190,8 +190,11 @@ describe('products constraints', () => {
     expect(msg(() => addProd(c, { name: 's1', kind: 'service', qty: 1 }))).toMatch(/CHECK/);
     expect(msg(() => addProd(c, { name: 's2', kind: 'service', value: 1 }))).toMatch(/CHECK/);
     const id = addProd(c, { name: 's3', kind: 'service' });
-    expect(msg(() => c.prepare('UPDATE products SET qty_on_hand = 1 WHERE id = ?').run(id))).toMatch(/CHECK/);
-    expect(msg(() => c.prepare('UPDATE products SET stock_value_cents = 1 WHERE id = ?').run(id))).toMatch(/CHECK/);
+    // Phase 3: trg_products_value_without_qty may fire before the CHECK for value-only updates.
+    expect(msg(() => c.prepare('UPDATE products SET qty_on_hand = 1 WHERE id = ?').run(id))).toMatch(/CHECK|STOCK_VALUE_WITHOUT_QTY/);
+    expect(msg(() => c.prepare('UPDATE products SET stock_value_cents = 1 WHERE id = ?').run(id))).toMatch(/CHECK|STOCK_VALUE_WITHOUT_QTY/);
+    const row = c.prepare('SELECT qty_on_hand AS q, stock_value_cents AS v FROM products WHERE id = ?').get(id) as { q: number; v: number };
+    expect([Number(row.q), Number(row.v)]).toEqual([0, 0]);
   });
 
   it('PRODUCT_BOOK_MISMATCH on insert and on category move; kind/book immutable', () => {

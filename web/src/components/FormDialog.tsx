@@ -12,13 +12,15 @@ interface Props {
   error?: string | null;
   onSubmit: () => void;
   onClose: () => void;
+  /** Tailwind max-width class for the panel (default max-w-xl). */
+  widthClass?: string;
 }
 
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), [href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Modal form: focus trapped, Esc closes, Enter submits (native form submit). Mount it only while open. */
-export function FormDialog({ title, children, submitLabel, canSubmit, loading, error, onSubmit, onClose }: Props) {
+export function FormDialog({ title, children, submitLabel, canSubmit, loading, error, onSubmit, onClose, widthClass = 'max-w-xl' }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const onCloseRef = useRef(onClose);
@@ -55,7 +57,7 @@ export function FormDialog({ title, children, submitLabel, canSubmit, loading, e
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} className="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`max-h-[calc(100vh-2rem)] w-full ${widthClass} overflow-y-auto rounded-xl bg-white p-6 shadow-xl`}>
         <h2 id={titleId} className="text-lg font-semibold text-slate-900">{title}</h2>
         <form onSubmit={submit} className="mt-4 space-y-4" noValidate>
           {children}

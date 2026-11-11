@@ -17,7 +17,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, phase: 12, description: 'Today at a glance: sales, profit, cash in each book and stock alerts.', built: true },
   { to: '/sales', label: 'Sales', icon: ShoppingCart, phase: 5, description: 'Record cash sales of goods and services, with returns and voids.' },
   { to: '/products', label: 'Products', icon: Package, phase: 2, description: 'Manage the product catalogue, prices and categories.', built: true },
-  { to: '/purchases', label: 'Purchases', icon: Truck, phase: 3, description: 'Record stock bought from suppliers and what you paid.' },
+  { to: '/purchases', label: 'Purchases', icon: Truck, phase: 3, description: 'Record stock bought from suppliers and what you paid.', built: true },
   { to: '/stock', label: 'Stock', icon: Boxes, phase: 4, description: 'See stock on hand, movements, adjustments and losses.' },
   { to: '/opening-stock', label: 'Opening Stock', icon: ClipboardList, phase: 13, description: 'Enter starting stock by hand or from an Excel template at go-live.' },
   { to: '/telecom', label: 'Telecom', icon: Smartphone, phase: 6, description: 'Reloads, EZCash bill payments and scratch cards with commissions.' },

@@ -66,3 +66,12 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 | Frontend | sonnet | web/src/pages/products/*, api/catalog.ts, 2 components | Accepted — integer-only money handling checked; browser-verified |
 | Backend | sonnet | catalog.service.ts, 4 route files, app.ts registration | Accepted — one tx per write with audit row; avg cost via mulDivRound |
 | QA | sonnet | 4 catalog test files + helper; startup.test fix | Accepted — no skipped tests; 299/299 |
+
+## Phase 3 — Purchases, inventory (2026-11-11)
+| Agent | Model | Files | Orchestrator review |
+|---|---|---|---|
+| DB Architect | sonnet | 004 migration, 3 repos, audit.repo | Accepted — trigger-driven stock cache; 83 agent checks |
+| Frontend | sonnet | web/src/pages/purchases/*, api/purchases.ts, Modal | Accepted — integer-only math; browser-verified |
+| Backend | sonnet | inventory.service, purchases.service, 2 route files, audit/errors/app edits | Accepted — engine read line by line; demo numbers re-derived by hand (all match to the cent) |
+| QA | sonnet | 4 test files + helper (+2 fixed tests) | Accepted — QA connection dropped mid-run; resumed; 4 failures were test mistakes (hand-verified), no code bugs |
+| Orchestrator | opus/sonnet | contract + schema detail, review | Cash ledger created early (owner decision); audit columns moved to Phase 3 (documented) |

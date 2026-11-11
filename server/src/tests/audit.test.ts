@@ -49,8 +49,23 @@ describe('GET /audit-logs', () => {
     expect(b.items[0]).toEqual({
       id: 3, at: expect.any(String), entity: 'odd', entityId: '3', action: 'create',
       before: { i: 3 }, after: { i: 30 }, note: 'n3',
+      postedAt: expect.any(String), businessDate: null, backdated: false,
     });
+    expect(b.items[0].postedAt).toBe(b.items[0].at);
+    expect(b.items[0].postedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(b.nextBeforeId).toBeNull();
+  });
+
+  it('financial audit rows carry businessDate and backdated; postedAt mirrors at', async () => {
+    const { app, ctx } = await env.build();
+    ctx.database.tx((c) => {
+      logAudit(c, 'purchase', '1', 'create', null, { x: 1 }, undefined, { businessDate: '2026-01-05', backdated: true });
+      logAudit(c, 'purchase', '2', 'create', null, { x: 2 }, undefined, { businessDate: '2026-11-10', backdated: false });
+    });
+    const items = (await get(app)).json().items;
+    expect(items[1]).toMatchObject({ entityId: '1', businessDate: '2026-01-05', backdated: true });
+    expect(items[0]).toMatchObject({ entityId: '2', businessDate: '2026-11-10', backdated: false });
+    for (const it of items) expect(it.postedAt).toBe(it.at);
   });
 
   it('null before/after stay null', async () => {

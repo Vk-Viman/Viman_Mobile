@@ -14,6 +14,8 @@ import { registerBackupRoutes } from './routes/backups.ts';
 import { registerCategoryRoutes } from './routes/categories.ts';
 import { registerProductRoutes } from './routes/products.ts';
 import { registerSupplierRoutes } from './routes/suppliers.ts';
+import { registerPurchaseRoutes } from './routes/purchases.ts';
+import { registerInventoryRoutes } from './routes/inventory.ts';
 
 export interface AppOptions { dataDir: string; webDistDir?: string | null; logger?: boolean }
 export interface AppContext {
@@ -58,8 +60,11 @@ function validationFields(issues: ValidationIssue[]): Record<string, string> {
   return fields;
 }
 
-function errorEnvelope(code: string, message: string, fields?: Record<string, string>) {
-  return { error: fields ? { code, message, fields } : { code, message } };
+function errorEnvelope(
+  code: string, message: string, fields?: Record<string, string>, extra?: Record<string, unknown>,
+) {
+  const base = fields ? { code, message, fields } : { code, message };
+  return { error: extra ? { ...extra, ...base } : base };
 }
 
 const API_PATH_RE = /^\/api(?:[/?]|$)/;
@@ -123,7 +128,7 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
-      return reply.code(error.statusCode).send(errorEnvelope(error.code, error.message, error.fields));
+      return reply.code(error.statusCode).send(errorEnvelope(error.code, error.message, error.fields, error.extra));
     }
     const e = error as { validation?: ValidationIssue[]; code?: string; statusCode?: number; message?: string };
     if (Array.isArray(e.validation)) {
@@ -151,6 +156,8 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerCategoryRoutes(api, ctx);
     registerProductRoutes(api, ctx);
     registerSupplierRoutes(api, ctx);
+    registerPurchaseRoutes(api, ctx);
+    registerInventoryRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;
