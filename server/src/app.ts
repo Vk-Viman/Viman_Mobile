@@ -35,6 +35,8 @@ import { registerSaleRoutes } from './routes/sales.ts';
 import { registerTelecomRoutes } from './routes/telecom.ts';
 import { registerPrintingRoutes } from './routes/printing.ts';
 import { registerOpeningStockRoutes } from './routes/opening-stock.ts';
+import { registerExpenseRoutes } from './routes/expenses.ts';
+import { registerCashbookRoutes } from './routes/cashbooks.ts';
 
 /** Options of `buildApp`. */
 export interface AppOptions {
@@ -234,6 +236,8 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerTelecomRoutes(api, ctx);
     registerPrintingRoutes(api, ctx);
     registerOpeningStockRoutes(api, ctx);
+    registerExpenseRoutes(api, ctx);
+    registerCashbookRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;
