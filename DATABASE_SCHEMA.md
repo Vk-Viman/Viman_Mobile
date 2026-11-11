@@ -16,7 +16,8 @@ Migrations live in `server/src/db/migrations/NNN_name.sql`. Each phase adds its 
 | `002_audit_append_only.sql` | 1 (final review) | **implemented** — triggers block UPDATE/DELETE on `audit_logs` |
 | `003_catalog.sql` | 2 | **implemented** — categories (+12 seeded defaults), products, suppliers + triggers |
 | `004_purchases_inventory.sql` | 3 | **implemented** — stock_movements (+cache trigger), cash_entries, purchases, purchase_items, purchase_returns(+items), audit_logs columns |
-| `005_stocktake_losses_drawings.sql` | 4 | stocktakes(+items), stock_losses, owner_drawings (goods only in Phase 4) (in progress) |
+| `005_stocktake_losses_drawings.sql` | 4 | **implemented** — stocktakes(+items), stock_losses, owner_drawings (goods only in Phase 4) |
+| `006_sales_returns.sql` | 5 | sales, sale_items, sales_returns(+items), stock_losses.sales_return_id (in progress) |
 
 ---
 
@@ -94,7 +95,16 @@ Same common rules as Phase 3 (business date + immutable `posted_at`, strict date
 - `stocktakes(id, business_date, book, status draft|completed, notes, created_at, completed_at)` + `stocktake_items(id, stocktake_id FK, product_id FK, expected_qty, counted_qty, diff_qty, value_delta_cents)`.
 - `stock_losses(id, business_date, product_id FK, book, qty, cost_cents, reason damaged|lost|expired|other, note, source manual|damaged_return, status, client_ref UNIQUE, created_at)`. — plus `sales_return_id FK NULL`, required iff `source = 'damaged_return'`; the loss row copies the return's `business_date` in the same transaction (R-RD/R-FD satisfied by construction).
 
-### Phase 5 — sales
+### Phase 5 — sales, sales returns, damaged-return losses (migration `006_sales_returns.sql`, detail)
+Same common rules as Phases 3–4 (business date + immutable `posted_at`, strict date CHECK, R-FD `BEFORE INSERT` trigger, `BUSINESS_DATE_IMMUTABLE`, `POSTED_AT_IMMUTABLE`). **NULL-in-CHECK:** write explicit `IS NOT NULL` where a nullable column is compared.
+- **`sales`** (`id, business_date, posted_at, book CHECK IN ('shop','telecom'), total_cents >= 0, status CHECK IN ('posted','void') DEFAULT 'posted', notes DEFAULT '', client_ref NOT NULL, voided_at NULL, void_reason NULL`) — `UNIQUE (client_ref, book)` (one cart may create a shop sale and a telecom sale), void CHECK (void ⇒ `voided_at` and `void_reason` set). Trigger `SALE_IMMUTABLE`: only `status`/`voided_at`/`void_reason` may change, only `posted → void`. Indexes `(business_date)`, `(book, business_date)`.
+- **`sale_items`** (`id, sale_id FK NOT NULL, line_no >= 1, line_type CHECK IN ('goods','card') (print/service added in Phase 7), product_id FK NOT NULL, description NOT NULL, qty >= 1, unit_price_cents >= 0, unit_cost_cents >= 0, revenue_cents >= 0, cogs_cents >= 0, returned_qty DEFAULT 0`) — `CHECK (revenue_cents = qty * unit_price_cents)`, `CHECK (returned_qty BETWEEN 0 AND qty)`, `UNIQUE (sale_id, line_no)`; trigger `SALE_ITEM_IMMUTABLE` (only `returned_qty` may change, never decrease); trigger `SALE_ITEM_BOOK_MISMATCH` (line type goods ⇔ shop sale, card ⇔ telecom sale; product's book = the sale's book). Indexes `(sale_id)`, `(product_id)`.
+- **`sales_returns`** (`id, sale_id FK NOT NULL, business_date, posted_at, refund_cents >= 0, cogs_reversed_cents >= 0, note DEFAULT '', client_ref UNIQUE NOT NULL`) — **R-RD** triggers: `business_date < sales.business_date` → abort `RETURN_BEFORE_ORIGINAL_DATE`; insert on a void sale → abort `SALE_VOID`; append-only (no UPDATE/DELETE).
+- **`sales_return_items`** (`id, sales_return_id FK NOT NULL, sale_item_id FK NOT NULL, qty >= 1, resalable CHECK IN (0,1), revenue_cents >= 0, cogs_cents >= 0`) — trigger `RETURN_ITEM_MISMATCH` (the item must belong to the return's sale); a trigger rejects a return quantity above `sold − returned` (`RETURN_EXCEEDS_SOLD`) as a backstop; append-only.
+- **`stock_losses`** (additive): `ALTER TABLE stock_losses ADD COLUMN sales_return_id INTEGER REFERENCES sales_returns(id)`; triggers: `BEFORE INSERT` abort `DAMAGED_RETURN_LINK` unless `(source = 'damaged_return') = (sales_return_id IS NOT NULL)`; for `damaged_return` rows `business_date` must equal the return's (`DAMAGED_RETURN_DATE`) and `reason = 'damaged'`; index `(sales_return_id)`. Phase 4's `STOCK_LOSS_IMMUTABLE` is unchanged.
+- Movements used: `sale` (`ref_table = 'sales'`), `sale_return` (`ref_table = 'sales_returns'`). Cash types used: `sale_goods`, `card_sale`, `sale_refund`, `card_refund`. Restore validation (`REQUIRED_TABLES`) stays Phase 1 only.
+
+### Phase 5 — sales (planned columns; the Phase 5 detail above supersedes where it differs)
 - `sales(id, business_date, book, total_cents, status, client_ref, notes, created_at, voided_at, void_reason)` — `UNIQUE(client_ref, book)` (one cart may split into a shop sale and a telecom sale).
 - `sale_items(id, sale_id FK, line_no, line_type goods|card|print|service, product_id FK NULL, print_type_id FK NULL, description, qty, unit_price_cents, unit_cost_cents, revenue_cents, cogs_cents, returned_qty)`.
 - `sales_returns(id, sale_id FK, business_date, refund_cents, client_ref UNIQUE, created_at)` + `sales_return_items(id, sales_return_id FK, sale_item_id FK, qty, resalable, revenue_cents, cogs_cents)`. — R-RD trigger: `business_date >= sales.business_date`.

@@ -302,10 +302,49 @@ Web: `web/src/types/api.ts` mirrors the shapes above. The **Stock** section (sid
 
 ---
 
+## Phase 5 endpoints — POS, sales, sales returns, voids
+
+Rules in force (BUSINESS_RULES): §4 (cart split by book, lines in order, qty checked per product across the cart, R13 warnings, voids R1, returns R5/C5/R7), §3 (outflows at the weighted average, COGS snapshot), §2 (cash types), C6 (void = exact negation, original business date), R-FD, R-RD (sale date), §12 (business date vs posting time, audit). Scope: **stock products only** (`kind = "stock"`): Shop goods → book `shop`, line type `goods`; scratch cards (Telecom) → book `telecom`, line type `card`. Service products and printing arrive in Phase 7, reloads/EZCash in Phase 6: a `kind = "service"` product on a sale line → `400 PRODUCT_NOT_SELLABLE_YET`. `DAY_CLOSED` and the negative-cash-balance warning arrive with the cash books (Phase 8). Payment is always cash.
+
+All writes: JSON schema (no coercion, `additionalProperties:false`) → R-FD → lookups (404) → R-RD (returns) → business rules; one `database.tx()` containing the record(s), stock movements (inventory engine only), cash entries and the audit row. `clientRef` (string 8–64 chars `[A-Za-z0-9_-]`) makes a repeat return the originals with `200`.
+
+### Sales
+`SaleItem` = `{ id, lineNo, lineType: "goods"|"card", productId, productName, productCode, qty, unitPriceCents, unitCostCents, revenueCents, cogsCents, returnedQty }` — `revenueCents = qty × unitPriceCents` (exact); `cogsCents` = the stock value actually removed at the weighted average at sale time and **never changes afterwards**; `unitCostCents = mulDivRound(cogsCents, 1, qty)` (snapshot, display).
+`Sale` = `{ id, businessDate, postedAt, backdated, book: "shop"|"telecom", totalCents, cogsCents, grossProfitCents, status: "posted"|"void", notes, voidedAt|null, voidReason|null, clientRef, items: SaleItem[], returns: SaleReturn[] }` (`totalCents` = Σ revenue; `grossProfitCents = totalCents − cogsCents`, before returns; returns are shown on their own).
+`SaleReturn` = `{ id, saleId, businessDate, postedAt, backdated, refundCents, cogsReversedCents, note, clientRef, items: [{ id, saleItemId, productId, productName, qty, resalable, revenueCents, cogsCents }] }`.
+
+- `POST /api/v1/sales` `{ businessDate, items: [{ productId, qty, unitPriceCents }], notes?, clientRef }` → `201 { sales: Sale[], warnings: Warning[] }`.
+  - `items` 1–100; `qty` integer 1–1 000 000; `unitPriceCents` integer 0–999 999 999 (editable by the cashier; defaults come from the product in the UI); `notes` ≤ 500.
+  - Products must exist (`400 VALIDATION_ERROR` `fields["items.N.productId"]`), be `kind = "stock"` (`400 PRODUCT_NOT_SELLABLE_YET`) and **active** (`400 PRODUCT_INACTIVE`).
+  - **Mixed carts:** the server groups lines by the product's book and creates **one sale per book** (Shop and Telecom stay separate, each with its own total, cash entry and `clientRef` scope); lines keep their cart order within each sale (`lineNo` 1…n per sale). `sales` is ordered shop first, then telecom.
+  - Per line in cart order, against the live pool: `issueStock` type **`sale`** at the weighted average (`qty` checked cumulatively per product across the whole cart; `422 INSUFFICIENT_STOCK` with `fields["items.N.qty"]` and `onHand`, nothing saved). The value removed is the line's `cogsCents`.
+  - Cash (R-FD aside): one cash entry per sale with `totalCents > 0`: `sale_goods` (+total, book `shop`) or `card_sale` (+total, book `telecom`), `refTable = "sales"`; business date = the sale's.
+  - Audit: entity `sale`, action `create`, after = the Sale JSON.
+  - `Warning` = `{ code, message, lineIndex }` — **never blocks** (R13): `PRICE_BELOW_MINIMUM` (unit price < product minimum price), `PRICE_BELOW_COST` (unit price < snapshot unit cost), `ZERO_COST` (qty > 0 but cogs 0).
+- `GET /api/v1/sales?from=&to=&book=&status=&productId=&limit=&offset=` → `{ items: Sale[], total, totals: { revenueCents, cogsCents, refundsCents } }` (`totals` over **posted** sales matching the filter; `refundsCents` = Σ their returns' refunds). `from`/`to` business dates inclusive; order `businessDate DESC, id DESC`; `limit` 1–200 default 50. `GET /api/v1/sales/:id` → `{ item }`.
+- `POST /api/v1/sales/:id/void` `{ reason }` (1–200) → `200 { item }`. `409 ALREADY_VOID`; `409 HAS_RETURNS` ("This sale has returns, so it cannot be voided."). Effects: status `void`; the sale's `sale` movements are **exactly negated** (stock and value restored at the original snapshot cost, original business date, posting time now — C6); the sale's cash entry is reversed (negated, same type, `reversesEntryId`, original business date); audit action `void`.
+
+### Sales returns
+- `POST /api/v1/sales/:id/returns` `{ businessDate, items: [{ saleItemId, qty, resalable }], note?, clientRef }` → `201 { item: SaleReturn, sale: Sale }`.
+  - Validation order: schema → R-FD → sale lookup `404` → **R-RD** (`400 RETURN_BEFORE_ORIGINAL_DATE`, "The return date cannot be earlier than the original sale date ({date}). Please select {date} or a later date (not after today).", `originalDate` in the error body) → `409 SALE_VOID` → quantity rules. `qty` ≥ 1 and ≤ `sold − returnedQty` (`422 RETURN_EXCEEDS_SOLD`, `fields["items.N.qty"]`); each `saleItemId` must belong to the sale (`400`) and appear once per request; `resalable` boolean required.
+  - Values (C5): revenue portion `mulDivRound(revenueCents, qty, item.qty)` and COGS portion `mulDivRound(cogsCents, qty, item.qty)`, except the return that brings the cumulative returned quantity to the item's full `qty` takes the **remainder** of both (so the sum over all returns equals the line exactly; each capped at the remaining amount). `refundCents` = Σ revenue portions.
+  - **Resalable** (`resalable: true`): stock returns at the **original snapshot cost** — `receiveStock` type **`sale_return`** (`+qty`, `+cogs portion`, `refTable = "sales_returns"`).
+  - **Damaged** (`resalable: false`): **no stock movement, no restock**; revenue and COGS are reversed and **exactly one `stock_losses` row** per damaged line is written (`source = "damaged_return"`, `reason = "damaged"`, `qty`, `costCents` = the COGS portion, the product's book, the return's business date, `salesReturnId` set) — the loss is therefore counted once (BUSINESS_RULES §4/R2).
+  - Cash: one refund entry when `refundCents > 0`: `sale_refund` (book `shop`) or `card_refund` (book `telecom`), `−refundCents`, dated the return's business date.
+  - Item `returnedQty` increased; audit entity `sale_return`, action `create`. A repeated `clientRef` returns the original with `200`; the same `clientRef` used on another sale → `409 CLIENT_REF_CONFLICT`.
+- `GET /api/v1/stock-losses` items gain `salesReturnId: number|null` and `source` may now be `"damaged_return"` (Phase 4 contract: `source: "manual"` only). Voiding a damaged-return loss through `POST /stock-losses/:id/void` is **refused** (`409 DAMAGED_RETURN_LOSS`) — it belongs to its return.
+
+### Internal module contracts (Phase 5, server)
+Repositories (DB Architect): `sales.repo.ts` — `insertSale`, `insertSaleItem`, `getSale`, `getSaleByClientRef(conn, clientRef, book)`, `listSaleItems`, `listSales` (+ totals), `markSaleVoid`, `addReturnedQty`, `insertSaleReturn`, `insertSaleReturnItem`, `getSaleReturn`, `getSaleReturnByClientRef`, `listSaleReturns`, `listSaleReturnItems`, `returnedAmountsSoFar(conn, saleItemId): { qty, revenueCents, cogsCents }`; `stock-losses.repo.ts` gains `salesReturnId` on insert/rows and `source: 'damaged_return'` support. Services (Backend): `sales.service.ts` (`createSales`, `listSales`, `getSale`, `voidSale`, `createSaleReturn`), reusing `issueStock`, `receiveStock`, `reverseMovements`, `listMovementsByRef`, and the shared helpers in `services/validation.ts`.
+
+Web: the **Sales** section (sidebar, now built): *POS* (product search by name/code with live stock and price, cart with editable qty/price, line and grand totals as integer sums, date picker `max = today`, Save sale, per-book result summary + warnings, today's sales), *History* (filters, paging, detail with returns, Void, Return items). `clientRef` generated when the POS opens and replaced after a successful save.
+
+---
+
 ## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
 - **P2 Catalog**: specified above (Phase 2 endpoints).
 - **P3 Inventory**: specified above (purchases, movements, reconciliation). **P4**: specified above (stocktake, stock losses, goods drawings, valuation). **P13**: `POST /opening-stock` (opening stock entry/import).
-- **P5 Sales**: `POST /sales` (server splits a mixed cart by book), `GET /sales`, `GET /sales/:id`, `POST /sales/:id/void`, `POST /sales/:id/returns` (R-RD)
+- **P5 Sales**: specified above (POS sales, history, returns, voids).
 - **P6 Telecom**: `GET/PUT /reload-providers` · `POST/GET /reload-sales` · `POST/GET /ezcash-sales` · `POST/GET /telecom/topups`
 - **P7 Printing**: `GET/POST /print-service-types`, `PUT /print-service-types/:id` · `POST /printing-supplies`
 - **P8 Money**: `POST/GET /expenses`, `POST /expenses/:id/void` · `GET /cashbooks/:book?from&to` · `POST /cashbooks/:book/opening` · `POST /cash-counts` · `POST /daily-closings`, `POST /daily-closings/:id/reopen`
