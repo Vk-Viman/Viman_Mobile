@@ -234,3 +234,14 @@ Damaged returns (`stock_losses`):
 - `trg_sales_return_items_extra_exceeds` (`RETURN_EXCEEDS_EXTRA_COST`): backstop - earlier return lines of the same sale line plus the new one may not exceed the line's extra cost.
 
 Return tables stay append-only (migration 006 triggers). SQLite accepts `ADD COLUMN ... NOT NULL DEFAULT 0 CHECK (...)` on existing tables, and checks the CHECK against existing rows only for new writes, which is fine because the default 0 satisfies it.
+
+## 009_telecom.sql (Phase 6)
+Tables `reload_providers` (seeded Dialog, Mobitel, Hutch, Airtel; `commission_bp NULL` = shop default), `reload_sales`, `ezcash_sales`, `telecom_topups`. Triggers: R-FD future-date block, immutability except `posted → void`, delete guards, `COMMISSION_MISMATCH` (commission = half-up(sales × bp / 10000) + extra), `EZCASH_PROVIDER_NOT_DIALOG`, top-up kind/provider rule, provider name immutable and undeletable; amount caps of 10^12 cents. Cash rows (book telecom): `reload_collection`, `ezcash_collection`, `provider_topup`, `wallet_topup`; commission is never a cash entry (R14). Note: SQLite runs BEFORE INSERT triggers before CHECKs, so a bad insert may report the trigger message.
+
+## 010_printing.sql (Phase 7)
+Tables `print_service_types` (seven seeded types, `sort_order`), `print_sales` (cost snapshot, `revenue = qty × price`, `cogs = qty × cost`), `printing_supplies`. Triggers: R-FD, immutability (`PRINT_TYPE_CODE_IMMUTABLE`, `PRINT_SALE_IMMUTABLE`, `PRINTING_SUPPLY_IMMUTABLE`), delete guards, sale on an inactive type refused. Uses the stricter date CHECK `date(x) IS NOT NULL AND date(x) = x`. Cash (book shop): `sale_service` +revenue, `printing_supplies` −amount (no P&L, R12).
+
+## 011_opening_stock_import.sql (Phase 13)
+Tables `opening_stock_batches`, `import_runs`, `import_issues` (append-only). A batch's lines are its `opening` stock movements (`ref_table = 'opening_stock_batches'`); no separate lines table. No cash, purchase or P&L effect. R-FD trigger on batches only.
+
+**Known follow-up (found by the Phase 7 agent):** the date CHECK in migrations 003–006 (`GLOB … AND date(x) = x`) passes an impossible month such as `2020-13-01` because `date()` returns NULL and a NULL CHECK counts as passed. The API blocks such dates; a later migration will add BEFORE INSERT triggers to those tables (planned with the Phase 8 migration).

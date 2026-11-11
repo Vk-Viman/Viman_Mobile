@@ -93,4 +93,5 @@
 ## Wave 1 — Phases 6, 7, 13 (started 2026-11-11, owner authorised Phases 6–14 in waves)
 - Branch `feature/wave1-telecom-printing-opening-stock`; baseline commit `5acfe73` (ExcelJS 4.4.0, stubs, contracts).
 - Parallel agents, each in its own git worktree with exclusive files: Phase 6 telecom (migration 009), Phase 7 printing (010), Phase 13 opening stock/Excel (011). Orchestrator owns all `.md` docs, `app.ts`, `App.tsx`, `navItems.ts`.
-- Status: **in progress** — agents building; results, test counts and browser verification are recorded here when each phase is integrated.
+- Status: **built and integrated** — Phase 6 (109 new tests), Phase 7 (84), Phase 13 (136); merged tree: typecheck (server+web) clean, **1,127 tests passing, 0 skipped** (798 baseline), web build OK. Phase 6 and 13 agents ran browser smoke tests; the combined launcher-based browser pass for Waves 1–4 is scheduled for Phase 14.
+- Not yet built (later waves): DAY_CLOSED enforcement (R9, Phase 8), Phase 11 printing variance report, date-check trigger follow-up (see migrations README).
