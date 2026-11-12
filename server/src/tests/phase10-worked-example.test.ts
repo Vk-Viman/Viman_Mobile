@@ -7,7 +7,7 @@
 //   D4    moving the last 5,000 Cost -> Profit: profit-eligible 0, cash-only 5,000, posted only after confirmation, profit stays 32,000;
 //   D3    a Rs 20,000 bill with no re-allocation: outstanding excess 5,000, period flow +5,000, profit after excess = recognized - 5,000,
 //         and a re-allocation from Profit nets the period flow to zero (nothing counted twice).
-// Phase 9 records (withdrawal, transfer to Shop) are written through `postCash`, exactly as Phase 9 will (cash entry + fund row).
+// Phase 9 records (withdrawal, transfer to Shop) are written through the real Phase 9 endpoints (POST /drawings, POST /cash-transfers).
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
@@ -16,7 +16,7 @@ import type { ApiBase } from './helpers/inventory.ts';
 import { openNew } from './helpers/phase8.ts';
 import { WORKED_EXAMPLE, dayOk, expectBooksAgree, fundsGet, moveNew, movePreview, moveOk, payNew, payOk, rs } from './helpers/phase10.ts';
 import type { Step } from './helpers/phase10.ts';
-import { postCash } from '../services/cash-posting.ts';
+import { drawCash, tr } from './helpers/phase9.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
@@ -32,13 +32,6 @@ async function expectStep(s: ApiBase, step: Step): Promise<void> {
   expect([f.lines.materials.settledCents, f.lines.electricity.settledCents], `${label}: settled M/E`).toEqual(step.settled.map(rs));
   expect(f.recognizedProfitToDateCents, `${label}: recognized profit`).toBe(rs(step.recognized));
   await expectBooksAgree(s);
-}
-
-/** Phase 9 stand-in: a cash withdrawal / transfer out of the Profit fund (cash entry + fund row in one transaction). */
-function profitCashOut(s: ApiBase, type: 'drawing_cash' | 'transfer_out', kind: 'drawing' | 'transfer_out', cents: number): void {
-  s.ctx.database.tx((conn) => {
-    postCash(conn, { book: 'icecream', fund: 'profit', businessDate: today(), type, amountCents: -cents, refTable: 'phase9_stub', refId: 1, fundKind: kind });
-  });
 }
 
 describe('BUSINESS_RULES 10.8 worked example', () => {
@@ -85,8 +78,8 @@ describe('BUSINESS_RULES 10.8 worked example', () => {
     await expectStep(s, WORKED_EXAMPLE[6]!);
 
     // Withdrawal 20,000 and transfer to Shop 5,000, both from Profit: recognized profit unchanged
-    profitCashOut(s, 'drawing_cash', 'drawing', rs(20000));
-    profitCashOut(s, 'transfer_out', 'transfer_out', rs(5000));
+    expect((await drawCash(s, { book: 'icecream', fund: 'profit', amountCents: rs(20000) })).status).toBe(201);
+    expect((await tr(s, 'icecream', 'shop', rs(5000), { fromFund: 'profit' })).status).toBe(201);
     await expectStep(s, WORKED_EXAMPLE[7]!);
 
     // "Fund total 12,000 = cash book (5,000 + 100,000 - 55,000 - 12,000 - 1,000 - 20,000 - 5,000)"

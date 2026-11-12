@@ -65,3 +65,8 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 ## Wave 2 — Phase 8 (built and integrated 2026-11-11)
 - [x] Phase 8 expenses, cash books, closings, DAY_CLOSED, fund ledger table (migration 012)
 - [ ] PR/merge
+
+## Wave 3 — Phases 9, 10 (built and integrated 2026-11-12)
+- [x] Phase 9 transfers, cash drawings, capital (013)
+- [x] Phase 10 Ice Cream three-fund accounting (014)
+- [ ] PR/merge
