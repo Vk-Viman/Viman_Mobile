@@ -601,3 +601,99 @@ describe('Ice Cream daily entry edge cases', () => {
     await assertGlobalInvariants(w.s);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe('returns, warnings, cash counts as-of a date, report/dashboard query validation', () => {
+  let w: W;
+  beforeAll(async () => { w = await world(); }, 120000);
+
+  it('return rules: more than sold, the same line twice, a line of another sale, a voided sale, a missing flag', async () => {
+    const sale = (await sellOk(w.s, [cl(w.A, 3, 5000)], { businessDate: D(5) })).sales[0];
+    const item = sale.items[0].id;
+    const body = (items: any[]) => ({ businessDate: D(4), items, clientRef: ref() });
+    await refused(w, 'return 4 of 3', () => post(w.s.app, `/sales/${sale.id}/returns`, body([{ saleItemId: item, qty: 4, resalable: true }])), 422, 'RETURN_EXCEEDS_SOLD');
+    await refused(w, 'same line twice', () => post(w.s.app, `/sales/${sale.id}/returns`, body([{ saleItemId: item, qty: 1, resalable: true }, { saleItemId: item, qty: 1, resalable: true }])), 400, ['VALIDATION_ERROR']);
+    await refused(w, 'line of another sale', () => post(w.s.app, `/sales/${sale.id}/returns`, body([{ saleItemId: w.unusedSaleItem, qty: 1, resalable: true }])), 400, ['VALIDATION_ERROR']);
+    await refused(w, 'missing resalable flag', () => post(w.s.app, `/sales/${sale.id}/returns`, body([{ saleItemId: item, qty: 1 }])), 400, 'VALIDATION_ERROR');
+    await refused(w, 'qty 0', () => post(w.s.app, `/sales/${sale.id}/returns`, body([{ saleItemId: item, qty: 0, resalable: true }])), 400, 'VALIDATION_ERROR');
+    await returnOk(w.s, sale.id, [{ saleItemId: item, qty: 3, resalable: true }], { businessDate: D(4) });
+    await refused(w, 'return after everything was returned', () => post(w.s.app, `/sales/${sale.id}/returns`, body([{ saleItemId: item, qty: 1, resalable: true }])), 422, 'RETURN_EXCEEDS_SOLD');
+    const s2 = (await sellOk(w.s, [cl(w.A, 1, 5000)], { businessDate: D(5) })).sales[0];
+    await must(await post(w.s.app, `/sales/${s2.id}/void`, { reason: 'x' }), 'void');
+    await refused(w, 'return of a voided sale', () => post(w.s.app, `/sales/${s2.id}/returns`, body([{ saleItemId: s2.items[0].id, qty: 1, resalable: true }])), 409, 'SALE_VOID');
+    // refunds: the exact remainder rule - three partial returns of a line sold at an awkward total add up to exactly the revenue
+    const s3 = (await sellOk(w.s, [cl(w.A, 7, 1333)], { businessDate: D(5) })).sales[0]; // revenue 9,331
+    const got: number[] = [];
+    for (const q of [2, 3, 2]) got.push((await returnOk(w.s, s3.id, [{ saleItemId: s3.items[0].id, qty: q, resalable: true }], { businessDate: D(3) })).item.refundCents);
+    expect(got.reduce((a, b) => a + b, 0), 'refunds add up to the revenue exactly').toBe(9331);
+    expect(got).toEqual([2666, 3999, 2666]); // 9,331x2/7 = 2,665.99 -> 2,666 ; x3/7 = 3,998.99 -> 3,999 ; the last takes the remainder 9,331 - 2,666 - 3,999 = 2,666
+    await assertGlobalInvariants(w.s);
+  });
+
+  it('spending more than the book holds is a WARNING, never a block (R13)', async () => {
+    const r = await post(w.s.app, '/expenses', { businessDate: D(1), book: 'telecom', category: 'other', amountCents: 999_000_000, description: 'huge', clientRef: ref() });
+    expect(r.status).toBe(201);
+    expect(r.body.warnings.some((x: any) => x.code === 'NEGATIVE_CASH_BALANCE' && x.book === 'telecom')).toBe(true);
+    await assertGlobalInvariants(w.s);
+  });
+
+  it('a cash count dated in the past expects the balance AS OF that date, ignoring later entries', async () => {
+    const asOf = (d: string, book: string) => Number(rows(w.s.ctx, 'SELECT COALESCE(SUM(amount_cents),0) t FROM cash_entries WHERE book = ? AND business_date <= ?', book, d)[0]!.t);
+    await must(await post(w.s.app, '/capital', { businessDate: D(3), book: 'shop', amountCents: 777000, clientRef: ref() }), 'capital');
+    const expected = asOf(D(4), 'shop');
+    expect(expected).not.toBe(asOf(D(0), 'shop')); // a later entry exists, so the two differ
+    const api = (await get(w.s.app, `/cash-counts/expected?book=shop&businessDate=${D(4)}`)).body.expectedCents;
+    expect(api).toBe(expected);
+    const c = await must(await post(w.s.app, '/cash-counts', { businessDate: D(4), book: 'shop', countedCents: expected + 150, note: 'over', clientRef: ref() }), 'count');
+    expect([c.item.expectedCents, c.item.differenceCents]).toEqual([expected, 150]);
+    await assertGlobalInvariants(w.s);
+  });
+
+  it('report and dashboard queries: bad dates, from > to, > 3,660 days, unknown granularity/parameters are 400; future asOf is accepted', async () => {
+    const bad = [
+      '/reports/pnl/shop?from=2025-13-01&to=2025-12-31&granularity=month', '/reports/pnl/shop?from=2025-02-01&to=2025-01-01&granularity=month',
+      '/reports/pnl/shop?from=2000-01-01&to=2025-01-01&granularity=day', '/reports/pnl/shop?from=2025-01-01&to=2025-02-01&granularity=week',
+      '/reports/pnl/shop?from=2025-01-01&to=2025-02-01&granularity=month&bogus=1', '/reports/pnl/shop?to=2025-02-01&granularity=month',
+      '/reports/pnl/combined?from=abc&to=2025-02-01&granularity=month', '/dashboard?asOf=abc', '/dashboard?asOf=2025-02-30', '/dashboard?bogus=1',
+      '/reports/inventory/valuation?asOf=2026-02-30', '/icecream/funds?asOf=nope', '/cashbooks/vault', '/reports/export-pack?from=2025-02-01&to=2025-01-01',
+    ];
+    for (const u of bad) {
+      const r = await get(w.s.app, u);
+      expect([400, 404], `${u} -> ${r.status} ${JSON.stringify(r.body).slice(0, 120)}`).toContain(r.status);
+    }
+    const fut = await get(w.s.app, '/dashboard?asOf=2099-12-31');
+    expect(fut.status).toBe(200);
+    const f2 = await get(w.s.app, `/reports/pnl/shop?from=2098-01-01&to=2099-12-31&granularity=month`);
+    expect(f2.status, 'future report dates are never rejected').toBe(200);
+    expect(f2.body.totals.netProfitCents).toBe(0);
+  });
+
+  it('later changes to master data never change history: commission rates, print prices, product prices and names', async () => {
+    const w3 = await world();
+    const bw = await buildAugSep(w3.s);
+    const snapReports = async () => JSON.stringify(await Promise.all(['shop', 'telecom', 'icecream', 'combined'].map(async (x) => (await get(w3.s.app, `/reports/pnl/${x}?from=2025-08-01&to=2025-09-30&granularity=day`)).body.rows)));
+    const before = await snapReports();
+    const cash0 = JSON.stringify(rows(w3.s.ctx, 'SELECT * FROM cash_entries ORDER BY id'));
+    await must(await put(w3.s.app, '/settings', { rates: { reloadCommissionBp: 1500, ezcashCommissionBp: 900 } }), 'rates');
+    for (const id of Object.values(bw.prov)) await must(await put(w3.s.app, `/reload-providers/${id}`, { commissionBp: 4000, active: true }), 'provider');
+    for (const t of (await get(w3.s.app, '/print-service-types')).body.items as any[]) await must(await put(w3.s.app, `/print-service-types/${t.id}`, { name: t.name, priceCents: 99999, costCents: 88888, active: true }), 'type');
+    for (const p of (await get(w3.s.app, '/products?limit=100')).body.items as any[]) await must(await put(w3.s.app, `/products/${p.id}`, { sellPriceCents: 999999, minPriceCents: 1, name: `${p.name} renamed` }), 'product');
+    expect(await snapReports(), 'P&L by day changed after master data edits').toBe(before);
+    expect(JSON.stringify(rows(w3.s.ctx, 'SELECT * FROM cash_entries ORDER BY id'))).toBe(cash0);
+    await assertGlobalInvariants(w3.s);
+  });
+});
+
+/** A short two-month history (reload, EZCash, print, sale, ice cream day) for the "history never changes" test. */
+async function buildAugSep(s: ApiBase): Promise<{ prov: Record<string, number> }> {
+  const prov = await providerIds(s);
+  const P = (await mkProduct(s, { name: 'Hist P', sellPriceCents: 5000, minPriceCents: 1 })).id;
+  await buy(s, [{ productId: P, packs: 1, packSize: 10, lineTotalCents: 20000 }], { businessDate: '2025-08-02' });
+  await sellOk(s, [cl(P, 3, 5000)], { businessDate: '2025-08-03' });
+  await must(await post(s.app, '/reload-sales', { businessDate: '2025-08-03', providerId: prov.Dialog, salesCents: 1234567, clientRef: ref() }), 'reload');
+  await must(await post(s.app, '/ezcash-sales', { businessDate: '2025-08-04', billTotalCents: 765432, clientRef: ref() }), 'ez');
+  const ty = (await get(s.app, '/print-service-types')).body.items[0];
+  await must(await post(s.app, '/print-sales', { businessDate: '2025-09-01', serviceTypeId: ty.id, qty: 7, clientRef: ref() }), 'print');
+  await dayOk(s, { businessDate: '2025-09-02', salesCents: 5000, costAllocCents: 2000, electricityAllocCents: 500 });
+  return { prov };
+}
