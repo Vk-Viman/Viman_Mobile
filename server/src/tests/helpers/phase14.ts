@@ -489,11 +489,11 @@ export function diffSnapshots(a: Record<string, string>, b: Record<string, strin
  *   equity change = cash + stock value
  *   net profit    = equity change - inflows (opening balance, capital, transfers net, opening stock) + drawings (cash + goods at cost)
  *                   + printing supplies bought (cash out, never P&L) - standard print cost charged - extra cost on sales (net of returns)
- * where every figure is summed straight from the ledger tables. `refundGain` is the part of purchase refunds/voids that exceeds the stock value removed
- * (R4): the contract says it is reported as a Stock adjustment, so it is shown separately and included in `ledgerProfit`.
+ * where every figure is summed straight from the ledger tables. The ledger side already contains the purchase refund gain (cash refunded above the stock value removed, R4); the
+ * report must contain it too (Stock adjustments), so the two figures must be EXACTLY equal (no tolerance).
  * @returns the report figure and the ledger figure (equal when the books reconcile)
  */
-export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext }): Promise<{ reportProfit: number; ledgerProfit: number; refundGain: number }> {
+export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext }): Promise<{ reportProfit: number; ledgerProfit: number }> {
   const ctx = s.ctx; const shopP = "(SELECT id FROM products WHERE book = 'shop')";
   const cash = (types: string[]) => n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='shop' AND type IN (${types.map((t) => `'${t}'`).join(',')})`);
   const mv = (types: string[]) => n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE product_id IN ${shopP} AND type IN (${types.map((t) => `'${t}'`).join(',')})`);
@@ -504,15 +504,10 @@ export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext })
   const svcCost = n1(ctx, "SELECT COALESCE(SUM(cogs_cents),0) FROM print_sales WHERE status='posted'");
   const extra = n1(ctx, "SELECT COALESCE(SUM(si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id = si.sale_id WHERE x.status='posted' AND x.book='shop'")
     - n1(ctx, "SELECT COALESCE(SUM(r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id = r.sale_id WHERE x.book='shop'");
-  const noRefund = equity - inflows + drawings + supplies - svcCost - extra;
-  // refund gain: cash taken back for purchases (refunds, void reversals) minus the stock value removed for them (negative movement values)
-  const refunds = cash(['purchase_refund']) + n1(ctx, "SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='shop' AND type='purchase_payment' AND reverses_entry_id IS NOT NULL");
-  const removed = -mv(['purchase_return', 'purchase_void']);
-  // equity already contains refunds and the stock removal; P&L (as documented) also has the swept residuals as adjustments, so the gain is refunds - removed - (residual sweeps)
-  const refundGain = refunds - removed;
+  const ledgerProfit = equity - inflows + drawings + supplies - svcCost - extra;
   const first = rows(ctx, 'SELECT MIN(d) d FROM (SELECT MIN(business_date) d FROM cash_entries UNION ALL SELECT MIN(business_date) FROM stock_movements)')[0]!.d as string | null;
   const rep = first ? (await get(s.app, `/reports/pnl/shop?from=${first}&to=${todayColombo()}&granularity=month`)).body.totals.netProfitCents as number : 0;
-  return { reportProfit: rep, ledgerProfit: noRefund, refundGain };
+  return { reportProfit: rep, ledgerProfit };
 }
 
 /**
@@ -539,7 +534,11 @@ export function segNetFromTables(ctx: AppContext, book: 'shop' | 'telecom', from
   const adj = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('loss','stocktake_gain','stocktake_loss','adjustment') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`)
     + n1(ctx, `SELECT COALESCE(SUM(cost_cents),0) FROM stock_losses WHERE status='posted' AND source='damaged_return' AND book='${book}' AND ${w('business_date')}`);
   const os = n1(ctx, `SELECT COALESCE(SUM(difference_cents),0) FROM cash_counts WHERE status='posted' AND book='${book}' AND ${w('business_date')}`);
-  return comm + (rev - cost) - exp - adj + os;
+  // R4 purchase refund gain, from the CASH side and the stock side independently: cash taken back for purchases (refund entries and void reversals, on their business date)
+  // minus the stock value removed by the purchase_return / purchase_void movements (the residual sweep is in `adj` already).
+  const refunds = n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='${book}' AND (type='purchase_refund' OR (type='purchase_payment' AND reverses_entry_id IS NOT NULL)) AND ${w('business_date')}`);
+  const removed = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('purchase_return','purchase_void') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`);
+  return comm + (rev - cost) - exp - adj + os + (refunds - removed);
 }
 
 /** Row count of every table: a cheap "did anything get written?" fingerprint. */
@@ -688,10 +687,9 @@ export class Simulation {
     const first = rows(ctx, 'SELECT MIN(d) d FROM (SELECT MIN(business_date) d FROM cash_entries UNION ALL SELECT MIN(business_date) FROM stock_movements)')[0]!.d as string;
     const telReport = (await get(this.s.app, `/reports/pnl/telecom?from=${first}&to=${daysAgo(0)}&granularity=month`)).body.totals.netProfitCents;
     expect(telReport, `${label}: Telecom P&L vs independent SQL over the raw rows`).toBe(telecomNetFromTables(ctx));
-    // Shop P&L reconciles with the ledgers (cash + stock identity). The ONLY tolerated difference is the known purchase-refund gain (DEFECT 1, see
-    // phase14-defect-1.test.ts): any other unexplained difference fails here.
+    // Shop P&L reconciles EXACTLY with the ledgers (cash + stock identity), including purchase refund gains (R4, fixed DEFECT 1).
     const id = await shopIdentity(this.s);
-    expect(id.ledgerProfit - id.reportProfit, `${label}: Shop P&L vs ledger identity (unexplained difference; refund gain ${id.refundGain})`).toBe(id.refundGain);
+    expect(id.reportProfit, `${label}: Shop P&L vs ledger identity (cash + stock)`).toBe(id.ledgerProfit);
     const pnl = (await get(this.s.app, `/reports/pnl/icecream?from=${daysAgo(40)}&to=${daysAgo(0)}&granularity=month`)).body;
     expect(pnl.totals.recognizedProfitCents, `${label}: Ice Cream P&L total vs oracle`).toBe(this.ice.RP);
     await assertGlobalInvariants(this.s, { skipReports: this.skipReports });

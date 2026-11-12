@@ -258,7 +258,7 @@ describe('damaged return and voided loss (stock adjustments, BUSINESS_RULES 4, 1
     expect(d1.netProfitCents).toBe(7000);
     expect(d1.goods).toMatchObject({ revenueCents: 12000, costAutomaticCents: 4000, costExtraCents: 1000, grossProfitCents: 7000 });
     expect(d2.goods).toMatchObject({ returnsCents: 3000, revenueCents: -3000, costAutomaticCents: -1000, costExtraCents: -250, grossProfitCents: -1750 });
-    expect(d2.adjustments).toEqual({ lossesCents: 0, damagedReturnLossesCents: 1000, stocktakeLossesCents: 0, stocktakeGainsCents: 0, residualSweepsCents: 0, netCents: 1000 });
+    expect(d2.adjustments).toEqual({ lossesCents: 0, damagedReturnLossesCents: 1000, stocktakeLossesCents: 0, stocktakeGainsCents: 0, residualSweepsCents: 0, purchaseRefundGainCents: 0, netCents: 1000 });
     expect(d2.netProfitCents).toBe(-2750);
     expect(d3.adjustments.netCents).toBe(0);
     expect(d3.netProfitCents).toBe(0);
