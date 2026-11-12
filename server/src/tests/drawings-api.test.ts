@@ -38,7 +38,7 @@ async function pUnits(s: ApiBase, units: number, value: number, mk = mkProduct):
 }
 
 // Exact field list of a drawing in API responses.
-const KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'id', 'kind', 'note', 'postedAt', 'productId', 'productName',
+const KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'fund', 'id', 'kind', 'note', 'postedAt', 'productId', 'productName',
   'qty', 'status', 'voidReason', 'voidedAt'];
 
 // Taking goods for personal use: valued at cost, book from the product, validation and dates.
@@ -53,7 +53,7 @@ describe('POST /drawings - goods drawing', () => {
     const cash = num(s, 'SELECT COUNT(*) FROM cash_entries');
     const r = await drawNew(s, P.id, 2, { clientRef: 'draw-create-0001', note: '  for home  ' });
     expect(r.status).toBe(201);
-    expect(Object.keys(r.body)).toEqual(['item']);
+    expect(Object.keys(r.body)).toEqual(['item', 'warnings']); // Phase 9: every drawing write returns the shared warnings (none for goods)
     expect(Object.keys(r.body.item).sort()).toEqual(KEYS);
     expect(r.body.item).toMatchObject({
       businessDate: today(), backdated: false, book: 'shop', kind: 'goods', amountCents: 70000, productId: P.id,
@@ -92,18 +92,17 @@ describe('POST /drawings - goods drawing', () => {
     await reconOk(s);
   });
 
-  // Cash drawings are not built yet, so they are refused cleanly. The future-date check still comes first.
-  it('kind "cash" -> 400 NOT_AVAILABLE_YET, nothing written; checked after the date rules', async () => {
+  // Cash drawings exist since Phase 9 (full coverage in phase9-*.test.ts); here only the cash/goods field split is pinned.
+  it('kind "cash" is accepted: missing book/amount are named, goods fields are refused, the future-date rule still applies; nothing written', async () => {
     const s = await setup();
     const P = await p20(s);
     const before = snap(s);
     const r = await post(s.app, '/drawings', { kind: 'cash', businessDate: today(), clientRef: ref() });
     expect(r.status).toBe(400);
-    expect(err(r).code).toBe('NOT_AVAILABLE_YET');
-    expect(err(r).message).toMatch(/cash/i);
-    const r2 = await post(s.app, '/drawings', { kind: 'cash', businessDate: today(), productId: P, qty: 1, clientRef: ref() });
-    expect(err(r2).code).toBe('NOT_AVAILABLE_YET');
-    const fut = await post(s.app, '/drawings', { kind: 'cash', businessDate: daysAhead(1), clientRef: ref() });
+    expect(err(r)).toMatchObject({ code: 'VALIDATION_ERROR', fields: { book: expect.any(String), amountCents: expect.any(String) } });
+    const r2 = await post(s.app, '/drawings', { kind: 'cash', businessDate: today(), book: 'shop', amountCents: 100, productId: P, qty: 1, clientRef: ref() });
+    expect(err(r2).fields).toEqual({ productId: expect.any(String), qty: expect.any(String) });
+    const fut = await post(s.app, '/drawings', { kind: 'cash', businessDate: daysAhead(1), book: 'shop', amountCents: 100, clientRef: ref() });
     expect(err(fut).code).toBe('FUTURE_DATE_NOT_ALLOWED');
     expect(snap(s)).toEqual(before);
   });
@@ -138,7 +137,7 @@ describe('POST /drawings - goods drawing', () => {
       expect(r.status, k).toBe(400);
       expect(err(r).fields[k], k).toBeTruthy();
     }
-    expect(err(await drawNew(s, P, 1, { book: 'telecom' })).fields.book).toBe('Unknown field.');
+    expect(err(await drawNew(s, P, 1, { book: 'telecom' })).fields.book).toBeTruthy(); // Phase 9: book is a cash-drawing field; a goods drawing takes it from the product
     expect(err(await drawNew(s, P, 1, { amountCents: 5 })).fields.amountCents).toBeTruthy();
     expect(err(await drawNew(s, P, 1, { fund: 'cost' })).fields.fund).toBeTruthy();
     expect(err(await drawNew(s, P, 1, { postedAt: '2020-01-01T00:00:00.000Z' })).fields.postedAt).toBeTruthy();
@@ -240,7 +239,7 @@ describe('GET /drawings', () => {
     let r = await q('kind=goods');
     expect(r.total).toBe(4);
     r = await q('kind=cash');
-    expect(r).toEqual({ items: [], total: 0, totalAmountCents: 0 });
+    expect(r).toEqual({ items: [], total: 0, totalAmountCents: 0, totals: { amountCents: 0, goodsCents: 0, cashCents: 0 } });
     r = await q('status=void');
     expect([r.items.map((i: any) => i.id), r.totalAmountCents]).toEqual([[D2.id], 0]);
     r = await q('status=posted');
@@ -259,7 +258,7 @@ describe('GET /drawings', () => {
     expect([r.items.map((i: any) => i.id), r.totalAmountCents]).toEqual([[D3.id, D2.id, D1.id], 45000]);
     r = await q(`from=${daysAgo(3)}&to=${daysAgo(3)}&status=posted`);
     expect([r.items.map((i: any) => i.id), r.totalAmountCents]).toEqual([[D3.id], 10000]);
-    expect((await q(`from=${daysAhead(5)}`))).toEqual({ items: [], total: 0, totalAmountCents: 0 });
+    expect((await q(`from=${daysAhead(5)}`))).toEqual({ items: [], total: 0, totalAmountCents: 0, totals: { amountCents: 0, goodsCents: 0, cashCents: 0 } });
   });
 
   it('paging and bad query values', async () => {
@@ -269,7 +268,7 @@ describe('GET /drawings', () => {
     expect(r.items).toHaveLength(2);
     expect([r.total, r.totalAmountCents]).toEqual([4, 80000]);
     expect((await get(s.app, '/drawings?limit=200')).status).toBe(200);
-    for (const q of ['limit=0', 'limit=201', 'offset=-1', 'kind=other', 'status=draft', 'book=icecream', 'from=2026-02-30', 'to=abc', 'productId=x', 'bogus=1']) {
+    for (const q of ['limit=0', 'limit=201', 'offset=-1', 'kind=other', 'status=draft', 'book=warehouse', 'from=2026-02-30', 'to=abc', 'productId=x', 'bogus=1']) {
       expect((await get(s.app, `/drawings?${q}`)).status, q).toBe(400);
     }
     expect((await get(s.app, '/drawings/99999')).status).toBe(404);
