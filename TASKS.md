@@ -74,3 +74,7 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 ## Wave 4 — Phase 11 reports (built and integrated 2026-11-12)
 - [x] Phase 11 financial + operational reports, Excel export, Reports screens
 - [ ] Phase 12 dashboard, charts, export polish
+
+## Phase 12 — Dashboard, charts, export pack (built and integrated 2026-11-12)
+- [x] Phase 12
+- [ ] Phase 14 integration, validation, documentation, final report
