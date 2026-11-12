@@ -8,11 +8,11 @@
  *    belongs to its product's book. Only `status = 'posted'` records count (R1: a voided loss shows nothing).
  *  - A damaged sales return writes exactly one loss row (section 4); it is included once here and shown in its own
  *    column ("from returns"), never added again anywhere.
- *  - The memo block `stockAdjustmentsNetCents` is the section 11 line: losses + stocktake losses + residual sweeps
- *    - stocktake gains, taken from the stock MOVEMENTS by business date including the reversal rows of voids, so
- *    voided records net out. Goods drawings (personal use) are not an adjustment (section 9).
- *    Movement mapping: `loss`, `stocktake_loss`, `stocktake_gain` and the value-only `adjustment` (R4 sweep);
- *    adjustment = - sum(value_delta) over those types.
+ *  - The memo block `stockAdjustmentsNetCents` is the section 11 line: posted losses (manual and damaged-return) +
+ *    stocktake losses + residual sweeps - stocktake gains. Stocktake and sweep parts come from the stock MOVEMENTS by
+ *    business date including the reversal rows of voids (so voided stocktakes net out): `stocktake_loss`, `stocktake_gain`
+ *    and the value-only `adjustment` (R4 sweep), each as -sum(value_delta). Losses come from `stock_losses` (not from
+ *    `loss` movements) because a damaged sales return writes a loss row but NO stock movement. Personal use is not an adjustment (section 9).
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Granularity, ReportTable } from '../../lib/report-table.ts';
@@ -86,15 +86,16 @@ export function stockLossesReport(conn: DatabaseSync, q: LossesQuery): LossesRep
     `SELECT ${mKey} AS k,
             SUM(CASE WHEN m.type = 'stocktake_loss' THEN -m.value_delta_cents ELSE 0 END) AS st_loss,
             SUM(CASE WHEN m.type = 'stocktake_gain' THEN m.value_delta_cents ELSE 0 END) AS st_gain,
-            SUM(CASE WHEN m.type = 'adjustment' THEN -m.value_delta_cents ELSE 0 END) AS sweep,
-            SUM(-m.value_delta_cents) AS net
+            SUM(CASE WHEN m.type = 'adjustment' THEN -m.value_delta_cents ELSE 0 END) AS sweep
        FROM stock_movements m JOIN products p ON p.id = m.product_id
-      WHERE m.type IN ('loss', 'stocktake_loss', 'stocktake_gain', 'adjustment') AND m.business_date BETWEEN ? AND ?${mBook} GROUP BY k`,
+      WHERE m.type IN ('stocktake_loss', 'stocktake_gain', 'adjustment') AND m.business_date BETWEEN ? AND ?${mBook} GROUP BY k`,
   ).all(...base) as unknown as SqlRow[]) {
     const f = at(String(r.k));
-    f.stocktakeLossCents = num(r.st_loss); f.stocktakeGainCents = num(r.st_gain); f.sweepCents = num(r.sweep); f.stockAdjustmentsNetCents = num(r.net);
+    f.stocktakeLossCents = num(r.st_loss); f.stocktakeGainCents = num(r.st_gain); f.sweepCents = num(r.sweep);
   }
 
+  // Section 11 line: posted losses (manual AND damaged-return, which writes no stock movement) + stocktake losses + sweeps - gains.
+  for (const f of byLabel.values()) f.stockAdjustmentsNetCents = f.costCents + f.stocktakeLossCents + f.sweepCents - f.stocktakeGainCents;
   const rows = fillPeriods(q.from, q.to, q.granularity, byLabel, zero);
   const totals = zero();
   for (const r of rows) addInto(totals, r);
@@ -128,7 +129,7 @@ export function stockLossesReport(conn: DatabaseSync, q: LossesQuery): LossesRep
     totals: { period: 'Total', ...numericOnly(totals) },
     notes: [
       'Losses are valued at the average cost when recorded. Voided losses are not counted.',
-      'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains, from the stock movements (voids net out). Personal-use goods drawings are not adjustments.',
+      'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains (voids net out). Personal-use goods drawings are not adjustments.',
     ],
   };
   const extraTables: ReportTable[] = [
