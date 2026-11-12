@@ -515,6 +515,24 @@ export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext })
   return { reportProfit: rep, ledgerProfit: noRefund, refundGain };
 }
 
+/**
+ * Telecom net profit straight from the raw rows with plain SQL (BUSINESS_RULES 5, 11, C4, C13): reload + EZCash commission, card gross profit net of returns
+ * (automatic + extra cost), minus Telecom expenses, minus stock adjustments (loss / stocktake / residual-sweep movements of Telecom products and damaged-return
+ * losses), plus cash over/short of the Telecom book. Posted rows only; voided rows and reversal rows are ignored exactly as the rules say.
+ */
+export function telecomNetFromTables(ctx: AppContext): number {
+  const comm = n1(ctx, "SELECT COALESCE(SUM(commission_cents),0) FROM reload_sales WHERE status='posted'") + n1(ctx, "SELECT COALESCE(SUM(commission_cents),0) FROM ezcash_sales WHERE status='posted'");
+  const rev = n1(ctx, "SELECT COALESCE(SUM(si.revenue_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='telecom'")
+    - n1(ctx, "SELECT COALESCE(SUM(r.refund_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='telecom'");
+  const cost = n1(ctx, "SELECT COALESCE(SUM(si.cogs_cents + si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='telecom'")
+    - n1(ctx, "SELECT COALESCE(SUM(r.cogs_reversed_cents + r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='telecom'");
+  const exp = n1(ctx, "SELECT COALESCE(SUM(amount_cents),0) FROM expenses WHERE status='posted' AND book='telecom'");
+  const adj = -n1(ctx, "SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('loss','stocktake_gain','stocktake_loss','adjustment') AND product_id IN (SELECT id FROM products WHERE book='telecom')")
+    + n1(ctx, "SELECT COALESCE(SUM(cost_cents),0) FROM stock_losses WHERE status='posted' AND source='damaged_return' AND book='telecom'");
+  const os = n1(ctx, "SELECT COALESCE(SUM(difference_cents),0) FROM cash_counts WHERE status='posted' AND book='telecom'");
+  return comm + (rev - cost) - exp - adj + os;
+}
+
 /** Row count of every table: a cheap "did anything get written?" fingerprint. */
 export function countsAll(ctx: AppContext): Record<string, number> {
   const out: Record<string, number> = {};
@@ -658,6 +676,9 @@ export class Simulation {
     expect([f.unspentAllocationCents, f.outstandingExcessCostCents, f.recognizedProfitToDateCents], `${label}: Unspent / excess / recognized profit vs oracle`)
       .toEqual([u.U, Math.max(0, -u.U), this.ice.RP]);
     await this.crossChecks(label);
+    const first = rows(ctx, 'SELECT MIN(d) d FROM (SELECT MIN(business_date) d FROM cash_entries UNION ALL SELECT MIN(business_date) FROM stock_movements)')[0]!.d as string;
+    const telReport = (await get(this.s.app, `/reports/pnl/telecom?from=${first}&to=${daysAgo(0)}&granularity=month`)).body.totals.netProfitCents;
+    expect(telReport, `${label}: Telecom P&L vs independent SQL over the raw rows`).toBe(telecomNetFromTables(ctx));
     // Shop P&L reconciles with the ledgers (cash + stock identity). The ONLY tolerated difference is the known purchase-refund gain (DEFECT 1, see
     // phase14-defect-1.test.ts): any other unexplained difference fails here.
     const id = await shopIdentity(this.s);
@@ -689,7 +710,7 @@ export class Simulation {
     }
     // Ice Cream funds as of d
     const fd = (await get(app, `/icecream/funds?asOf=${d}`)).body;
-    const fAt = (f: string) => n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM icecream_fund_entries WHERE fund = ? AND business_date <= ?', f);
+    const fAt = (f: string) => n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM icecream_fund_entries WHERE fund = ? AND business_date <= ?', f, d);
     expect([fd.funds.cost.balanceCents, fd.funds.electricity.balanceCents, fd.funds.profit.balanceCents], `${label}: Ice Cream funds as of ${d}`).toEqual([fAt('cost'), fAt('electricity'), fAt('profit')]);
     expect(fd.reconciled, `${label}: funds reconcile with the book as of ${d}`).toBe(true);
     // dashboard vs reports
@@ -902,6 +923,7 @@ export class Simulation {
       if (neg && r.status !== 200) { expect([422, 409]).toContain(r.status); expect(countsAll(this.s.ctx), 'refused void wrote something').toEqual(before); this.stats.rejected[`${r.body.error.code}`] = (this.stats.rejected[`${r.body.error.code}`] ?? 0) + 1; return; }
     }
     expect(r.status, `void ${rec.kind} #${rec.id}: ${JSON.stringify(r.body).slice(0, 300)}`).toBe(200);
+    if (rec.kind === 'count' && rec.books[0] === 'icecream') this.ice.RP -= (rec.ice as { diff: number }).diff; // a voided count takes its over/short out of recognized profit
     this.apply(rec.delta, -1);
     rec.voided = true;
     if (rec.kind === 'iceday' && rec.dayDate) this.iceDays.delete(rec.dayDate);
@@ -1009,7 +1031,7 @@ export class Simulation {
     if (this.isClosed([book], today)) return this.refuse('count', r, 409, 'DAY_CLOSED', before);
     const out = await this.expectCreated('count', r);
     expect([out.item.expectedCents, out.item.differenceCents], 'count expected/difference vs model').toEqual([expected, diff]);
-    if (diff !== 0) this.addRec({ kind: 'count', id: out.item.id, date: today, books: [book], delta: { cash: [{ book, amt: diff, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: null });
+    if (diff !== 0) this.addRec({ kind: 'count', id: out.item.id, date: today, books: [book], delta: { cash: [{ book, amt: diff, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: `/cash-counts/${out.item.id}/void`, ice: { type: 'count', diff } });
     if (diff !== 0 && book === 'icecream') this.ice.RP += diff; // cash over/short is a recognition event whatever fund is chosen (C4)
   }
 
