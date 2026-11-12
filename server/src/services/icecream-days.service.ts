@@ -17,6 +17,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
+import { isIsoDate } from '../lib/dates.ts';
 import { AppError } from '../lib/errors.ts';
 import { formatLKR } from '../lib/money.ts';
 import { findCashEntriesByRef } from '../repositories/cash-entries.repo.ts';
@@ -261,7 +262,7 @@ export function voidDay(ctx: AppContext, date: string, body: { reason: string })
   const fields: Fields = {};
   const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, REASON_MAX_LENGTH);
   assertNoFieldErrors(fields);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw validationError({ date: 'Enter a valid date (YYYY-MM-DD).' });
+  if (!isIsoDate(date)) throw validationError({ date: 'Enter a valid date (YYYY-MM-DD).' });
 
   return runWrite(ctx, (conn) => {
     const row = getPostedDayByDate(conn, date);
