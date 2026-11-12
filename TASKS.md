@@ -35,7 +35,6 @@ Each item below was checked in the code.
 
 - **Settings → Printing defaults is a read-only reference.** `settings.printDefaults` is not read by any service; the tab now says so and links to Printing → Service types, where print prices and standard costs are managed (`print_service_types`, seeded once by migration 010). Owner may ask to remove the tab and the stored list entirely.
 - **Service products cannot be sold in the POS.** A product with kind `service` is refused on a sale line (`PRODUCT_NOT_SELLABLE_YET`, message "Service products are not sold in the POS. Use Printing for print and photocopy jobs."). Printing and photocopying use their own tables; there is no other way to sell an "other service". Services can still be created in Products.
-- **Negative-cash warning is missing on some voids.** Voiding a sale, a print sale, a reload sale or an EZCash sale removes cash from its book but returns no `NEGATIVE_CASH_BALANCE` warning (creates, returns, top-ups, supplies, expenses, drawings, transfers, counts and Ice Cream writes do).
 - **Two allowed values are never written:** cash entry type `expense_refund` and stock movement type `sale_void` (an expense void reverses the `expense` entry; a sale void reverses with type `sale`).
 - **A database trigger abort that no service maps becomes `500 INTERNAL_ERROR`.** Services map the aborts they expect (future date, closed day, invalid date, return dates, stock limits, ...); an unexpected one such as `PRODUCT_BOOK_MISMATCH` is not translated.
 - **No automated tests for the web app.** It is covered by typecheck, the production build and manual browser passes.
@@ -44,5 +43,14 @@ Each item below was checked in the code.
 - **Stock valuation for a past date can show negative quantity** when a loss was backdated before the stock existed (the report warns `NEGATIVE_STOCK_AS_OF`).
 - **Restore of an upload over 200 MB and a true concurrent restore (`409`) are not exercised by tests** (the 503 guard during a restore is). Launcher repair of an incomplete `node_modules` is not automatic (run `npm ci`); stale-build detection looks at file times under `web/src`, `web/index.html` and `web/vite.config.ts` only.
 - **Telecom cash book does not reconcile to Telecom profit** by owner decision (R14: no reload float or wallet tracking).
-- **Sidebar descriptions in `web/src/layout/navItems.ts` are only used by the unused "Coming soon" page**; some wording is out of date (for example Sales says "cash sales of goods and services").
 - **Not built (never promised by an approved rule):** editing a saved record in place (the model is void and re-enter), importing historical data, multi-user access, card or credit payments, a go-live checklist endpoint.
+
+### Observations from the independent QA pass (Phase 14) — accepted, none changes a figure
+- **Migration runner** detects a modified or newer-than-app migration but does not notice an applied migration whose file was deleted from disk.
+- **`import_runs.business_date` and `audit_logs.business_date`** have no future-date trigger (metadata only; every business record table has one).
+- **Ice Cream payment `category` is free text:** only the exact word "electricity" (trimmed, any case) is refused (E4); "electricity bill" or "electric" are accepted there. Expense categories are a closed list and robust.
+- **NUL characters** are accepted in free-text fields.
+- **A second void of an Ice Cream daily entry** answers 404 (it is addressed by date) instead of 409 ALREADY_VOID.
+- **A stocktake draft** can be created on a closed day (only completing it is refused, DAY_CLOSED).
+- **Restore** checks integrity and schema only: a backup whose stock cache disagrees with its movements restores and is flagged afterwards by `/inventory/reconciliation`. A tampered backup checksum is refused with 500 RESTORE_FAILED (data intact) rather than 422.
+- **Very large balances:** per-request limits keep every amount far below 2^53 cents; only an absurd number of 10^12-cent entries could exceed it.
