@@ -43,6 +43,15 @@ import { ServiceTypesTab } from './pages/printing/ServiceTypesTab';
 import { SuppliesTab } from './pages/printing/SuppliesTab';
 import { ExpensesPage } from './pages/expenses/ExpensesPage';
 import { CashBooksPage } from './pages/cashbooks/CashBooksPage';
+import { DrawingsPage } from './pages/drawings/DrawingsPage';
+import { DrawingsTab } from './pages/drawings/DrawingsTab';
+import { CapitalTab } from './pages/drawings/CapitalTab';
+import { TransfersTab } from './pages/drawings/TransfersTab';
+import { IceCreamPage } from './pages/icecream/IceCreamPage';
+import { DaysTab } from './pages/icecream/DaysTab';
+import { PaymentsTab } from './pages/icecream/PaymentsTab';
+import { FundMovesTab } from './pages/icecream/FundMovesTab';
+import { FundsTab } from './pages/icecream/FundsTab';
 import { OpeningStockPage } from './pages/opening-stock/OpeningStockPage';
 import { ManualTab } from './pages/opening-stock/ManualTab';
 import { ImportTab } from './pages/opening-stock/ImportTab';
@@ -76,6 +85,17 @@ export function App() {
         </Route>
         <Route path="expenses" element={<ExpensesPage />} />
         <Route path="cash-books" element={<CashBooksPage />} />
+        <Route path="drawings" element={<DrawingsPage />}>
+          <Route index element={<DrawingsTab />} />
+          <Route path="capital" element={<CapitalTab />} />
+          <Route path="transfers" element={<TransfersTab />} />
+        </Route>
+        <Route path="ice-cream" element={<IceCreamPage />}>
+          <Route index element={<DaysTab />} />
+          <Route path="payments" element={<PaymentsTab />} />
+          <Route path="moves" element={<FundMovesTab />} />
+          <Route path="funds" element={<FundsTab />} />
+        </Route>
         <Route path="telecom" element={<TelecomPage />}>
           <Route index element={<ReloadsTab />} />
           <Route path="ezcash" element={<EzCashTab />} />
