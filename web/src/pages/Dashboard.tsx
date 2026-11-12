@@ -1,79 +1,74 @@
 /**
- * Dashboard: the home screen (route "/").
- * For now it shows system status: server health (GET /health) and the newest backup (GET /backups).
- * The business figures (sales, profit, cash, stock alerts) arrive in Phase 12; their card is a placeholder.
+ * Dashboard: the home screen (route "/"). One call to GET /dashboard feeds every tile and chart (pages/dashboard/*):
+ * today and this month per segment, cash per book (Ice Cream funds apart), stock, Ice Cream (recognized profit vs funds, excess-cost
+ * warning), closings, backup, four charts with table alternatives, the Excel export pack and the system-status card.
+ * Loading, error (with retry) and empty states are handled here; the data is re-read when the browser tab regains focus.
+ * The screen never calculates a business figure; it shows what the server sent.
  */
-import { Card } from '../components/Card';
-import { PageHeader } from '../components/PageHeader';
-import { Badge } from '../components/Badge';
-import { Spinner } from '../components/Spinner';
+import { useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { useDashboard } from '../api/dashboard';
 import { ErrorState } from '../components/ErrorState';
-import { useHealth } from '../api/health';
-import { useBackups } from '../api/backups';
-import { formatDateTime } from '../lib/format';
-import { LayoutDashboard } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { PageHeader } from '../components/PageHeader';
+import { Spinner } from '../components/Spinner';
+import { CashChart, DailyChart, MonthlyChart, TopProductsChart } from './dashboard/Charts';
+import { ExportPackCard } from './dashboard/ExportPackCard';
+import { IceCreamBlock } from './dashboard/IceCreamBlock';
+import { SystemStatusCard } from './dashboard/SystemStatusCard';
+import { BackupCard, CashCard, ClosingsCard, PeriodCard, StockCard } from './dashboard/Tiles';
 
-/** One "label ... value" line of the status list (a <dt>/<dd> pair, so screen readers read it as a definition). */
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-slate-100 py-3 last:border-0">
-      <dt className="text-sm text-slate-500">{label}</dt>
-      <dd className="text-right text-sm font-medium text-slate-900">{children}</dd>
-    </div>
-  );
-}
-
-/**
- * Renders the status card (loading / error with retry / data) and the Phase 12 placeholder card.
- * The two queries are independent: a backup-list failure only affects its own row, never the health block.
- */
+/** The dashboard page. */
 export function Dashboard() {
-  const health = useHealth();
-  const backups = useBackups();
-  // The server lists backups newest first, so the first item is the latest one.
-  const latest = backups.data?.items[0];
-
+  const [asOf, setAsOf] = useState('');
+  const q = useDashboard(asOf || undefined);
+  const d = q.data;
+  const picker = (
+    <label className="text-sm text-slate-600">Show figures as of
+      <input type="date" value={asOf || d?.asOf || ''} onChange={(e) => setAsOf(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+    </label>
+  );
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="System status" />
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card title="System status">
-          {health.isPending ? (
-            <Spinner label="Checking server" />
-          ) : health.isError ? (
-            <ErrorState error={health.error} onRetry={() => void health.refetch()} />
-          ) : (
-            <dl>
-              <Row label="API status"><Badge tone="brand">{health.data.status === 'ok' ? 'OK' : health.data.status}</Badge></Row>
-              <Row label="App version"><span className="num">{health.data.appVersion}</span></Row>
-              <Row label="Schema version"><span className="num">{health.data.schemaVersion}</span></Row>
-              <Row label="Business date"><span className="num">{health.data.today}</span></Row>
-              <Row label="Latest backup">
-                {backups.isPending ? (
-                  <Spinner />
-                ) : backups.isError ? (
-                  <span className="text-red-600">Unavailable</span>
-                ) : latest ? (
-                  <span className="block">
-                    <span className="block break-all">{latest.name}</span>
-                    <span className="block text-xs font-normal text-slate-500">{formatDateTime(latest.createdAt)}</span>
-                  </span>
-                ) : (
-                  <span className="font-normal text-slate-500">No backups yet</span>
-                )}
-              </Row>
-            </dl>
+      <PageHeader title="Dashboard" subtitle={d ? `Figures as of ${d.asOf}` : 'Today at a glance'} actions={picker} />
+      {q.isPending ? (
+        <div className="py-12 text-center"><Spinner label="Loading the dashboard" /></div>
+      ) : q.isError && !d ? (
+        <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+      ) : d ? (
+        <div className={`space-y-6 ${q.isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={q.isFetching}>
+          {q.isError && <ErrorState error={q.error} onRetry={() => void q.refetch()} />}
+          {d.warnings.filter((w) => w.code !== 'EXCESS_COST_OUTSTANDING').length > 0 && (
+            <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+              <ul className="space-y-1">
+                {d.warnings.filter((w) => w.code !== 'EXCESS_COST_OUTSTANDING').map((w, i) => (
+                  <li key={`${w.code}-${i}`} className="flex items-start gap-2"><AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />{w.message}</li>
+                ))}
+              </ul>
+            </div>
           )}
-        </Card>
-        <Card title="Business dashboard">
-          <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <span className="rounded-full bg-brand-50 p-4 text-brand-600"><LayoutDashboard size={28} aria-hidden="true" /></span>
-            <p className="font-semibold text-slate-800">Available in Phase 12</p>
-            <p className="max-w-sm text-sm text-slate-500">Sales, profit, cash balances and stock alerts will appear here once those features are built.</p>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <PeriodCard title="Today" subtitle={d.asOf} tile={d.today} />
+            <PeriodCard title="This month" subtitle={`${d.asOf.slice(0, 8)}01 to ${d.asOf}`} tile={d.month} />
           </div>
-        </Card>
-      </div>
+          <IceCreamBlock ice={d.icecream} />
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+            <CashCard cash={d.cash} />
+            <StockCard stock={d.stock} />
+            <ClosingsCard closings={d.closings} />
+            <BackupCard backup={d.backup} />
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <DailyChart rows={d.series.daily} />
+            <MonthlyChart rows={d.series.monthly} />
+            <TopProductsChart rows={d.series.topProducts} />
+            <CashChart cash={d.cash} />
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ExportPackCard asOf={d.asOf} />
+            <SystemStatusCard />
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
