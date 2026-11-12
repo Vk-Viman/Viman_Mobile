@@ -65,13 +65,13 @@ export function getDrawingByClientRef(conn: DatabaseSync, ref: string): DrawingR
 }
 
 /**
- * Lists drawings, newest business date first, with the total count and the total of POSTED amounts
- * (voided rows are listed but not summed). `from`/`to` are inclusive business dates.
+ * Lists drawings, newest business date first, with the total count and the totals of POSTED amounts overall and per kind
+ * (goods = stock cost removed, cash = money out of a book; voided rows are listed but not summed). `from`/`to` are inclusive business dates.
  */
 export function listDrawings(conn: DatabaseSync, q: {
   kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; productId?: number; status?: DrawingStatus;
   limit: number; offset: number;
-}): { items: DrawingRow[]; total: number; totalAmountCents: number } {
+}): { items: DrawingRow[]; total: number; totalAmountCents: number; goodsCents: number; cashCents: number } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
   if (q.kind !== undefined) { where.push('d.kind = ?'); params.push(q.kind); }
@@ -82,11 +82,17 @@ export function listDrawings(conn: DatabaseSync, q: {
   if (q.status !== undefined) { where.push('d.status = ?'); params.push(q.status); }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';
   const agg = conn.prepare(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN d.status = 'posted' THEN d.amount_cents END), 0) AS c FROM owner_drawings d${w}`,
-  ).get(...params) as unknown as { n: N; c: N };
+    `SELECT COUNT(*) AS n,
+            COALESCE(SUM(CASE WHEN d.status = 'posted' THEN d.amount_cents END), 0) AS c,
+            COALESCE(SUM(CASE WHEN d.status = 'posted' AND d.kind = 'goods' THEN d.amount_cents END), 0) AS g,
+            COALESCE(SUM(CASE WHEN d.status = 'posted' AND d.kind = 'cash' THEN d.amount_cents END), 0) AS k
+       FROM owner_drawings d${w}`,
+  ).get(...params) as unknown as { n: N; c: N; g: N; k: N };
   const rows = conn.prepare(`${SELECT}${w} ORDER BY d.business_date DESC, d.id DESC LIMIT ? OFFSET ?`)
     .all(...params, q.limit, q.offset) as unknown as Raw[];
-  return { items: rows.map(map), total: Number(agg.n), totalAmountCents: Number(agg.c) };
+  return {
+    items: rows.map(map), total: Number(agg.n), totalAmountCents: Number(agg.c), goodsCents: Number(agg.g), cashCents: Number(agg.k),
+  };
 }
 
 /** posted -> void; the DB triggers forbid anything else. voided_at is the DB clock. */
