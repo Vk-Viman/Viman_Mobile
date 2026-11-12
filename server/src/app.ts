@@ -42,6 +42,7 @@ import { registerCapitalRoutes } from './routes/capital.ts';
 import { registerIceCreamRoutes } from './routes/icecream.ts';
 import { registerFinancialReportRoutes } from './routes/reports-financial.ts';
 import { registerOperationalReportRoutes } from './routes/reports-operational.ts';
+import { registerDashboardRoutes } from './routes/dashboard.ts';
 
 /** Options of `buildApp`. */
 export interface AppOptions {
@@ -248,6 +249,7 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerIceCreamRoutes(api, ctx);
     registerFinancialReportRoutes(api, ctx);
     registerOperationalReportRoutes(api, ctx);
+    registerDashboardRoutes(api, ctx);
   }, { prefix: '/api/v1' });
 
   const webDistDir = opts.webDistDir ? resolve(opts.webDistDir) : null;
