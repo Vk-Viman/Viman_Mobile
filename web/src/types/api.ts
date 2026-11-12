@@ -123,6 +123,8 @@ export interface ProductQuery {
   categoryId?: number;
   lowStock?: boolean;
   active?: boolean;
+  /** Stock items only or services only (omit for both). */
+  kind?: ProductKind;
   limit?: number;
   offset?: number;
 }
@@ -130,7 +132,10 @@ export interface ProductCreate {
   code?: string;
   name: string;
   description?: string;
-  categoryId: number;
+  /** Send exactly one of `categoryId` or `newCategory`. */
+  categoryId?: number;
+  /** Creates the category (in `book`) in the same request as the product. */
+  newCategory?: { name: string; book: Book };
   kind: ProductKind;
   sellPriceCents: number;
   minPriceCents: number;

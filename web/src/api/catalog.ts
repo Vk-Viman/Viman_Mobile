@@ -84,6 +84,42 @@ export const useProducts = (query: ProductQuery = {}) =>
     placeholderData: (prev) => prev,
   });
 
+/** Filters of the category-first product list used by CategoryProductPicker. */
+export interface ProductsByCategoryQuery {
+  /** Business book; keeps products of the other book out even when no category is chosen. */
+  book?: Book;
+  /** Chosen category (null/undefined = all categories of `book`). */
+  categoryId?: number | null;
+  /** Search text (name or code), already debounced by the caller. */
+  q?: string;
+  /** Stock items only (default true); false also lists services. */
+  stockOnly?: boolean;
+  limit?: number;
+  /** False = no request (e.g. a required category is not chosen yet). */
+  enabled?: boolean;
+}
+
+/**
+ * GET /products for the picker: ACTIVE products only (inactive ones must never be offered for new documents),
+ * optionally of one category / book, `kind=stock` by default, searched server-side so 200+ products stay usable.
+ */
+export const useProductsByCategory = ({ book, categoryId, q, stockOnly = true, limit = 50, enabled = true }: ProductsByCategoryQuery) => {
+  const query: ProductQuery = {
+    active: true,
+    book,
+    categoryId: categoryId ?? undefined,
+    kind: stockOnly ? 'stock' : undefined,
+    q: q || undefined,
+    limit,
+  };
+  return useQuery({
+    queryKey: [...catalogKeys.products, 'by-category', query],
+    queryFn: () => apiGet<ProductList>(`/products${qs(query)}`),
+    enabled,
+    placeholderData: (prev) => prev,
+  });
+};
+
 /** GET /products/:id. Disabled (no request) while `id` is null, i.e. while no product is selected. */
 export const useProduct = (id: number | null) =>
   useQuery({

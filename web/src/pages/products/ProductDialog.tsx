@@ -1,11 +1,16 @@
 /**
- * ProductDialog: the add / edit form for one product, opened from Products > Products.
- * API: POST /products (create) and PUT /products/:id (edit, sending only changed fields), plus
- * GET /categories?active=true for the category choices (api/catalog.ts).
+ * ProductDialog: the add / edit form for one product (Products > Products, and any screen that needs a new product).
+ * API: POST /products (create; with `newCategory` the category is created in the same request) and
+ * PUT /products/:id (edit, sending only changed fields), plus GET /categories?active=true (api/catalog.ts).
+ * Category-first: the owner picks Shop or Telecom, then a category of THAT book (or "+ Create new category…"), then
+ * the details, so a Shop product can never land in a Telecom category by accident. Switching the book clears the
+ * chosen category. Reusable: other screens (Purchases, POS, stock) mount it with `defaultBook`, `defaultCategoryId`
+ * and `onCreated` (see ProductDialogProps).
  * Prices are typed in rupees and converted to integer cents with rupeesToCents() so no floating-point money is
  * ever sent. All checks here are quick feedback only: the server validates everything again and is authoritative.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Button } from '../../components/Button';
 import { FormDialog } from '../../components/FormDialog';
 import { MoneyInput } from '../../components/MoneyInput';
 import { SelectField } from '../../components/SelectField';
@@ -15,7 +20,9 @@ import { ApiError } from '../../api/client';
 import { useCategories, useCreateProduct, useUpdateProduct } from '../../api/catalog';
 import { BOOK_LABEL, CHECKBOX_CLASS } from '../../lib/constants';
 import { centsToRupees, rupeesToCents } from '../../lib/units';
-import type { Category, Product, ProductCreate, ProductKind, ProductUpdate } from '../../types/api';
+import type { Book, Category, Product, ProductCreate, ProductKind, ProductUpdate } from '../../types/api';
+import { CategoryBookChoice } from './CategoryBookChoice';
+import { CATEGORY_NAME_MAX } from './CategoryDialog';
 
 /** Largest price accepted (in cents), so an accidental extra digit is caught before it reaches the server. */
 const MAX_CENTS = 999999999;
@@ -27,14 +34,24 @@ const MAX_DESCRIPTION = 500;
 const REORDER_RE = /^\d{1,9}$/;
 /** Server field names this dialog shows under their inputs; any other server error becomes the banner. */
 const KNOWN_FIELDS = ['name', 'code', 'categoryId', 'kind', 'description', 'sellPriceCents', 'minPriceCents', 'reorderLevel', 'active'];
+/** Value of the category drop-down that means "create a new category in this book". */
+const NEW_CATEGORY = '__new';
 
-interface Props {
-  product: Product | null; // null = create
+/** Props of the reusable product dialog. Mount it only while open. */
+export interface ProductDialogProps {
+  /** The product to edit, or null/omitted to create one. */
+  product?: Product | null;
+  /** Create mode: pre-select this book (the screen already knows it). The owner can still change it. */
+  defaultBook?: Book;
+  /** Create mode: pre-select this category (its book is used when `defaultBook` is not given). */
+  defaultCategoryId?: number;
+  /** Called with the product the server created, right before `onClose` (so callers can select it). */
+  onCreated?: (product: Product) => void;
   onClose: () => void;
 }
 
 /** Add/edit product form. Mount only while open so every opening starts from the product's saved values. */
-export function ProductDialog({ product, onClose }: Props) {
+export function ProductDialog({ product = null, defaultBook, defaultCategoryId, onCreated, onClose }: ProductDialogProps) {
   const editing = product !== null;
   const toast = useToast();
   const create = useCreateProduct();
@@ -44,7 +61,13 @@ export function ProductDialog({ product, onClose }: Props) {
   // ---- Form fields, held as text exactly as typed ----
   const [name, setName] = useState(product?.name ?? '');
   const [code, setCode] = useState(product?.code ?? '');
-  const [categoryId, setCategoryId] = useState(product ? String(product.categoryId) : '');
+  // '' = not chosen yet: no default, so the owner must choose Shop or Telecom on purpose.
+  const [book, setBookState] = useState<Book | ''>(product?.book ?? defaultBook ?? '');
+  // '' = none, NEW_CATEGORY = "create new", otherwise a category id as text.
+  const [categoryId, setCategoryId] = useState(product ? String(product.categoryId) : defaultCategoryId ? String(defaultCategoryId) : '');
+  const [newCategoryName, setNewCategoryName] = useState('');
+  // Whether the last submit carried `newCategory`, to tell a category-name clash from a product-name clash.
+  const [sentNewCategory, setSentNewCategory] = useState(false);
   const [kind, setKind] = useState<ProductKind>(product?.kind ?? 'stock');
   const [description, setDescription] = useState(product?.description ?? '');
   const [sell, setSell] = useState(product ? centsToRupees(product.sellPriceCents) : '');
@@ -54,14 +77,28 @@ export function ProductDialog({ product, onClose }: Props) {
   const [serverErr, setServerErr] = useState<ApiError | Error | null>(null);
 
   const isService = kind === 'service';
+  const creatingCategory = categoryId === NEW_CATEGORY;
 
-  // Categories on offer: active ones; when editing, only the same book (plus the current one, even if inactive).
-  const options = useMemo(() => {
-    const list: Category[] = (cats.data?.items ?? []).filter((c) => !product || c.book === product.book);
-    return list;
-  }, [cats.data, product]);
-  // The product's current category may be inactive and so missing from the list; it is then added back as an option.
-  const currentMissing = product && cats.data && !options.some((c) => c.id === product.categoryId);
+  // Only a default CATEGORY was given: take its book as soon as the category list arrives.
+  useEffect(() => {
+    if (book !== '' || !defaultCategoryId || !cats.data) return;
+    const c = cats.data.items.find((x) => x.id === defaultCategoryId);
+    if (c) setBookState(c.book);
+  }, [book, defaultCategoryId, cats.data]);
+
+  /** Switching the book clears the category (and any typed new name): a category belongs to exactly one book. */
+  const setBook = (b: Book) => {
+    if (b === book) return;
+    setBookState(b);
+    setCategoryId('');
+    setNewCategoryName('');
+    setServerErr(null);
+  };
+
+  // Categories on offer: ACTIVE ones of the chosen book only.
+  const options = useMemo<Category[]>(() => (cats.data?.items ?? []).filter((c) => c.book === book), [cats.data, book]);
+  // When editing, the current category may be inactive and so missing from the list; it is then added back.
+  const currentMissing = product && cats.data && book === product.book && !options.some((c) => c.id === product.categoryId);
 
   // Local validation messages by field. Recomputed only when an input changes (useMemo).
   const errors = useMemo(() => {
@@ -71,7 +108,13 @@ export function ProductDialog({ product, onClose }: Props) {
     else if (n.length > MAX_NAME) e.name = `Name can be at most ${MAX_NAME} characters.`;
     if (code.trim().length > MAX_CODE) e.code = `Code can be at most ${MAX_CODE} characters.`;
     if (description.length > MAX_DESCRIPTION) e.description = `Description can be at most ${MAX_DESCRIPTION} characters.`;
+    if (!book) e.book = 'Choose Shop or Telecom.';
     if (!categoryId) e.categoryId = 'Choose a category.';
+    if (creatingCategory) {
+      const cn = newCategoryName.trim();
+      if (cn.length < 1) e.newCategory = 'Enter the new category name.';
+      else if (cn.length > CATEGORY_NAME_MAX) e.newCategory = `Name can be at most ${CATEGORY_NAME_MAX} characters.`;
+    }
     const sc = rupeesToCents(sell);
     const mc = rupeesToCents(min);
     if (sc === null || sc > MAX_CENTS) e.sellPriceCents = 'Enter a valid selling price (up to 2 decimals).';
@@ -82,7 +125,7 @@ export function ProductDialog({ product, onClose }: Props) {
     }
     if (!isService && (!REORDER_RE.test(reorder.trim()))) e.reorderLevel = 'Enter a whole number, 0 or more.';
     return e;
-  }, [name, code, description, categoryId, sell, min, reorder, isService]);
+  }, [name, code, description, book, categoryId, creatingCategory, newCategoryName, sell, min, reorder, isService]);
 
   // When editing: the partial update containing ONLY the fields that differ from the saved product.
   const body = useMemo<ProductUpdate>(() => {
@@ -94,58 +137,77 @@ export function ProductDialog({ product, onClose }: Props) {
     // An emptied code box means "remove the code" (null), not an empty-string code.
     if (code.trim() !== (product.code ?? '')) b.code = code.trim() === '' ? null : code.trim();
     if (description !== product.description) b.description = description;
-    if (Number(categoryId) !== product.categoryId && categoryId) b.categoryId = Number(categoryId);
+    if (Number(categoryId) !== product.categoryId && categoryId && !creatingCategory) b.categoryId = Number(categoryId);
     if (sc !== null && sc !== product.sellPriceCents) b.sellPriceCents = sc;
     if (mc !== null && mc !== product.minPriceCents) b.minPriceCents = mc;
     if (!isService && REORDER_RE.test(reorder.trim()) && Number(reorder) !== product.reorderLevel) b.reorderLevel = Number(reorder);
     if (active !== product.active) b.active = active;
     return b;
-  }, [product, name, code, description, categoryId, sell, min, reorder, active, isService]);
+  }, [product, name, code, description, categoryId, creatingCategory, sell, min, reorder, active, isService]);
 
   const valid = Object.keys(errors).length === 0;
   // "dirty": creating is always submittable; editing needs at least one change.
   const dirty = !editing || Object.keys(body).length > 0;
   const pending = create.isPending || update.isPending;
 
+  // A "name already used" answer to a request that carried `newCategory` is about the CATEGORY name (the product
+  // duplicate message says "product"); it is shown under the new-category box with a way to reuse the existing one.
+  const categoryClash =
+    sentNewCategory && serverErr instanceof ApiError && serverErr.code === 'DUPLICATE_NAME' && !/product/i.test(serverErr.message);
+  // The server also returns `existingCategoryId`, but the shared API client does not expose extra error keys, so the
+  // existing category is found in the (active) category list by book + name instead.
+  const existingCategory = categoryClash
+    ? (cats.data?.items ?? []).find((c) => c.book === book && c.name.toLowerCase() === newCategoryName.trim().toLowerCase())
+    : undefined;
+
   const fieldErr = (k: string): string | undefined => {
+    if (k === 'name' && categoryClash) return undefined;
     // Empty required fields are not flagged up front; Save stays disabled until they are filled.
-    const quiet = (k === 'name' && name.trim() === '') || (k === 'categoryId' && !categoryId) || (k === 'sellPriceCents' && sell.trim() === '') || (k === 'minPriceCents' && min.trim() === '');
+    const quiet =
+      (k === 'name' && name.trim() === '') || (k === 'categoryId' && !categoryId) || k === 'book' ||
+      (k === 'newCategory' && newCategoryName.trim() === '') ||
+      (k === 'sellPriceCents' && sell.trim() === '') || (k === 'minPriceCents' && min.trim() === '');
     if (errors[k] && !quiet) return errors[k];
     return serverErr instanceof ApiError ? serverErr.fields[k] : undefined;
   };
   // Server errors about fields we do not display (or no fields at all) go into one banner.
   const bannerMsg =
-    serverErr && !(serverErr instanceof ApiError && Object.keys(serverErr.fields).some((k) => KNOWN_FIELDS.includes(k)))
+    serverErr && !categoryClash && !(serverErr instanceof ApiError && Object.keys(serverErr.fields).some((k) => KNOWN_FIELDS.includes(k)))
       ? serverErr.message
       : null;
-
-  const onSuccess = () => {
-    toast.success(editing ? 'Product updated.' : 'Product added.');
-    onClose();
-  };
 
   const submit = () => {
     setServerErr(null);
     if (product) {
-      update.mutate({ id: product.id, body }, { onSuccess, onError: (e) => setServerErr(e) });
+      update.mutate({ id: product.id, body }, {
+        onSuccess: () => { toast.success('Product updated.'); onClose(); },
+        onError: (e) => setServerErr(e),
+      });
       return;
     }
     // The text was validated above, so the conversions to cents cannot be null here ("?? 0" only satisfies the type).
     const payload: ProductCreate = {
       name: name.trim(),
-      categoryId: Number(categoryId),
       kind,
       sellPriceCents: rupeesToCents(sell) ?? 0,
       minPriceCents: rupeesToCents(min) ?? 0,
       reorderLevel: isService ? 0 : Number(reorder),
     };
+    // Exactly one of categoryId / newCategory (the new category is created in the same transaction).
+    if (creatingCategory && book !== '') payload.newCategory = { name: newCategoryName.trim(), book };
+    else payload.categoryId = Number(categoryId);
     if (code.trim()) payload.code = code.trim();
     if (description) payload.description = description;
-    create.mutate(payload, { onSuccess, onError: (e) => setServerErr(e) });
+    setSentNewCategory(creatingCategory);
+    create.mutate(payload, {
+      onSuccess: (res) => {
+        toast.success(creatingCategory ? 'Product and category added.' : 'Product added.');
+        onCreated?.(res.item);
+        onClose();
+      },
+      onError: (e) => setServerErr(e),
+    });
   };
-
-  // Category options grouped by book so Shop and Telecom categories are visually separated.
-  const grouped = (['shop', 'telecom'] as const).map((b) => ({ book: b, items: options.filter((c) => c.book === b) }));
 
   return (
     <FormDialog
@@ -157,7 +219,65 @@ export function ProductDialog({ product, onClose }: Props) {
       onSubmit={submit}
       onClose={onClose}
     >
-      <TextField label="Name *" value={name} onChange={(e) => setName(e.target.value)} error={fieldErr('name')} maxLength={200} autoComplete="off" />
+      {/* Step 1: the book. Fixed (shown, not editable) when editing: moving a product between books is not allowed. */}
+      <CategoryBookChoice
+        label="1. Business book *"
+        value={book}
+        onChange={setBook}
+        disabled={editing}
+        hint={editing ? 'The book of an existing product cannot be changed.' : 'Choose Shop or Telecom first. Then only categories of that book are offered.'}
+      />
+      {/* Step 2: the category, limited to the chosen book. */}
+      <div>
+        <SelectField
+          label="2. Category *"
+          value={categoryId}
+          onChange={(e) => { setCategoryId(e.target.value); setServerErr(null); }}
+          disabled={book === ''}
+          error={fieldErr('categoryId')}
+          hint={book === '' ? 'Choose the business book first.' : editing ? `Only ${BOOK_LABEL[product.book]} categories can be chosen.` : undefined}
+        >
+          <option value="">{book === '' ? 'Choose the book first…' : 'Choose a category…'}</option>
+          {currentMissing && product && <option value={String(product.categoryId)}>{product.categoryName} (inactive)</option>}
+          {options.map((c) => (
+            <option key={c.id} value={String(c.id)}>{c.name}</option>
+          ))}
+          {!editing && book !== '' && <option value={NEW_CATEGORY}>+ Create new category…</option>}
+        </SelectField>
+        {cats.isError && (
+          <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-red-600">
+            Could not load categories.
+            <Button variant="ghost" className="!min-h-8 !px-2" onClick={() => void cats.refetch()}>Retry</Button>
+          </p>
+        )}
+        {book !== '' && cats.isSuccess && options.length === 0 && !creatingCategory && (
+          <p className="mt-1 text-xs text-slate-500">There is no active {BOOK_LABEL[book]} category yet. Choose “+ Create new category…”.</p>
+        )}
+      </div>
+      {creatingCategory && book !== '' && (
+        <div className="rounded-lg border border-brand-200 bg-brand-50 p-3">
+          <TextField
+            label={`New ${BOOK_LABEL[book]} category name *`}
+            value={newCategoryName}
+            onChange={(e) => { setNewCategoryName(e.target.value); setServerErr(null); }}
+            error={fieldErr('newCategory') ?? (categoryClash && serverErr ? serverErr.message : undefined)}
+            hint={`The new category is added to the ${BOOK_LABEL[book]} book together with this product.`}
+            maxLength={CATEGORY_NAME_MAX + 20}
+            autoComplete="off"
+          />
+          {existingCategory && (
+            <Button
+              variant="secondary"
+              className="mt-2"
+              onClick={() => { setCategoryId(String(existingCategory.id)); setNewCategoryName(''); setServerErr(null); }}
+            >
+              Use the existing category “{existingCategory.name}”
+            </Button>
+          )}
+        </div>
+      )}
+      {/* Step 3: the details. */}
+      <TextField label="3. Product name *" value={name} onChange={(e) => setName(e.target.value)} error={fieldErr('name')} maxLength={200} autoComplete="off" />
       <div className="grid gap-4 sm:grid-cols-2">
         <TextField label="Code" value={code} onChange={(e) => setCode(e.target.value)} error={fieldErr('code')} hint="Optional. Must be unique." autoComplete="off" />
         <SelectField
@@ -177,25 +297,6 @@ export function ProductDialog({ product, onClose }: Props) {
           <option value="service">Service</option>
         </SelectField>
       </div>
-      <SelectField
-        label="Category *"
-        value={categoryId}
-        onChange={(e) => setCategoryId(e.target.value)}
-        error={fieldErr('categoryId')}
-        hint={editing ? `Only ${BOOK_LABEL[product.book]} categories can be chosen.` : undefined}
-      >
-        <option value="">Choose a category…</option>
-        {currentMissing && product && <option value={String(product.categoryId)}>{product.categoryName} (inactive)</option>}
-        {grouped.map((g) =>
-          g.items.length === 0 ? null : (
-            <optgroup key={g.book} label={`${BOOK_LABEL[g.book]} book`}>
-              {g.items.map((c) => (
-                <option key={c.id} value={String(c.id)}>{c.name} ({BOOK_LABEL[c.book]})</option>
-              ))}
-            </optgroup>
-          ),
-        )}
-      </SelectField>
       <div>
         <label htmlFor="product-desc" className="mb-1 block text-sm font-medium text-slate-700">Description</label>
         <textarea
