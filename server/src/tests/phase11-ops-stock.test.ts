@@ -18,6 +18,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase, buy, mkProduct } from './helpers/inventory.ts';
+import { post } from './helpers/catalog.ts';
 import type { ApiBase } from './helpers/inventory.ts';
 import { cl, sellOk } from './helpers/phase5.ts';
 import { num } from './helpers/phase4.ts';
@@ -301,4 +302,31 @@ describe('GET /reports/product-profitability', () => {
   });
 
   it('xlsx works', async () => { expect((await repXlsx(s, '/reports/product-profitability', `?from=${D(10)}&to=${D(0)}`)).isZip).toBe(true); });
+});
+
+describe('R4 residual sweep appears in the stock-adjustments memo', () => {
+  // Purchase A 10 units / 1,000 (D3) and B 10 / 3,000 (D3) -> pool 20 / 4,000. Sale of 10 on D2 removes 4,000 x 10/20 = 2,000 -> pool 10 / 2,000.
+  // Returning all of A (value 1,000 = cap) on D1 removes min(1,000, 2,000) = 1,000 and the quantity reaches 0 with 1,000 left over,
+  // which is swept by a value-only adjustment movement (R4): the stock-adjustments line is +1,000 on D1 and valuation is empty afterwards.
+  it('sweep shows as residual sweeps 1,000 on the return day; valuation ends at zero', async () => {
+    const env2 = new TestEnv();
+    try {
+      const b = await apiBase(await env2.build());
+      const p = await mkProduct(b, { minPriceCents: 0 });
+      const A = await buy(b, [{ productId: p.id, packs: 1, packSize: 10, lineTotalCents: 1000 }], { businessDate: D(3) });
+      await buy(b, [{ productId: p.id, packs: 1, packSize: 10, lineTotalCents: 3000 }], { businessDate: D(3) });
+      await sellOk(b, [cl(p.id, 10, 500)], { businessDate: D(2) });
+      const ret = await post(b.app, `/purchases/${A.id}/returns`, {
+        businessDate: D(1), clientRef: `sweep-${Date.now()}`, items: [{ purchaseItemId: A.items[0].id, units: 10 }],
+      });
+      expect(ret.status).toBe(201);
+      const r = await rep(b, '/reports/stock-losses', `?from=${D(3)}&to=${D(0)}`);
+      const d1 = r.body.rows.find((x: any) => x.period.label === D(1));
+      expect(d1).toMatchObject({ lossCount: 0, sweepCents: 1000, stockAdjustmentsNetCents: 1000 });
+      expect(r.body.totals.stockAdjustmentsNetCents).toBe(1000);
+      const v = await rep(b, '/reports/inventory/valuation', '?includeZero=true');
+      expect(v.body.totals).toMatchObject({ qty: 0, valueCents: 0 });
+      expect(v.body.reconciliation.matchesCache).toBe(true);
+    } finally { await env2.cleanup(); }
+  });
 });
