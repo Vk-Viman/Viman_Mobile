@@ -120,6 +120,20 @@ export const useProductsByCategory = ({ book, categoryId, q, stockOnly = true, l
   });
 };
 
+/**
+ * The product (active or not) whose name equals `name` ignoring case, or null. Used by the product dialog to offer the
+ * existing product after a "name already used" answer. Disabled (no request) while `enabled` is false.
+ */
+export const useProductNameMatch = (name: string, enabled: boolean) =>
+  useQuery({
+    queryKey: [...catalogKeys.products, 'name-match', name.trim().toLowerCase()],
+    queryFn: async () => {
+      const r = await apiGet<ProductList>(`/products${qs({ q: name.trim(), limit: 50 })}`);
+      return r.items.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase()) ?? null;
+    },
+    enabled: enabled && name.trim() !== '',
+  });
+
 /** GET /products/:id. Disabled (no request) while `id` is null, i.e. while no product is selected. */
 export const useProduct = (id: number | null) =>
   useQuery({

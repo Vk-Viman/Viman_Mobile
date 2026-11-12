@@ -63,7 +63,9 @@ export function CategoryProductPicker({
 
   // Drop a category or product that no longer fits the book (the screen switched book): never show the wrong book.
   useEffect(() => {
-    if (!cats.data) return;
+    // While the category list is being refreshed (e.g. right after a product with a NEW category was created) the
+    // list may not hold the new category yet: wait for the fresh list before deciding anything.
+    if (!cats.data || cats.isFetching) return;
     if (categoryId !== null && !cats.data.items.some((c) => c.id === categoryId)) {
       onCategoryChange(null);
       onChange(null);
@@ -72,7 +74,7 @@ export function CategoryProductPicker({
     }
     // Callbacks are the parent's and change identity each render; react only to data/book/selection changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cats.data, book, categoryId, value]);
+  }, [cats.data, cats.isFetching, book, categoryId, value]);
 
   const blocked = requireCategory && categoryId === null;
   const list = useProductsByCategory({ book: book ?? undefined, categoryId, q, stockOnly, limit: LIST_LIMIT, enabled: open && !blocked });

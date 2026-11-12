@@ -17,7 +17,7 @@ import { SelectField } from '../../components/SelectField';
 import { TextField, inputClass } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
-import { useCategories, useCreateProduct, useUpdateProduct } from '../../api/catalog';
+import { useCategories, useCreateProduct, useProductNameMatch, useUpdateProduct } from '../../api/catalog';
 import { BOOK_LABEL, CHECKBOX_CLASS } from '../../lib/constants';
 import { centsToRupees, rupeesToCents } from '../../lib/units';
 import type { Book, Category, Product, ProductCreate, ProductKind, ProductUpdate } from '../../types/api';
@@ -47,11 +47,20 @@ export interface ProductDialogProps {
   defaultCategoryId?: number;
   /** Called with the product the server created, right before `onClose` (so callers can select it). */
   onCreated?: (product: Product) => void;
+  /** Create mode: keep the book fixed to `defaultBook` (a purchase bill is for one book only). */
+  lockBook?: boolean;
+  /**
+   * Create mode: when the name is already used by an active stock product of the dialog's book, a "Use the existing
+   * product" button calls this with it (then the dialog closes), so the caller can select it instead of a duplicate.
+   */
+  onUseExisting?: (product: Product) => void;
+  /** True while another dialog sits on top of this one (keyboard Esc/Tab then belong to that one). */
+  paused?: boolean;
   onClose: () => void;
 }
 
 /** Add/edit product form. Mount only while open so every opening starts from the product's saved values. */
-export function ProductDialog({ product = null, defaultBook, defaultCategoryId, onCreated, onClose }: ProductDialogProps) {
+export function ProductDialog({ product = null, defaultBook, defaultCategoryId, onCreated, lockBook, onUseExisting, paused, onClose }: ProductDialogProps) {
   const editing = product !== null;
   const toast = useToast();
   const create = useCreateProduct();
@@ -160,6 +169,11 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
     ? (cats.data?.items ?? []).find((c) => c.book === book && c.name.toLowerCase() === newCategoryName.trim().toLowerCase())
     : undefined;
 
+  // The same name is already used by another product (names are unique across both books): find it to help the owner.
+  const productClash = !editing && serverErr instanceof ApiError && serverErr.code === 'DUPLICATE_NAME' && !categoryClash;
+  const nameMatch = useProductNameMatch(name, productClash);
+  const clashProduct = productClash ? nameMatch.data ?? null : null;
+
   const fieldErr = (k: string): string | undefined => {
     if (k === 'name' && categoryClash) return undefined;
     // Empty required fields are not flagged up front; Save stays disabled until they are filled.
@@ -218,13 +232,14 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
       error={bannerMsg}
       onSubmit={submit}
       onClose={onClose}
+      paused={paused}
     >
       {/* Step 1: the book. Fixed (shown, not editable) when editing: moving a product between books is not allowed. */}
       <CategoryBookChoice
         label="1. Business book *"
         value={book}
         onChange={setBook}
-        disabled={editing}
+        disabled={editing || (lockBook && defaultBook !== undefined)}
         hint={editing ? 'The book of an existing product cannot be changed.' : 'Choose Shop or Telecom first. Then only categories of that book are offered.'}
       />
       {/* Step 2: the category, limited to the chosen book. */}
@@ -278,6 +293,29 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
       )}
       {/* Step 3: the details. */}
       <TextField label="3. Product name *" value={name} onChange={(e) => setName(e.target.value)} error={fieldErr('name')} maxLength={200} autoComplete="off" />
+      {productClash && (
+        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          {clashProduct ? (
+            <>
+              <p>
+                A product named “{clashProduct.name}” already exists ({BOOK_LABEL[clashProduct.book]} book, category {clashProduct.categoryName}
+                {!clashProduct.active ? ', currently inactive' : ''}). Use it instead of creating a duplicate.
+              </p>
+              {onUseExisting && clashProduct.active && clashProduct.kind === 'stock' && (defaultBook === undefined || clashProduct.book === defaultBook) && (
+                <Button variant="secondary" className="mt-2" onClick={() => { onUseExisting(clashProduct); onClose(); }}>
+                  Use the existing product “{clashProduct.name}”
+                </Button>
+              )}
+              {!clashProduct.active && <p className="mt-1">Reactivate it in Products &gt; Products, or choose another name.</p>}
+              {defaultBook !== undefined && clashProduct.book !== defaultBook && (
+                <p className="mt-1">It belongs to the {BOOK_LABEL[clashProduct.book]} book, so it cannot be used here. Choose a different name.</p>
+              )}
+            </>
+          ) : (
+            <p>A product with this name already exists. Search for it in the product list instead of creating it again, or choose another name.</p>
+          )}
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <TextField label="Code" value={code} onChange={(e) => setCode(e.target.value)} error={fieldErr('code')} hint="Optional. Must be unique." autoComplete="off" />
         <SelectField
