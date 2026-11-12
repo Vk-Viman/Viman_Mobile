@@ -232,7 +232,7 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     db.close();
     const r = await upload(s.app, readFileSync(p), 'old.db');
     expect(r.statusCode, r.body).toBe(200);
-    expect(r.json().schemaVersion).toBe(14);
+    expect(r.json().schemaVersion).toBe(15);
     const prods = (await get(s.app, '/products')).body.items as any[];
     expect(prods.map((x) => [x.name, x.qtyOnHand, x.stockValueCents])).toEqual([['Old product', 3, 3000]]);
     // the world's records are gone (replaced), the old file's data is live, the new tables exist and are empty

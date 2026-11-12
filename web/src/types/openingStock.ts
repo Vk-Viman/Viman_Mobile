@@ -85,6 +85,9 @@ export interface ImportRow {
   sku: string;
   productId: number | null;
   productName: string;
+  /** Category and book of the product (null for an unknown SKU). */
+  categoryName: string | null;
+  book: 'shop' | 'telecom' | null;
   qty: number | null;
   unitCostCents: number | null;
   totalValueCents: number | null;

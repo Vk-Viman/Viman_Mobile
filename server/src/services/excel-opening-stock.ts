@@ -67,7 +67,10 @@ export interface ParsedRow {
 }
 
 /** A catalogue product as the validator needs it. */
-export interface ProductRef { id: number; name: string; active: boolean; kind: 'stock' | 'service' }
+export interface ProductRef {
+  id: number; name: string; active: boolean; kind: 'stock' | 'service';
+  categoryName?: string; book?: 'shop' | 'telecom';
+}
 
 /** One row of the preview: the parsed values plus the product it matched and its final status. */
 export interface PreviewRow {
@@ -75,6 +78,9 @@ export interface PreviewRow {
   sku: string;
   productId: number | null;
   productName: string;
+  /** Category and book of the matched product (null when no product matched). */
+  categoryName: string | null;
+  book: 'shop' | 'telecom' | null;
   qty: number | null;
   unitCostCents: number | null;
   totalValueCents: number | null;
@@ -367,6 +373,7 @@ export function validateRows(
     return {
       rowNo: r.rowNo, sku: r.sku, productId: product ? product.id : null,
       productName: product ? product.name : r.productNameInFile,
+      categoryName: product?.categoryName ?? null, book: product?.book ?? null,
       qty: r.qty, unitCostCents: unit, totalValueCents: r.totalValueCents, notes: r.notes,
       status: issues.length === 0 ? 'ok' : 'error',
       issues: issues.map((i) => ({ code: i.code, message: i.message })),

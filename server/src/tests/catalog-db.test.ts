@@ -131,7 +131,7 @@ describe('categories constraints', () => {
   it('names are unique case-insensitively; blank names rejected; book enum enforced', () => {
     const c = mem();
     expect(msg(() => addCat(c, 'electronics'))).toMatch(/UNIQUE/);
-    expect(msg(() => addCat(c, 'ELECTRONICS', 'telecom'))).toMatch(/UNIQUE/);
+    expect(addCat(c, 'ELECTRONICS', 'telecom')).toBeGreaterThan(12); // per-book uniqueness (migration 015)
     expect(msg(() => addCat(c, ''))).toMatch(/CHECK/);
     expect(msg(() => addCat(c, '   '))).toMatch(/CHECK/);
     expect(msg(() => addCat(c, 'X', 'icecream'))).toMatch(/CHECK/);
@@ -167,13 +167,13 @@ describe('categories constraints', () => {
   });
 
   // Categories are never hard-deleted while products reference them (no hard deletes, section 12).
-  it('FK restrict: a category with products cannot be deleted; an empty owner category can', () => {
+  it('a category can never be deleted (CATEGORY_DELETE_FORBIDDEN), with or without products', () => {
     const c = mem();
     const id = addCat(c, 'Mine');
     addProd(c, { cat: id, name: 'In Mine' });
-    expect(msg(() => c.prepare('DELETE FROM categories WHERE id = ?').run(id))).toMatch(/FOREIGN KEY/);
+    expect(msg(() => c.prepare('DELETE FROM categories WHERE id = ?').run(id))).toMatch(/CATEGORY_DELETE_FORBIDDEN/);
     const empty = addCat(c, 'Empty');
-    c.prepare('DELETE FROM categories WHERE id = ?').run(empty);
+    expect(msg(() => c.prepare('DELETE FROM categories WHERE id = ?').run(empty))).toMatch(/CATEGORY_DELETE_FORBIDDEN/);
   });
 });
 

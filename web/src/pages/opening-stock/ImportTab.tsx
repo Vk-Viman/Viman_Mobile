@@ -18,6 +18,7 @@ import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Money } from '../../components/Money';
+import { BOOK_LABEL } from '../../lib/constants';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
@@ -188,6 +189,8 @@ export function ImportTab() {
                         <th scope="col" className="px-3 py-2 text-left">Row</th>
                         <th scope="col" className="px-3 py-2 text-left">SKU</th>
                         <th scope="col" className="px-3 py-2 text-left">Product</th>
+                        <th scope="col" className="px-3 py-2 text-left">Category</th>
+                        <th scope="col" className="px-3 py-2 text-left">Book</th>
                         <th scope="col" className="px-3 py-2 text-right">Qty</th>
                         <th scope="col" className="px-3 py-2 text-right">Unit cost</th>
                         <th scope="col" className="px-3 py-2 text-right">Value</th>
@@ -200,6 +203,8 @@ export function ImportTab() {
                           <td className="num px-3 py-2">{r.rowNo}</td>
                           <td className="px-3 py-2">{r.sku || '—'}</td>
                           <td className="px-3 py-2">{r.productName || '—'}</td>
+                          <td className="px-3 py-2">{r.categoryName || '—'}</td>
+                          <td className="px-3 py-2">{r.book ? BOOK_LABEL[r.book] : '—'}</td>
                           <td className="num px-3 py-2 text-right">{r.qty ?? '—'}</td>
                           <td className="px-3 py-2 text-right">{r.unitCostCents !== null ? <Money cents={r.unitCostCents} /> : '—'}</td>
                           <td className="px-3 py-2 text-right">{r.totalValueCents !== null ? <Money cents={r.totalValueCents} /> : '—'}</td>

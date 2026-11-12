@@ -23,7 +23,7 @@ const snap = (s: ApiBase) => Object.fromEntries([...WRITE_TABLES, 'import_runs',
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const recon = (s: ApiBase) => expect(reconcileStock(s.ctx.database.conn)).toMatchObject({ ok: true, mismatches: [] });
 const FUTURE_MSG = 'Future-dated transactions are not allowed. Please select today or an earlier date.';
-const ROW_KEYS = ['issues', 'productId', 'productName', 'qty', 'rowNo', 'sku', 'status', 'totalValueCents', 'unitCostCents'].sort();
+const ROW_KEYS = ['book', 'categoryName', 'issues', 'productId', 'productName', 'qty', 'rowNo', 'sku', 'status', 'totalValueCents', 'unitCostCents'].sort();
 
 describe('GET /excel/opening-stock-template', () => {
   it('downloads an .xlsx with the exact headers, a sample row and a Products sheet of ACTIVE STOCK products only', async () => {
@@ -72,8 +72,8 @@ describe('POST /excel/opening-stock/preview', () => {
     expect(r.body.alreadyCommitted).toBe(false);
     expect(Object.keys(r.body.rows[0]).sort()).toEqual(ROW_KEYS);
     expect(r.body.rows).toEqual([
-      { rowNo: 2, sku: 'P-A', productId: a.id, productName: 'Alpha cable', qty: 10, unitCostCents: 5000, totalValueCents: 50000, status: 'ok', issues: [] },
-      { rowNo: 3, sku: 'p-b', productId: b.id, productName: 'Beta case', qty: 3, unitCostCents: 33333, totalValueCents: 100000, status: 'ok', issues: [] },
+      { rowNo: 2, sku: 'P-A', productId: a.id, productName: 'Alpha cable', categoryName: 'Electronics', book: 'shop', qty: 10, unitCostCents: 5000, totalValueCents: 50000, status: 'ok', issues: [] },
+      { rowNo: 3, sku: 'p-b', productId: b.id, productName: 'Beta case', categoryName: 'Electronics', book: 'shop', qty: 3, unitCostCents: 33333, totalValueCents: 100000, status: 'ok', issues: [] },
     ]);
     expect(r.body.summary).toEqual({ total: 2, ok: 2, failed: 0, totalValueCents: 150000 });
     // Only the audit of the preview itself is written.

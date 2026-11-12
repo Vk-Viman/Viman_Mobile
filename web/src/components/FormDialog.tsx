@@ -22,6 +22,8 @@ interface Props {
   onClose: () => void;
   /** Tailwind max-width class for the panel (default max-w-xl). */
   widthClass?: string;
+  /** True while ANOTHER dialog is open on top of this one (e.g. a product dialog opened from the purchase form). */
+  paused?: boolean;
 }
 
 /**
@@ -31,12 +33,13 @@ interface Props {
  * `noValidate` turns off the browser's own pop-up validation bubbles: the app shows its own field messages,
  * and the server remains the final authority on what is valid.
  */
-export function FormDialog({ title, children, submitLabel, canSubmit, loading, error, onSubmit, onClose, widthClass = 'max-w-xl' }: Props) {
+export function FormDialog({ title, children, submitLabel, canSubmit, loading, error, onSubmit, onClose, widthClass = 'max-w-xl', paused }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // First focus goes to the first editable field so the owner can start typing straight away.
   useDialogFocusTrap(panel, {
     onClose,
+    paused,
     initialFocusSelector: 'input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
   });
 

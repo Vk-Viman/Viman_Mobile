@@ -237,6 +237,10 @@ These behaviours were chosen by implementers to complete approved rules. **None 
 13. **Limits:** amounts up to 10^12 cents, quantities 10^6–10^9, 100 lines per sale or purchase, 1,000 per manual opening-stock entry, 500 per stocktake, 200 Ice Cream item lines, 3,660 days per report.
 14. **Negative-cash warning (R13)** is returned by every write that removes cash from a book and by voids of cash-in records (including voids of sales, print sales, reload and EZCash sales — added in Phase 14).
 
+## 13B. Category management (owner request 2026-11-13)
+- Categories are created, renamed and deactivated by the owner in the app (Products → Categories). Each belongs to **Shop or Telecom**; the name is unique **within its book**, ignoring letter case (the same name may exist in both books). Categories are never deleted (deactivate instead). A default category keeps its name and book. A category's book cannot change once it has products. Renaming never moves products. Inactive categories are not offered for new products.
+- A product's book is always its category's book (§1, unchanged). Category-first product selection (book → category → product) in Sales, Purchases, Opening Stock and stock-loss/personal-use entry is a selection aid only: **no accounting behaviour changed**.
+
 ## 14. Owner decisions log (Phase 1 final review)
 
 ### P-2 Electricity documentation — **APPROVED 2026-11-10, applied** (§1, §2, §7 E1–E5, DATABASE_SCHEMA, API_CONTRACTS).

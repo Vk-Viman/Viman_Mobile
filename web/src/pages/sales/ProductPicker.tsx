@@ -1,77 +1,168 @@
 /**
- * ProductPicker: the left half of the POS. A search box (name or code) and the list of matching sellable products.
- * Where: Sales > POS. API: GET /products?q=&active=true&limit= (api/catalog.ts).
- * Rules: only `kind = "stock"` products are listed (services arrive in a later phase and the server answers
- * PRODUCT_NOT_SELLABLE_YET for them); stock on hand and price are shown as read from the server.
- * Keyboard: Enter in the search box adds the first match (a barcode scanner that "types" a code and presses Enter
- * works the same way); clicking a row's name adds one unit.
+ * ProductPicker: the left half of the POS. Category-first selection of sellable products:
+ *   1. optional book filter (All / Shop / Telecom), 2. category (or "All categories"), 3. the list shows only the
+ *   ACTIVE stock products of that category/book, 4. a search box narrows inside that list, 5. click (or Enter) adds one unit.
+ * Where: Sales > POS. API: GET /categories?active=true, GET /products (via useCategories / useProductsByCategory in api/catalog.ts,
+ * the same hooks and rules as the shared CategoryProductPicker; the POS needs a list presentation, so the panel is local).
+ * Rules: inactive and service products are never listed (server filter active=true, kind=stock, plus a client guard against a
+ * stale list of the previous category); stock on hand and price are shown as read from the server. Presentation only:
+ * the cart, costs, stock checks and book split stay exactly as before (PosTab / cart.ts).
+ * Keyboard: Enter in the search box adds the first match of the current list. A barcode scanner types a code and presses Enter:
+ * when the code is not in the current category/book, it is looked up across ALL categories and books (exact code match).
  */
 import { useEffect, useState } from 'react';
 import { Badge } from '../../components/Badge';
+import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 import { Money } from '../../components/Money';
 import { SearchField } from '../../components/SearchField';
+import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
 import { BookBadge } from '../../components/StatusBadges';
-import { useProducts } from '../../api/catalog';
+import { apiGet } from '../../api/client';
+import { qs } from '../../api/queryString';
+import { useCategories, useProductsByCategory } from '../../api/catalog';
 import { useDebounced } from '../../hooks/useDebounced';
-import type { Product } from '../../types/api';
+import { BOOK_LABEL } from '../../lib/constants';
+import type { Book, Product, ProductList } from '../../types/api';
 
 /** How many matches to fetch for the picker; a cashier narrows by typing rather than paging. */
 const PICKER_LIMIT = 30;
 
 /** @param onAdd called with the chosen product (one unit is added; the cart increments an existing line). */
 export function ProductPicker({ onAdd }: { onAdd: (p: Product) => void }) {
+  const [book, setBook] = useState<Book | null>(null);
+  const [categoryId, setCategoryId] = useState<number | null>(null);
   const [text, setText] = useState('');
   const q = useDebounced(text.trim());
   // Enter pressed before the debounced search caught up: remember it and add once the fresh results arrive.
   const [enterPending, setEnterPending] = useState(false);
-  const list = useProducts({ q: q || undefined, active: true, limit: PICKER_LIMIT });
 
-  // The server cannot filter by kind, so services are dropped here; the server still rejects them if one slips through.
-  const items = (list.data?.items ?? []).filter((p) => p.kind === 'stock');
-  // "Settled" = the results on screen belong to exactly what is typed.
-  const settled = text.trim() === q && !list.isFetching && list.data !== undefined;
+  const cats = useCategories({ active: true, book: book ?? undefined });
+  const categories = cats.data?.items ?? [];
+  const category = categories.find((c) => c.id === categoryId) ?? null;
+
+  const list = useProductsByCategory({ book: book ?? undefined, categoryId, q, limit: PICKER_LIMIT });
+  // The server already filters (active, stock, category, book); the client guard also drops a stale list kept on screen
+  // while the next category loads, so a product of the previous category can never be clicked.
+  const items = (list.data?.items ?? []).filter(
+    (p) => p.active && p.kind === 'stock' && (categoryId === null || p.categoryId === categoryId) && (!book || p.book === book),
+  );
+  // "Settled" = the results on screen belong to exactly what is typed and chosen.
+  const settled = text.trim() === q && !list.isFetching && !list.isPlaceholderData && list.data !== undefined;
 
   const add = (p: Product) => {
     onAdd(p);
     setText('');
   };
 
+  /** Scanner fallback: the typed text matched nothing here, so look for an exact code in every category and book. */
+  const scanAnywhere = async (code: string) => {
+    try {
+      const r = await apiGet<ProductList>(`/products${qs({ q: code, active: true, kind: 'stock', limit: 10 })}`);
+      const hit = r.items.find((p) => p.active && p.kind === 'stock' && p.code !== null && p.code.toLowerCase() === code.toLowerCase());
+      if (hit) add(hit);
+    } catch {
+      /* the list shows its own error state; a failed scan lookup just adds nothing */
+    }
+  };
+
+  const enter = () => {
+    const first = items[0];
+    if (first) add(first);
+    else if (text.trim() && (categoryId !== null || book !== null)) void scanAnywhere(text.trim());
+  };
+
   useEffect(() => {
     if (enterPending && settled) {
       setEnterPending(false);
-      const first = items[0];
-      if (first) add(first);
+      enter();
     }
-    // `add` and `items` change every render; the effect must react only to the search settling.
+    // `enter` changes every render; the effect must react only to the search settling.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enterPending, settled]);
 
+  // Changing book or category resets the search and any pending Enter so nothing from the old selection lingers.
+  const changeBook = (b: Book | null) => {
+    setBook(b);
+    setCategoryId(null);
+    setText('');
+    setEnterPending(false);
+  };
+  const changeCategory = (id: number | null) => {
+    setCategoryId(id);
+    setText('');
+    setEnterPending(false);
+  };
+
+  const scope = category ? category.name : book ? `${BOOK_LABEL[book]} products` : 'all categories';
+
   return (
     <Card title="Products">
-      <SearchField
-        label="Find product"
-        placeholder="Type a name or code, press Enter to add"
-        value={text}
-        onChange={setText}
-        autoFocus
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter') return;
-          e.preventDefault();
-          if (settled && items[0]) add(items[0]);
-          else if (text.trim()) setEnterPending(true);
-        }}
-      />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <SelectField
+          label="Book"
+          value={book ?? ''}
+          onChange={(e) => changeBook(e.target.value === '' ? null : (e.target.value as Book))}
+        >
+          <option value="">All (Shop + Telecom)</option>
+          <option value="shop">{BOOK_LABEL.shop}</option>
+          <option value="telecom">{BOOK_LABEL.telecom}</option>
+        </SelectField>
+        <SelectField
+          label="Category"
+          value={categoryId === null ? '' : String(categoryId)}
+          disabled={cats.isPending}
+          onChange={(e) => changeCategory(e.target.value === '' ? null : Number(e.target.value))}
+          error={cats.isError ? 'Could not load categories.' : undefined}
+        >
+          <option value="">All categories</option>
+          {categories.map((c) => (
+            <option key={c.id} value={String(c.id)}>{book ? c.name : `${c.name} (${BOOK_LABEL[c.book]})`}</option>
+          ))}
+        </SelectField>
+      </div>
+      {category && (
+        <p className="mt-2 flex items-center justify-between gap-2 text-sm text-slate-600">
+          <span>Showing: <span className="font-medium text-slate-900">{category.name}</span> <span className="text-xs">({BOOK_LABEL[category.book]})</span></span>
+          <Button variant="ghost" className="!min-h-8 !px-2" onClick={() => changeCategory(null)}>Change category</Button>
+        </p>
+      )}
+
       <div className="mt-3">
-        {list.isPending ? (
+        <SearchField
+          label="Find product"
+          placeholder={category ? `Search in ${category.name}, Enter adds` : 'Type a name or code, press Enter to add'}
+          value={text}
+          onChange={setText}
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            if (settled) enter();
+            else if (text.trim()) setEnterPending(true);
+          }}
+        />
+      </div>
+      <div className="mt-3">
+        {list.isPending || (list.isPlaceholderData && list.isFetching && items.length === 0) ? (
           <div className="flex justify-center py-8"><Spinner label="Loading products" /></div>
         ) : list.isError ? (
           <ErrorState error={list.error} onRetry={() => void list.refetch()} />
         ) : items.length === 0 ? (
-          <EmptyState title="No products found" hint="Try another name or code. Only active stock products can be sold here." />
+          <EmptyState
+            title={q ? 'No product matches your search' : category ? `No active products in ${category.name} yet` : 'No products found'}
+            hint={
+              q
+                ? `Nothing in ${scope} matches. Try another name or code${category || book ? ', or change the category' : ''}.`
+                : category
+                  ? 'Add products to this category in Products, or choose another category.'
+                  : 'Only active stock products can be sold here.'
+            }
+            action={category ? <Button variant="secondary" onClick={() => changeCategory(null)}>Change category</Button> : undefined}
+          />
         ) : (
           <div className="max-h-[28rem] overflow-auto">
             <table className="w-full border-collapse text-sm">
