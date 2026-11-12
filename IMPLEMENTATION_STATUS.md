@@ -2,12 +2,22 @@
 
 | Phase | Scope | Status |
 |---|---|---|
-| **1** | Foundation: DB + migrations, settings, audit log, backup/restore, web shell, launcher, docs | **☑ Complete (2026-11-10) — awaiting owner approval for Phase 2** |
-| **2** | Catalog: categories, products, suppliers (migration 003, API, screens) | **☑ Complete (2026-11-10) — awaiting owner approval for Phase 3** |
-| **3** | Purchases, stock movements, inventory engine, cash ledger table (migration 004) | **☑ Complete (2026-11-11) — awaiting owner approval for Phase 4** |
-| **4** | Stocktake, stock losses, personal-use drawings (goods), inventory valuation (migration 005) | **☑ Complete (2026-11-11) — awaiting owner approval for Phase 5** |
-| **5** | POS, sales, sales returns, voids (migrations 006–007) | **☑ Complete (2026-11-11) — awaiting owner approval for Phase 6** |
-| 6–14 | See TASKS.md | not started |
+| **1** | Foundation: DB + migrations, settings, audit log, backup/restore, web shell, launcher, docs | ☑ Built, merged (PR #1) |
+| **2** | Catalog: categories, products, suppliers (003) | ☑ Built, merged |
+| **3** | Purchases, stock movements, inventory engine, cash ledger table (004) | ☑ Built, merged |
+| **4** | Stocktake, stock losses, personal-use drawings, valuation (005) | ☑ Built, merged |
+| **5** | POS, sales, returns, voids, editable sale cost C13 (006–008) | ☑ Built, merged (PRs #3–#5) |
+| **6** | Telecom: reloads, EZCash, top-ups (009) | ☑ Built, merged (PR #6) |
+| **7** | Printing: service types, print sales, supplies (010) | ☑ Built, merged (PR #6) |
+| **13** | Opening stock, Excel template/preview/import (011) | ☑ Built, merged (PR #6) |
+| **8** | Expenses, cash books, counts, closings, DAY_CLOSED, fund ledger table (012) | ☑ Built, merged (PR #7) |
+| **9** | Cash transfers, cash drawings, capital (013) | ☑ Built, merged (PR #8) |
+| **10** | Ice Cream three-fund accounting (014) | ☑ Built, merged (PR #8) |
+| **11** | Financial and operational reports, Excel export | ☑ Built, merged (PR #9) |
+| **12** | Dashboard, charts, Excel export pack | ☑ Built, merged (PR #10) |
+| **14** | Integration, independent validation, documentation, release readiness | ◐ In progress (see "Phase 14" below) |
+
+Server test count by milestone: 798 (Phase 5) → 1,127 (Wave 1) → 1,264 (Phase 8) → 1,511 (Wave 3) → 1,639 (Phase 11) → 1,681 (Phase 12) → 1,689 (Phase 14 fixes) → 1,797 (QA suite + defect fix). 0 skipped throughout.
 
 ## Phase 1 — what exists
 - **Server** (`server/src`): Fastify on `127.0.0.1:4300`; SQLite via `node:sqlite` (WAL, foreign keys); migration runner with LF-normalised checksums; `001_foundation.sql` (`schema_migrations`, `settings`, `audit_logs`).
@@ -107,3 +117,9 @@ Financial reports (Shop, Telecom, Ice Cream, Combined P&L; cash book; transfers;
 
 ## Phase 12 — Dashboard, charts, export pack (2026-11-12) — built and integrated
 Read-only dashboard service reusing the Phase 11 report services (no re-derived figures), `GET /dashboard`, `GET /reports/export-pack` (15 sheets), Recharts charts with accessible table alternatives. Merged tree: typecheck (server+web) clean, **1,681 tests pass, 0 skipped** (1,639 + 42 new), web build OK. Dashboard on a seeded year ≈ 130 ms, export pack ≈ 650 ms. Agent browser smoke test: four charts render, table toggles work, no console errors, no sideways scroll at 375 px; Excel-button click and focus-refetch not exercised in the browser (server tests cover the endpoint) — to be covered in Phase 14.
+
+## Phase 14 — integration, validation, documentation (2026-11-12)
+- **Browser end-to-end through `Start-Viman-Shop.bat`** (throwaway data folder, schema 14, port 4310): clean first launch (zeros, one startup backup); seeded scenario through the API; POS sale with edited cost (lowering refused; automatic Rs 700.00 matched the weighted average; cost Rs 2,880.00 = 2,800.00 + 80.00 extra); return of one unit (refund Rs 1,500.00, extra reversed Rs 20.00); Ice Cream move Cost→Profit Rs 2,000 showed the D4 split (Rs 1,500.00 profit / Rs 500.00 cash-only) and funds Rs 5,000.00 / −500.00 / 5,000.00 = cash book Rs 9,500.00, recognized profit Rs 4,500.00; Shop day closed with a Rs 50.00 short count (reason required); reports Shop Rs 1,515.00, Telecom Rs 290.00, Ice Cream Rs 4,500.00, Combined Rs 6,305.00 — all equal to hand calculation; dashboard equal to reports; closed-day, electricity and future-date rules returned the documented errors; data and closed day survived a restart; backup → change → restore returned the books to the backed-up state with a safety copy; no console errors on any screen. Not exercised in the browser: clicking the Excel download, focus refetch, full flows of Products/Purchases/Stock/Opening Stock/Printing/Telecom/Expenses/Drawings/Settings (render check only; covered by tests and agent smoke tests).
+- **Documentation review** (independent agent): README, ARCHITECTURE, DATABASE_SCHEMA, API_CONTRACTS, TASKS rewritten as as-built references; `DOC_REVIEW_FINDINGS.md` records findings. No approved formula contradicted; wording corrected in BUSINESS_RULES; implementer-made decisions recorded in BUSINESS_RULES §13A awaiting owner confirmation.
+- **Fixes from the review:** negative-cash warning on voids of sales, print sales, reload and EZCash sales; Settings → Printing defaults now a read-only reference pointing to Printing → Service types; clearer message for service products in the POS; menu descriptions corrected. Merged tree: typecheck (server+web) clean, **1,689 tests pass, 0 skipped**, web build OK.
+- **Independent QA / financial validation agent (fresh context, tried to break it):** a new six-week scenario of about 150 operations through the real API with every figure hand-calculated first (cash books, funds, weighted-average stock, COGS/extra/returns, commissions, Shop/Telecom/Ice Cream/Combined P&L for every day and month, dashboard, export pack) — all matched on the first run; four seeded 420-operation simulations with invariants checked after every operation against an independent model (incl. §10.4 oracle: 61 D4 splits, 3 D2 guard blocks); adversarial tests (future dates, wrong types, overflow, injection strings, concurrent duplicates, closed days, double voids, electricity spellings, negative stock, hostile Excel files); migration, checksum and backup/restore tests. **One real defect found:** purchase return/void refund above the stock value removed (pool value below purchase cost) was missing from the Shop/Telecom P&L (profit understated, e.g. Rs 675.00 reported vs Rs 900.00 from cash + stock). **Fixed** in the report layer only (cash books and stock were always correct): new P&L line and `adjustments.purchaseRefundGainCents`; BUSINESS_RULES §11 now states it; QA simulations now require the identity to close exactly. Other observations accepted and listed in TASKS.md.

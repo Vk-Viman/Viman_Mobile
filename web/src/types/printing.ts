@@ -53,7 +53,7 @@ export interface PrintSale {
 export interface PrintSaleTotals { revenueCents: number; cogsCents: number; grossProfitCents: number }
 export interface PrintSaleList { items: PrintSale[]; total: number; totals: PrintSaleTotals }
 export interface PrintSaleOne { item: PrintSale; warnings: PrintWarning[] }
-export interface PrintSaleVoidOne { item: PrintSale }
+export interface PrintSaleVoidOne { item: PrintSale; warnings: CashWarning[] }
 export interface PrintSaleQuery {
   from?: string; to?: string; serviceTypeId?: number; status?: PostedStatus; limit?: number; offset?: number;
 }

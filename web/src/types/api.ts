@@ -490,6 +490,8 @@ export interface SaleTotals {
 }
 export interface SaleList { items: Sale[]; total: number; totals: SaleTotals }
 export interface SaleOne { item: Sale }
+/** POST /sales/:id/void: the voided sale plus the non-blocking R13 cash warnings. */
+export interface SaleVoidResult { item: Sale; warnings: CashWarning[] }
 export interface SaleQuery {
   from?: string; to?: string; book?: Book; status?: PostedStatus; productId?: number; limit?: number; offset?: number;
 }

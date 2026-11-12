@@ -18,7 +18,7 @@ import { purchaseKeys } from './purchases';
 import { stockKeys } from './stock';
 import { qs } from './queryString';
 import type {
-  SaleCreate, SaleCreateResult, SaleList, SaleOne, SaleQuery, SaleReturnCreate, SaleReturnResult, SaleVoidBody,
+  SaleCreate, SaleCreateResult, SaleList, SaleOne, SaleQuery, SaleReturnCreate, SaleReturnResult, SaleVoidBody, SaleVoidResult,
 } from '../types/api';
 
 /** Root query key of every sales cache (list and detail). */
@@ -68,7 +68,7 @@ export function useCreateSale() {
 export function useVoidSale() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, body }: { id: number; body: SaleVoidBody }) => apiPost<SaleOne>(`/sales/${id}/void`, body),
+    mutationFn: ({ id, body }: { id: number; body: SaleVoidBody }) => apiPost<SaleVoidResult>(`/sales/${id}/void`, body),
     onSuccess: () => invalidateAll(qc),
   });
 }

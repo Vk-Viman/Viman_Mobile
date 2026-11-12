@@ -34,6 +34,8 @@ import {
 import type { SaleBook, SaleStatus, SalesTotals } from '../repositories/sales.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { assertDayOpen } from './day-closing.ts';
+import { negativeCashWarnings } from './cash-warnings.ts';
+import type { CashWarning } from './cash-warnings.ts';
 import { issueStock, reverseMovements } from './inventory.service.ts';
 import {
   BOOK_ORDER, LINE_TYPE, SALE_CASH_TYPE, extraCostFor, loadSale, runSalesWrite, toSale, unitCostOf,
@@ -108,7 +110,7 @@ function resolveSellableProducts(conn: DatabaseSync, items: SaleCartLine[]): Pro
     else if (!p.active) inactive[`items.${i}.productId`] = `${p.name} is inactive.`;
   });
   if (Object.keys(services).length > 0) {
-    throw new AppError(400, 'PRODUCT_NOT_SELLABLE_YET', 'Service products cannot be sold yet.', services);
+    throw new AppError(400, 'PRODUCT_NOT_SELLABLE_YET', 'Service products are not sold in the POS. Use Printing for print and photocopy jobs.', services);
   }
   if (Object.keys(inactive).length > 0) {
     throw new AppError(400, 'PRODUCT_INACTIVE', 'An inactive product cannot be sold.', inactive);
@@ -292,7 +294,7 @@ export function createSales(
  *
  * @throws AppError 400 VALIDATION_ERROR (reason), 404 NOT_FOUND, 409 ALREADY_VOID, 409 HAS_RETURNS.
  */
-export function voidSale(ctx: AppContext, id: number, body: { reason: string }): Sale {
+export function voidSale(ctx: AppContext, id: number, body: { reason: string }): { item: Sale; warnings: CashWarning[] } {
   const fields: Fields = {};
   const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, REASON_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -316,7 +318,8 @@ export function voidSale(ctx: AppContext, id: number, body: { reason: string }):
     const after = loadSale(conn, id);
     logAudit(conn, 'sale', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return after;
+    // R13: the reversal removed cash from the book; warn (never block) if it is now below zero.
+    return { item: after, warnings: after.totalCents > 0 ? negativeCashWarnings(conn, [after.book]) : [] };
   });
 }
 

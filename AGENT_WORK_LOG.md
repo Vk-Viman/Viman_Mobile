@@ -102,3 +102,10 @@ QA (sonnet) updated/added tests for FR-1…FR-5 (212 → 213 after the read-only
 
 ## Wave 1 (2026-11-11) — dispatched
 Orchestrator wrote the Wave 1 contracts (DATABASE_SCHEMA "Wave 1 contracts", API_CONTRACTS "Wave 1 contracts") and pre-wired shared files (route stubs registered in `app.ts`, tab stubs and routes in `App.tsx`, nav entries) so agents cannot collide. Three full-stack agents (Phase 6, 7, 13), each in an isolated worktree with exclusive file ownership, were started in parallel.
+
+## Waves 1–5 summary (2026-11-11 to 2026-11-13)
+- **Wave 1** (Phases 6, 7, 13): three full-stack agents in separate git worktrees with exclusive files, contracts written first by the orchestrator, shared files pre-wired. Merged as PR #6 (1,127 tests).
+- **Wave 2** (Phase 8): one agent; DAY_CLOSED wired through every write service; PR #7 (1,264 tests).
+- **Wave 3** (Phases 9, 10): two agents in parallel (rate-limit interruption; both re-started, Phase 9 from three saved drafts). One merge conflict between them was caught by the suite (a Phase 10 test used a raw stand-in that Phase 9's trigger correctly rejected) and fixed by using the real Phase 9 endpoints. PR #8 (1,511 tests).
+- **Wave 4** (Phases 11, 12): shared report plumbing written by the orchestrator; financial and operational report agents in parallel (cross-agent catch: damaged-return losses live in `stock_losses` without a movement); dashboard agent after Phase 11. PRs #9, #10 (1,681 tests).
+- **Wave 5** (Phase 14): orchestrator-run browser end-to-end through the launcher; independent docs-review agent; independent QA agent (found the purchase-refund-gain P&L defect); fix agents for review findings and for the defect. Orchestrator reviewed every merge by running typecheck, the full suite and the web build on the merged tree.

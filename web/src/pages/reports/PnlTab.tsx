@@ -47,7 +47,7 @@ function ShopView({ data }: { data: ShopPnl }) {
         <FinTile label="Goods gross profit" cents={t.goods.grossProfitCents} hint="Sales net of returns, minus cost (automatic + extra)" />
         <FinTile label="Services gross profit" cents={t.services.grossProfitCents} hint="Print / photocopy sales minus standard cost" />
         <FinTile label="Operating expenses" cents={t.expenses.totalCents} />
-        <FinTile label="Stock adjustments (net)" cents={t.adjustments.netCents} hint="Losses and stocktake differences" />
+        <FinTile label="Stock adjustments (net)" cents={t.adjustments.netCents} hint="Losses, stocktake differences, purchase refund gains" />
         <FinTile label="Net profit" cents={t.netProfitCents} emphasis hint="After cash over / short" />
       </FinTiles>
       <ExpenseBreakdown expenses={t.expenses} />

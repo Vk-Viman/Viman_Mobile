@@ -1,601 +1,432 @@
 # API Contracts
 
-Base path: `/api/v1`. JSON in/out (UTF-8). Money fields end in `Cents` and are **integers**. Rates end in `Bp` (basis points, 600 = 6.00%). Dates `YYYY-MM-DD`; timestamps ISO-8601 UTC strings. Field names are camelCase in JSON, snake_case in SQL.
+Base path: `/api/v1`. JSON in and out (UTF-8). Money fields end in `Cents` and are **integers**. Rates end in `Bp` (basis points, 600 = 6.00%). Dates are `YYYY-MM-DD`; timestamps are ISO-8601 UTC strings. JSON field names are camelCase, SQL columns are snake_case.
 
-## Conventions
-- **Errors**: any non-2xx response body is
-  `{ "error": { "code": "UPPER_SNAKE", "message": "Human readable", "fields": { "<path>": "message" } } }` (`fields` optional).
-  - Request validation failures → `400 VALIDATION_ERROR` with `fields` keyed by JSON path (e.g. `"shop.name"`, `"rates.reloadCommissionBp"`).
-  - Unknown route under `/api` → `404 NOT_FOUND` (JSON, never the SPA HTML).
-  - Unexpected → `500 INTERNAL_ERROR` (message generic; details only in server log).
-- **Idempotency** (from Phase 2+): every create of a financial record accepts `clientRef` (UUID from the browser). A repeat with the same `clientRef` returns the original record with `200` instead of creating a duplicate.
-- **Validation** uses Fastify's native JSON Schema (`additionalProperties: false` on bodies). **No type coercion**: a money/rate field sent as `null` or `"600"` is a 400, never silently converted. Numeric query-string params are digit strings validated in the route.
-- **Business date vs posting time** (Phase 2+): every financial record in any response carries `businessDate` (owner-entered) and `postedAt` (server timestamp, read-only, never accepted in a request body) plus `backdated: boolean`. Reports group by `businessDate`; posting-order rules (Ice Cream limits, D4, D2, costing) use `postedAt`. `asOf`, `from`, `to` query parameters are business dates. Reversal rows carry the business date of the row they reverse. From Phase 3, `GET /audit-logs` items add `postedAt` (= `at`), `businessDate` (null for non-financial entries) and `backdated`.
-- **Future-dated transactions** (R-FD, Phase 2+): every financial write whose body contains a business date (`businessDate`, or the date field of that record) is validated **on the server**: a date later than today in Asia/Colombo → `400 FUTURE_DATE_NOT_ALLOWED` with `message: "Future-dated transactions are not allowed. Please select today or an earlier date."` and `fields: { businessDate: "Future-dated transactions are not allowed. Please select today or an earlier date." }` (field name = the request's date field). Applies to all P2–P13 write endpoints that create financial records (sales, sales returns, purchases, purchase returns, opening stock, stocktakes, losses, drawings, reloads, EZCash, top-ups, printing supplies, expenses, opening balances, capital, transfers, cash counts, daily closings, Ice Cream days/payments/fund moves — incl. the replacement row of `PUT /icecream/days/:date` — and opening-stock import rows). Earlier dates are accepted. `postedAt` is read-only: a request body containing `postedAt` → `400 VALIDATION_ERROR` with `fields.postedAt` (`additionalProperties: false`). The web date pickers use `max = today` (from `GET /health` `today`), but the server is authoritative. **Validation order:** JSON schema → R-FD → (returns only: original lookup `404 NOT_FOUND`, then R-RD) → `DAY_CLOSED` → `SPLIT_CONFIRMATION_REQUIRED` / void guards / other business rules. **Scope:** report and query dates (`asOf`, `from`, `to`) are never rejected. Write paths always call `todayBusinessDate()` without an injected clock (the database trigger uses the real clock); tests fake time only for read/report logic.
-- **Return date** (R-RD, Phase 3/5): `POST /sales/:id/returns` and `POST /purchases/:id/returns` with a `businessDate` earlier than the original sale's / purchase's business date → `400 RETURN_BEFORE_ORIGINAL_DATE` with `message: "The return date cannot be earlier than the original sale date (2026-11-05). Please select 2026-11-05 or a later date (not after today)."` (`purchase` for purchase returns; the date is the original's business date), `fields: { businessDate: <same message> }` and `originalDate: "YYYY-MM-DD"` in the error body. On-or-after dates (incl. backdated) are accepted, subject to R-FD. The web return form sets the date picker range to *original date … today*, but the server is authoritative. **Validation order** for returns: JSON schema → R-FD (`FUTURE_DATE_NOT_ALLOWED`) → original lookup (`404 NOT_FOUND`) → R-RD (`RETURN_BEFORE_ORIGINAL_DATE`) → `DAY_CLOSED` (judged on the **return's** business date) → quantity/void/business rules. The original date is returned as `error.originalDate`.
-- While a restore is running every other `/api` request gets `503 RESTORE_IN_PROGRESS`.
+This file describes the API **as built** (schema version 14). Every endpoint below exists in `server/src/routes/`. The JSON-schema bodies in those route files are the source of truth for field names and limits; the TypeScript shapes in `web/src/types/*.ts` mirror the responses.
+
+Contents: [Conventions](#conventions) · [Error codes](#error-codes) · [System](#system) · [Catalog](#catalog) · [Purchases and inventory](#purchases-and-inventory) · [Stocktake, losses, personal use](#stocktake-stock-losses-personal-use) · [Sales](#sales) · [Telecom](#telecom) · [Printing](#printing) · [Opening stock and Excel](#opening-stock-and-excel-import) · [Expenses](#expenses) · [Cash books](#cash-books-opening-balances-cash-counts-daily-closings) · [Capital and cash drawings](#capital-and-cash-drawings) · [Transfers](#cash-transfers) · [Ice Cream](#ice-cream) · [Reports](#reports) · [Dashboard and export pack](#dashboard-and-export-pack) · [Internal module signatures](#internal-module-signatures)
 
 ---
 
-## Phase 1 endpoints (implemented in Phase 1)
+## Conventions
 
-### `GET /api/v1/health`
-`200`
-```json
-{ "status": "ok", "appVersion": "0.1.0", "schemaVersion": 2, "time": "2026-11-10T06:00:00.000Z", "today": "2026-11-10" }
-```
-`today` is the business date in Asia/Colombo.
+**Errors.** Any non-2xx response body is
+`{ "error": { "code": "UPPER_SNAKE", "message": "Human readable", "fields": { "<path>": "message" }, ...extra } }`.
+`fields` is optional (keys are JSON paths such as `shop.name` or `items.0.productId`). Some errors add top-level keys inside `error` (`originalDate`, `onHand`, `minUnitCostCents`, `book`, `businessDate`, `rows`, `summary`, ...), noted per endpoint. See the [error code index](#error-codes).
+- Schema validation failures: `400 VALIDATION_ERROR`, message "Some fields are invalid.", `fields` keyed by path; an unknown property is reported as "Unknown field." against that property's name. A missing or non-JSON body: `400 VALIDATION_ERROR`.
+- Unknown route under `/api`: `404 NOT_FOUND` (JSON, never the SPA page).
+- Unexpected error: `500 INTERNAL_ERROR`, generic message; details only in the server console.
+- While a restore is running every other `/api` request gets `503 RESTORE_IN_PROGRESS`.
 
-### `GET /api/v1/settings`
+**Validation.** Fastify JSON Schema with `additionalProperties: false` on bodies and **no type coercion**: a money field sent as `null` or `"600"` is a 400, never converted. Query-string numbers are digit strings validated by pattern (`^[0-9]{1,9}$`), booleans are exactly `true` or `false`, unknown query parameters are `400`. Path `:id` must be 1–9 digits.
+
+**Paging.** List endpoints take `limit` and `offset` and answer `{ items, total, ... }`. Default and maximum differ per resource (stated below); `limit` outside 1..max is `400 VALIDATION_ERROR` (`fields.limit`). Lists sort newest business date first unless stated.
+
+**Idempotency (`clientRef`).** Every create of a financial record requires `clientRef` (string, 8–64 characters of `A-Za-z0-9_-`; the browser sends a UUID). A repeat with the same `clientRef` returns the original record with `200` instead of `201` and creates nothing. Reusing a `clientRef` for a different record kind or book gives `409 CLIENT_REF_CONFLICT` where the service checks it (sale returns, purchase returns, drawings, capital, opening balances, cash counts, daily closings, Excel opening-stock import). The repeat check is always made within the record's own table; `clientRef` values are unique per table (`client_ref UNIQUE`). A sale cart creates one sale per book, so `clientRef` is unique per `(clientRef, book)`.
+
+**Business date and posting time (BUSINESS_RULES §12).** Every financial record in a response carries `businessDate` (owner-entered), `postedAt` (server time, read-only; a request body containing `postedAt` is a 400) and `backdated: boolean` (business date earlier than the Colombo date of `postedAt`). Reports group by business date; posting-order rules (Ice Cream limits, D4, D2, weighted-average costing) use `postedAt` then `id`. `asOf`, `from`, `to` query parameters are business dates and are **never rejected for being in the future**.
+
+**R-FD, no future dates.** Any financial write whose `businessDate` is later than today in Asia/Colombo is `400 FUTURE_DATE_NOT_ALLOWED`, message "Future-dated transactions are not allowed. Please select today or an earlier date.", with `fields.businessDate` set to the same message. Earlier dates are accepted (backdating is audited and listed in the Backdated report). A malformed or impossible date (for example `2026-02-31`) is `400 VALIDATION_ERROR`, `fields.businessDate`. The web date pickers use `max = today` from `GET /health` (`today`), but the server decides. Database triggers repeat the check as a backstop.
+
+**R-RD, returns.** `POST /sales/:id/returns` and `POST /purchases/:id/returns` with a `businessDate` earlier than the original document's business date: `400 RETURN_BEFORE_ORIGINAL_DATE`, message "The return date cannot be earlier than the original sale date (2026-11-05). Please select 2026-11-05 or a later date (not after today)." (`purchase` for purchase returns), `fields.businessDate` = the same message, and `error.originalDate` = the original date.
+
+**Validation order** for writes: JSON schema → R-FD → (returns: original lookup `404 NOT_FOUND`, then R-RD) → repeat-`clientRef` check (a retry still returns the original) → `DAY_CLOSED` → other business rules (stock, status, limits). Voids check `DAY_CLOSED` right after the record lookup, before `ALREADY_VOID`. Request-level checks that need no database (electricity category, `USE_ICECREAM_PAYMENTS`, `FUND_*`) run as validation before R-FD.
+
+**Transactions and audit.** Every write runs in one transaction containing the business record, its stock movements, cash entries, fund entries and its audit row. Audit entries carry business date and backdated flag for financial records.
+
+**Voids (R1).** `POST /<resource>/:id/void` with `{ "reason": "..." }` (1–200 characters after trimming). The record becomes `void` and the ledgers get **reversal rows** (same type, negated amounts, `reversesEntryId` set, the original's business date, posting time = now). Nothing is edited or deleted. A second void is `409 ALREADY_VOID`. A void in a closed day is `409 DAY_CLOSED`. Voiding a sale or purchase that has returns is `409 HAS_RETURNS`.
+
+**Warnings (R13) never block.** Cash-out writes return `warnings: [{ code, message, book, balanceCents, fund? }]` with codes `NEGATIVE_CASH_BALANCE` (a book's balance is below zero after the write), `NEGATIVE_FUND_BALANCE` (an Ice Cream fund is below zero), `ICECREAM_FUNDS_MISMATCH` (only from `GET /cashbooks` and `GET /icecream/funds`; the fund total differs from the Ice Cream book). Sales have their own line warnings (below); print sales return `warnings: ['PRICE_BELOW_COST']`; Ice Cream writes may add `EXCESS_COST_OUTSTANDING`.
+
+**Uploads.** `multipart/form-data`. Backup restore: field `file`, up to 200 MB. Opening-stock Excel: field `file`, `.xlsx` only, up to 5 MB. Larger files answer `413 FILE_TOO_LARGE`.
+
+**Excel and report downloads** answer `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` with a `content-disposition: attachment` filename.
+
+**Not implemented.** There is no `GET /go-live` endpoint and no per-resource `DELETE` anywhere (no hard deletes).
+
+---
+
+## Error codes
+
+| Status | Code | Where it appears |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | any endpoint (schema, date format, missing file, text length, ranges) |
+| 400 | `FUTURE_DATE_NOT_ALLOWED` | every financial write (R-FD) and Excel preview/import with a future date |
+| 400 | `RETURN_BEFORE_ORIGINAL_DATE` | sale and purchase returns (R-RD) |
+| 400 | `ELECTRICITY_NOT_ALLOWED` | `POST /expenses`, `POST /icecream/payments` |
+| 400 | `USE_ICECREAM_PAYMENTS` | `POST /expenses` with `book: "icecream"` |
+| 400 | `FUND_REQUIRED`, `FUND_NOT_ALLOWED` | opening balance, capital, cash drawing, transfer, cash count, daily closing |
+| 400 | `SAME_BOOK` | transfer with equal books (`fields.toBook`) |
+| 400 | `SAME_FUND` | Ice Cream fund move or preview with equal funds |
+| 400 | `NOTE_REQUIRED` | cash count / closing with a non-zero difference and no note |
+| 400 | `CATEGORY_INACTIVE`, `CATEGORY_BOOK_MISMATCH` | products |
+| 400 | `MIXED_BOOKS` | purchase with Shop and Telecom products |
+| 400 | `PRODUCT_NOT_STOCKABLE` | purchases, stock losses, goods drawings (service product) |
+| 400 | `PRODUCT_NOT_SELLABLE_YET` | `POST /sales` with a `kind = "service"` product ("Service products are not sold in the POS. Use Printing for print and photocopy jobs."; printing uses `/print-sales`) |
+| 400 | `PRODUCT_INACTIVE` | `POST /sales` |
+| 400 | `PRODUCT_NOT_IN_BOOK` | stocktake item from the other book |
+| 400 | `RESTORE_CONFIRM_REQUIRED` | restore without `confirm = "RESTORE"` |
+| 400 | `INVALID_FILE`, `INVALID_FILE_TYPE` | Excel upload that is not a readable `.xlsx` |
+| 404 | `NOT_FOUND`, `BACKUP_NOT_FOUND` | unknown id / date / route / backup |
+| 409 | `DUPLICATE_NAME`, `DUPLICATE_CODE` | catalog and print service types |
+| 409 | `DEFAULT_CATEGORY_LOCKED`, `CATEGORY_HAS_PRODUCTS` | categories |
+| 409 | `ALREADY_VOID`, `HAS_RETURNS`, `SALE_VOID`, `PURCHASE_VOID` | voids and returns |
+| 409 | `NOT_DRAFT` | stocktake edit/complete after the draft stage |
+| 409 | `DAY_CLOSED` | every write dated in a closed day of any touched book (`error.book`, `error.businessDate`) |
+| 409 | `DAY_ALREADY_CLOSED`, `DAY_NOT_CLOSED` | daily closing / reopen |
+| 409 | `OPENING_BALANCE_EXISTS` | second posted opening balance for a book (and fund) |
+| 409 | `DAY_EXISTS` | `POST /icecream/days` when the date already has a posted entry |
+| 409 | `SPLIT_CONFIRMATION_REQUIRED` | Ice Cream move into Profit above the profit-eligible limit (D4) |
+| 409 | `PROVIDER_INACTIVE`, `SERVICE_TYPE_INACTIVE` | reload / top-up on an inactive provider; print sale on an inactive type |
+| 409 | `OPENING_BATCH_IN_USE` | voiding an opening-stock batch whose stock was already used |
+| 409 | `IMPORT_ALREADY_COMMITTED` | same Excel file bytes already imported (while that batch is posted) |
+| 409 | `DAMAGED_RETURN_LOSS` | voiding a stock-loss row that belongs to a damaged sales return |
+| 409 | `CLIENT_REF_CONFLICT` | a `clientRef` reused for a different record |
+| 409 | `RESTORE_IN_PROGRESS` | second restore (every other request gets 503 during a restore) |
+| 413 | `FILE_TOO_LARGE` | uploads over the limits above |
+| 422 | `INSUFFICIENT_STOCK` | any outflow above the quantity on hand; `error.onHand` where known |
+| 422 | `RETURN_EXCEEDS_SOLD`, `RETURN_EXCEEDS_PURCHASED` | return quantity above what is returnable |
+| 422 | `COST_BELOW_AUTOMATIC` | sale line cost per unit below the automatic cost (C13); `error.minUnitCostCents` |
+| 422 | `UNIT_COST_REQUIRED` | stocktake gain on a product with no quantity or value (C10) |
+| 422 | `NEGATIVE_PROFIT_UNCONFIRMED` | Ice Cream day with S − C − E < 0 and no confirmation |
+| 422 | `ITEMS_TOTAL_MISMATCH` | Ice Cream day items not adding up to `salesCents` |
+| 422 | `VOID_BREAKS_RELEASE` | Ice Cream void guard (D2) |
+| 422 | `DUPLICATE_PRODUCT`, `INVALID_PRODUCT` | opening stock entry |
+| 422 | `IMPORT_HAS_ERRORS` | Excel import with any bad row (nothing saved; `error.rows`, `error.summary`, `error.importRunId`, `error.fileSha256`) |
+| 422 | `MISSING_SHEET`, `MISSING_HEADERS`, `EMPTY_FILE`, `TOO_MANY_ROWS` | Excel file structure (more than 5,000 stock rows) |
+| 422 | `RESTORE_INVALID_FILE`, `RESTORE_INTEGRITY_FAILED`, `RESTORE_SCHEMA_MISSING`, `RESTORE_SCHEMA_TOO_NEW` | restore validation |
+| 500 | `BACKUP_FAILED`, `RESTORE_FAILED`, `INTERNAL_ERROR` | server-side failure |
+| 503 | `RESTORE_IN_PROGRESS` | any `/api` call while a restore swaps the database |
+
+---
+
+## System
+
+### `GET /health`
+`200` `{ "status": "ok", "appVersion": "0.1.0", "schemaVersion": 14, "time": "<ISO UTC>", "today": "YYYY-MM-DD" }`. `today` is the Colombo business date. `appVersion` is read from `server/package.json`.
+
+### `GET /settings`
 `200`
 ```json
 {
   "shop": { "name": "Viman Mobile", "address": "162 Padiliyathuduwa Rd, Hunupitiya, Wattala", "phone": "+94 71 900 4044", "email": "viman.mobile.shop@gmail.com" },
   "rates": { "reloadCommissionBp": 600, "ezcashCommissionBp": 80 },
-  "printDefaults": [
-    { "code": "BW_1S",   "name": "B/W print – one side",       "priceCents": 1500, "costCents": 650 },
-    { "code": "BW_2S",   "name": "B/W print – double side",    "priceCents": 2500, "costCents": 900 },
-    { "code": "CLR_1S",  "name": "Colour print – one side",    "priceCents": 2000, "costCents": 650 },
-    { "code": "CLR_2S",  "name": "Colour print – double side", "priceCents": 3000, "costCents": 900 },
-    { "code": "PC_BW_1S","name": "Photocopy B/W – one side",   "priceCents": 1000, "costCents": 650 },
-    { "code": "PC_BW_2S","name": "Photocopy B/W – double side","priceCents": 1500, "costCents": 900 },
-    { "code": "CUSTOM",  "name": "Custom image print",         "priceCents": 4000, "costCents": 650 }
-  ],
-  "updatedAt": "2026-11-10T06:00:00.000Z"
+  "printDefaults": [ { "code": "BW_1S", "name": "B/W print – one side", "priceCents": 1500, "costCents": 650 }, "... 7 items, see DATABASE_SCHEMA.md ..." ],
+  "updatedAt": null
 }
 ```
-`updatedAt` = latest `updated_at` across settings rows (null if never updated). The values above are the **defaults** seeded when no row exists. `printDefaults` are stored now and used in Phase 7 to seed print service types.
+The values shown are the built-in defaults, used when no row is stored. `updatedAt` is the latest `updated_at` across stored sections (null if none).
+**`printDefaults` is stored and shown read-only in Settings (labelled "Initial price list, kept for reference; not used for sales") but not read by any other service.** The prices and standard costs actually used for printing are the `print_service_types` rows (see [Printing](#printing)); editing `printDefaults` does not change them.
 
-### `PUT /api/v1/settings`
-Body: any subset of the three sections; each section present **replaces that section entirely**.
-```json
-{ "shop": {...}, "rates": {...}, "printDefaults": [...] }
-```
-Validation:
-- `shop.name` 1–100 chars (trimmed, required when `shop` given); `address` 0–200; `phone` 0–30; `email` 0–100 (empty or contains `@`).
-- `rates.reloadCommissionBp`, `rates.ezcashCommissionBp`: integers 0–10000, both required when `rates` given.
-- `printDefaults`: array 1–30 items; `code` `^[A-Z0-9_]{1,20}$` unique within array; `name` 1–60; `priceCents`, `costCents` integers 0–100000000.
-- Empty body `{}` → `400 VALIDATION_ERROR`.
-Response `200`: the full settings object (same shape as GET).
-Side effect: one `audit_logs` row per changed section: `entity='settings'`, `entityId=<section>`, `action='update'`, `before`/`after` = section JSON. Unchanged sections are not logged.
+### `PUT /settings`
+Body: any subset of `shop`, `rates`, `printDefaults` (at least one). A section that is present **replaces that section entirely**.
+- `shop`: `name` required, 1–100 (trimmed); `address` ≤ 200; `phone` ≤ 30; `email` ≤ 100, empty or containing `@`.
+- `rates`: both `reloadCommissionBp` and `ezcashCommissionBp` required, integers 0–10000.
+- `printDefaults`: array 1–30; `code` `^[A-Z0-9_]{1,20}$`, unique within the list; `name` 1–60; `priceCents`, `costCents` integers 0–100000000.
 
-### `GET /api/v1/audit-logs?entity=&limit=&beforeId=`
-- `entity` optional exact match; `limit` 1–200 (default 50); `beforeId` optional (keyset pagination, returns rows with `id < beforeId`), newest first.
-`200`
-```json
-{ "items": [ { "id": 12, "at": "…", "entity": "settings", "entityId": "rates", "action": "update", "before": {…}, "after": {…}, "note": null } ], "nextBeforeId": 12 }
-```
-`nextBeforeId` is null when there are no more rows.
+`200` the full settings object. One audit row per section that actually changed (`entity: "settings"`, `entityId` = section, `action: "update"`, before/after = section JSON); unchanged sections write nothing.
 
-### `GET /api/v1/backups`
-`200`
-```json
-{ "items": [ { "name": "viman-20261110-113000-startup.db", "reason": "startup", "sizeBytes": 49152, "createdAt": "2026-11-10T06:00:00.000Z" } ] }
-```
-Newest first. Only files matching the backup name pattern are listed. `reason` ∈ `startup | manual | pre-restore`.
+### `GET /audit-logs?entity=&limit=&beforeId=`
+`entity` exact match; `limit` 1–200 (default 50); `beforeId` returns rows with `id < beforeId`. Newest first.
+`200` `{ "items": [ { "id", "at", "postedAt" (= at), "entity", "entityId", "action", "before", "after", "note", "businessDate" (null for non-financial entries), "backdated" } ], "nextBeforeId": number|null }`.
 
-### `POST /api/v1/backups`
-Body: none or `{}`. Creates a manual backup. `201` → `{ "item": { ...same shape... } }`.
-Errors: `500 BACKUP_FAILED`.
+### Backups
+`GET /backups` → `{ items: [{ name, reason: "startup"|"manual"|"pre-restore", sizeBytes, createdAt }] }`, newest first; only files matching `^viman-\d{8}-\d{6}-(startup|manual|pre-restore)(-\d{1,3})?\.db$` are listed (the `-N` suffix appears when two backups land in the same second).
+`POST /backups` (no body) → `201 { item }`; `500 BACKUP_FAILED`. Rotation after each backup keeps the newest 30 start-up/manual backups and the newest 10 pre-restore copies.
+`POST /backups/restore`, two forms:
+1. JSON `{ "name": "<backup file name>", "confirm": "RESTORE" }`.
+2. `multipart/form-data` with `confirm=RESTORE` and a `file` field (a `.db` file, ≤ 200 MB).
 
-### `POST /api/v1/backups/restore`
-Two forms:
-1. JSON `{ "name": "viman-20261110-113000-manual.db", "confirm": "RESTORE" }` — restore an existing backup.
-2. `multipart/form-data` with field `confirm=RESTORE` and file field `file` (≤ 200 MB) — restore an uploaded `.db`.
-
-`200`
-```json
-{ "restoredFrom": "viman-20261110-113000-manual.db", "safetyBackup": "viman-20261110-114500-pre-restore.db", "schemaVersion": 2 }
-```
-For uploads `restoredFrom` is `"upload:<original filename>"`.
-Errors:
-| status | code | when |
-|---|---|---|
-| 400 | `RESTORE_CONFIRM_REQUIRED` | `confirm` missing or not exactly `RESTORE` |
-| 400 | `VALIDATION_ERROR` | bad name format / no file |
-| 404 | `BACKUP_NOT_FOUND` | named backup does not exist |
-| 422 | `RESTORE_INVALID_FILE` | not a SQLite database (header check / cannot open) |
-| 422 | `RESTORE_INTEGRITY_FAILED` | `PRAGMA integrity_check` ≠ `ok` |
-| 422 | `RESTORE_SCHEMA_MISSING` | no `schema_migrations` table or required tables missing |
-| 422 | `RESTORE_SCHEMA_TOO_NEW` | backup schema version > app's latest migration |
-| 409 | `RESTORE_IN_PROGRESS` | another restore is running (in practice the global guard answers every request during a restore with **503** `RESTORE_IN_PROGRESS` first) |
-| 413 | `FILE_TOO_LARGE` | uploaded file over 200 MB |
-| 500 | `RESTORE_FAILED` | the swap or post-restore migration failed; previous data was put back from the safety backup |
-On any validation failure the live database is untouched; on `RESTORE_FAILED` it is put back from the safety backup. The swap itself is an atomic same-folder file rename.
-
-Backup name pattern: `^viman-\d{8}-\d{6}-(startup|manual|pre-restore)(-\d{1,3})?\.db$` (suffix used only when two backups land in the same second). Names are validated before any filesystem access (no path traversal).
+`200 { "restoredFrom": "<name>" | "upload:<file name>", "safetyBackup": "<name>", "schemaVersion": 14 }`. Errors: `400 RESTORE_CONFIRM_REQUIRED`, `400 VALIDATION_ERROR` (bad name, no file), `404 BACKUP_NOT_FOUND`, `413 FILE_TOO_LARGE`, `422 RESTORE_INVALID_FILE` (not a SQLite file), `422 RESTORE_INTEGRITY_FAILED` (`integrity_check` not `ok`), `422 RESTORE_SCHEMA_MISSING` (no `schema_migrations`, `settings` or `audit_logs`), `422 RESTORE_SCHEMA_TOO_NEW` (backup newer than this program), `500 RESTORE_FAILED` (the previous data was put back from the safety backup). Sequence: copy to a candidate file → validate (live database untouched on failure) → safety backup → close, remove `-wal`/`-shm`, atomic rename over `viman.db` → reopen → migrate (an older backup is upgraded) → audit entry `backup` / `restore`. Names are validated before any file access (no path traversal).
 
 ---
 
-## Phase 2 endpoints — Catalog (categories, products, suppliers)
+## Catalog
 
-Catalog data is **not financial**: no `clientRef`, no business date, no R-FD/R-RD. All writes are audited (`audit_logs`: entity `category` | `product` | `supplier`, `entityId` = id as text, action `create`/`update`, before/after = the full item JSON). No hard deletes — retire with `active: false`. Unchanged values in a PUT write no audit row. Stock fields are **read-only** here (always 0 in Phase 2); stock arrives with Phases 3/4/13.
-
-Numeric/boolean **query** params are strings validated in the route (no coercion): integers `^[0-9]{1,9}$`, booleans exactly `true` | `false`. Unknown query params → `400 VALIDATION_ERROR`. Path `:id` must be digits, else `400`; unknown id → `404 NOT_FOUND`.
-
-Common errors: `400 VALIDATION_ERROR` (fields keyed by JSON path), `404 NOT_FOUND`, `409 DUPLICATE_NAME` (`fields.name`, "Another … already uses this name." — comparison is case-insensitive, after trimming), `409 DUPLICATE_CODE` (`fields.code`).
+Catalog data is not financial: no `clientRef`, no business date, no R-FD. Every write is audited (entity `category` | `product` | `supplier`, action `create`/`update`, before/after = the item JSON). Nothing is deleted: retire with `active: false`. A PUT that changes nothing writes no audit row. Common errors: `400 VALIDATION_ERROR`, `404 NOT_FOUND`, `409 DUPLICATE_NAME` (case-insensitive, after trimming; `fields.name`), `409 DUPLICATE_CODE` (`fields.code`).
 
 ### Categories
-`Category` = `{ id, name, book: "shop"|"telecom", isDefault, active, productCount, createdAt, updatedAt }` (`productCount` = all products incl. inactive).
+`Category` = `{ id, name, book: "shop"|"telecom", isDefault, active, productCount, createdAt, updatedAt }` (`productCount` includes inactive products).
+- `GET /categories?active=&book=` → `{ items }`, ordered by book (shop first) then name.
+- `POST /categories` `{ name (1–60), book }` → `201 { item }`.
+- `PUT /categories/:id` any of `{ name, book, active }` (at least one) → `200 { item }`. The 12 built-in categories keep their name and book forever (`409 DEFAULT_CATEGORY_LOCKED`) but can be deactivated. The book of an owner-created category can change only while it has no products (`409 CATEGORY_HAS_PRODUCTS`).
 
-- `GET /api/v1/categories?active=&book=` → `{ items: Category[] }` ordered by `book` (shop first), then `name`.
-- `POST /api/v1/categories` `{ name, book }` → `201 { item }`. `name` 1–60 trimmed; `book` required.
-- `PUT /api/v1/categories/:id` — any of `{ name, book, active }`, `minProperties: 1` → `200 { item }`.
-  - The 12 **default** categories (seeded by migration `003`) have `isDefault: true`: their `name` and `book` can never change → `409 DEFAULT_CATEGORY_LOCKED`. They may be deactivated/reactivated.
-  - `book` of an owner-created category can change only while `productCount = 0` → `409 CATEGORY_HAS_PRODUCTS`.
-  - Deactivating a category keeps its products; new products (or a product moved) cannot use an inactive category (`400 CATEGORY_INACTIVE`, `fields.categoryId`).
-
-Default categories (shop): Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other · (telecom): Scratch Cards.
+Built-in categories: Shop — Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other. Telecom — Scratch Cards.
 
 ### Products
-`Product` = `{ id, code: string|null, name, description, categoryId, categoryName, kind: "stock"|"service", book: "shop"|"telecom", sellPriceCents, minPriceCents, reorderLevel, active, qtyOnHand, stockValueCents, avgUnitCostCents: number|null, lowStock, createdAt, updatedAt }`.
-- `book` is derived from the category (never sent by the client).
-- `avgUnitCostCents` = `mulDivRound(stockValueCents, 1, qtyOnHand)` when `qtyOnHand > 0`, else `null` (display only — BUSINESS_RULES §3).
-- `lowStock` = `kind = "stock" AND active AND reorderLevel > 0 AND qtyOnHand <= reorderLevel`.
-
-- `GET /api/v1/products?q=&book=&categoryId=&lowStock=&active=&limit=&offset=` → `{ items: Product[], total }`. `q`: case-insensitive substring of name **or** code (LIKE wildcards in `q` are escaped). `limit` 1–500 (default 100), `offset` ≥ 0. Order: `name` (case-insensitive), then `id`.
-- `GET /api/v1/products/:id` → `{ item }`.
-- `POST /api/v1/products` `{ code?, name, description?, categoryId, kind, sellPriceCents, minPriceCents, reorderLevel? }` → `201 { item }` (qty and value start at 0).
-  - `code`: optional, trimmed; empty string = no code; 1–30 chars; unique case-insensitively (`409 DUPLICATE_CODE`). `name` 1–120 trimmed. `description` 0–500 (default ""). `reorderLevel` integer ≥ 0 (default 0).
-  - `sellPriceCents`, `minPriceCents`: integers 0–`999999999`; **`minPriceCents ≤ sellPriceCents`** else `400` with `fields.minPriceCents` = "Minimum price cannot be higher than the selling price."
-  - `kind = "service"`: `reorderLevel` must be 0 (`fields.reorderLevel`); services never hold stock.
-  - `categoryId` must exist (`400 VALIDATION_ERROR` `fields.categoryId` "Choose a category.") and be active (`400 CATEGORY_INACTIVE`).
-- `PUT /api/v1/products/:id` — any of `{ code, name, description, categoryId, sellPriceCents, minPriceCents, reorderLevel, active }`, `minProperties: 1` → `200 { item }`. `code: null` or `""` clears the code.
-  - `kind` is **immutable** (sending it → `400`, `additionalProperties: false`). The category may change **only within the same book** (`400 CATEGORY_BOOK_MISMATCH`, `fields.categoryId`) — so `book` never changes.
-  - Price and `reorderLevel` rules are validated against the **merged** (existing + patch) values.
-  - Setting `active: false` is always allowed (stock history is never lost).
+`Product` = `{ id, code|null, name, description, categoryId, categoryName, kind: "stock"|"service", book, sellPriceCents, minPriceCents, reorderLevel, active, qtyOnHand, stockValueCents, avgUnitCostCents|null, lowStock, createdAt, updatedAt }`.
+`book` comes from the category. `avgUnitCostCents = mulDivRound(stockValueCents, 1, qtyOnHand)` when quantity > 0 (display only). `lowStock` = stock product, active, `reorderLevel > 0` and `qtyOnHand <= reorderLevel`.
+- `GET /products?q=&book=&categoryId=&lowStock=&active=&limit=&offset=` → `{ items, total }`. `q` matches name or code (case-insensitive substring, wildcards escaped). `limit` 1–500 (default 100). Ordered by name, then id.
+- `GET /products/:id` → `{ item }`.
+- `POST /products` `{ code?, name, description?, categoryId, kind: "stock"|"service", sellPriceCents, minPriceCents, reorderLevel? }` → `201 { item }`. `name` 1–120; `code` 1–30 if given (empty string = no code), unique case-insensitively; `description` ≤ 500; prices integers 0–999999999 with `minPriceCents <= sellPriceCents` (`fields.minPriceCents`); a service must have `reorderLevel` 0. Category must exist and be active (`400 CATEGORY_INACTIVE`). Quantity and value start at 0 (stock arrives through purchases, opening stock, stocktake gains).
+- `PUT /products/:id` any of `{ code, name, description, categoryId, sellPriceCents, minPriceCents, reorderLevel, active }` → `200 { item }`. `kind` and `book` never change (sending `kind` is a 400); the category may change only within the same book (`400 CATEGORY_BOOK_MISMATCH`). `code: null` or `""` clears the code. Price rules are checked on the merged values.
+- `GET /products/:id/movements` is listed under [Inventory](#stock-movements-and-reconciliation).
 
 ### Suppliers
 `Supplier` = `{ id, name, phone, notes, active, createdAt, updatedAt }`.
-- `GET /api/v1/suppliers?q=&active=` → `{ items: Supplier[] }` (name order; `q` substring of name or phone).
-- `POST /api/v1/suppliers` `{ name, phone?, notes? }` → `201 { item }`. `name` 1–120; `phone` 0–30; `notes` 0–500.
-- `PUT /api/v1/suppliers/:id` — any of `{ name, phone, notes, active }`, `minProperties: 1` → `200 { item }`.
-
-### Internal module contracts (Phase 2, server)
-Repositories take the connection first, contain SQL only, map snake_case → camelCase, return plain numbers (convert bigint) and booleans (0/1 → boolean). Time stamps via SQL default / `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.
-
-`server/src/repositories/categories.repo.ts`
-```ts
-export interface CategoryRow { id: number; name: string; book: 'shop'|'telecom'; isDefault: boolean; active: boolean; productCount: number; createdAt: string; updatedAt: string }
-export function listCategories(conn, q: { active?: boolean; book?: 'shop'|'telecom' }): CategoryRow[];
-export function getCategory(conn, id: number): CategoryRow | undefined;
-export function findCategoryByName(conn, name: string): CategoryRow | undefined;      // case-insensitive
-export function insertCategory(conn, c: { name: string; book: 'shop'|'telecom' }): number;
-export function updateCategory(conn, id: number, patch: { name?: string; book?: 'shop'|'telecom'; active?: boolean }): void; // sets updated_at
-```
-`server/src/repositories/products.repo.ts`
-```ts
-export interface ProductRow { id; code: string|null; name; description; categoryId; categoryName; kind: 'stock'|'service'; book: 'shop'|'telecom'; sellPriceCents; minPriceCents; reorderLevel; active: boolean; qtyOnHand; stockValueCents; createdAt; updatedAt }
-export interface ProductQuery { q?: string; book?; categoryId?: number; lowStock?: boolean; active?: boolean; limit: number; offset: number }
-export function listProducts(conn, q: ProductQuery): { items: ProductRow[]; total: number };
-export function getProduct(conn, id: number): ProductRow | undefined;
-export function findProductByName(conn, name: string): ProductRow | undefined;       // case-insensitive
-export function findProductByCode(conn, code: string): ProductRow | undefined;       // case-insensitive
-export function insertProduct(conn, p: { code: string|null; name; description; categoryId; kind; book; sellPriceCents; minPriceCents; reorderLevel }): number;
-export function updateProduct(conn, id: number, patch: { code?: string|null; name?; description?; categoryId?; book?; sellPriceCents?; minPriceCents?; reorderLevel?; active?: boolean }): void; // sets updated_at
-```
-`server/src/repositories/suppliers.repo.ts` — `SupplierRow`, `listSuppliers(conn,{q?,active?})`, `getSupplier`, `findSupplierByName`, `insertSupplier(conn,{name,phone,notes})`, `updateSupplier(conn,id,patch)` (same conventions).
-
-Services (`server/src/services/catalog.service.ts` or one per entity) own validation, trimming, case-insensitive uniqueness checks, derived fields (`book`, `avgUnitCostCents`, `lowStock`), error codes and audit rows; each write runs inside one `database.tx()` together with its audit row. Routes are thin (JSON schema + call service). The database triggers/constraints in `003_catalog.sql` are the backstop: SQLite aborts surface as `INTERNAL_ERROR` only if the service missed a rule.
-
-Web types (`web/src/types/api.ts`) mirror the shapes above; money in the UI uses the Phase 1 converters (`rupeesToCents`, `formatLKR`).
+- `GET /suppliers?q=&active=` → `{ items }` (name order; `q` matches name or phone).
+- `POST /suppliers` `{ name (1–120), phone? (≤ 30), notes? (≤ 500) }` → `201 { item }`.
+- `PUT /suppliers/:id` any of `{ name, phone, notes, active }` → `200 { item }`.
 
 ---
 
-## Phase 3 endpoints — Purchases, stock movements, inventory
+## Purchases and inventory
 
-Rules in force (BUSINESS_RULES): §3 weighted-average pool, R4/C7 (purchase return & void), R11 (purchases are fully paid in cash from their book, book derived from the products, never mixed), R1/C6 (voids = reversal rows), R-FD, R-RD, §12 (business date vs posting time, audit), E-/R-rules unchanged. **DAY_CLOSED** and the negative-cash-balance warning arrive with the cash books (Phase 8) — Phase 3 does not enforce them. The cash ledger table is created now (owner decision 2026-11-10); only `purchase_payment` / `purchase_refund` entries are written until Phase 8.
-
-All Phase 3 writes: JSON schema (no coercion, `additionalProperties:false`) → R-FD → lookups (404) → R-RD (returns) → business rules; one `database.tx()` for the whole write; audit row in the same transaction. `clientRef` (string 8–64 chars `[A-Za-z0-9_-]`) makes a repeat return the original result with `200` (create is `201`).
+Costing: weighted average per product (BUSINESS_RULES §3). Stock moves only through the inventory engine, which inserts `stock_movements`; a database trigger updates the product's cached quantity and value.
 
 ### Purchases
-`PurchaseItem` = `{ id, productId, productName, packs, packSize, units, lineTotalCents, unitCostCents, returnedUnits }` (`units = packs × packSize`; `unitCostCents = mulDivRound(lineTotalCents, 1, units)` — display only).
-`Purchase` = `{ id, businessDate, postedAt, backdated, supplierId|null, supplierName|null, billNo, book: "shop"|"telecom", totalCents, status: "posted"|"void", notes, voidedAt|null, voidReason|null, clientRef, items: PurchaseItem[], returns: PurchaseReturn[] }`.
-`PurchaseReturn` = `{ id, purchaseId, businessDate, postedAt, backdated, refundCents, note, clientRef, items: [{ id, purchaseItemId, productId, productName, units, valueCents }] }` (`valueCents` = purchase-cost value refunded for those units).
-`backdated` = `businessDate` earlier than today (Asia/Colombo) at posting.
+`PurchaseItem` = `{ id, productId, productName, packs, packSize, units, lineTotalCents, unitCostCents, returnedUnits }` (`units = packs × packSize`; `unitCostCents` is display only).
+`Purchase` = `{ id, businessDate, postedAt, backdated, supplierId|null, supplierName|null, billNo, book, totalCents, status, notes, voidedAt|null, voidReason|null, clientRef, items, returns }`.
+`PurchaseReturn` = `{ id, purchaseId, businessDate, postedAt, backdated, refundCents, note, clientRef, items: [{ id, purchaseItemId, productId, productName, units, valueCents }] }`.
 
-- `POST /api/v1/purchases` `{ businessDate, supplierId?, billNo?, items: [{ productId, packs, packSize, lineTotalCents }], notes?, clientRef }` → `201 { item }`.
-  - `items` 1–100. `packs`, `packSize` integers 1–1 000 000; `lineTotalCents` integer 0–99 999 999 999; `billNo` ≤ 40; `notes` ≤ 500.
-  - Each product must exist (`400 VALIDATION_ERROR` `fields["items.N.productId"]`), be **active** and `kind = "stock"` (`400 PRODUCT_NOT_STOCKABLE`), all of **one book** else `400 MIXED_BOOKS` "Shop and Telecom items cannot be on one bill — please split into two bills." (R11). Same product on two lines is allowed (processed in order). `supplierId` must exist and be active.
-  - `businessDate`: valid date, R-FD (`400 FUTURE_DATE_NOT_ALLOWED`, exact message in the conventions above). Backdating allowed.
-  - Effects (one transaction): `purchases` + `purchase_items` rows; per line a **`purchase` stock movement** (`qtyDelta = +units`, `valueDeltaCents = +lineTotalCents`) via the inventory engine; one **`purchase_payment` cash entry** (`amountCents = −totalCents`, `book` = purchase book, `refTable='purchases'`) when `totalCents > 0`; audit row (entity `purchase`, action `create`, after = the Purchase JSON).
-- `GET /api/v1/purchases?from=&to=&book=&supplierId=&status=&q=&limit=&offset=` → `{ items: Purchase[], total }` (items include their lines and returns). `from`/`to` are business dates (inclusive); `q` = case-insensitive substring of `billNo`; order `businessDate DESC, id DESC`; `limit` 1–200 default 50.
-- `GET /api/v1/purchases/:id` → `{ item }`.
-- `POST /api/v1/purchases/:id/void` `{ reason }` (reason 1–200 trimmed) → `200 { item }`.
-  - `409 ALREADY_VOID`; `409 HAS_RETURNS` ("This purchase has returns, so it cannot be voided."); `422 INSUFFICIENT_STOCK` when any line's units are no longer all on hand ("Some of this purchase has already been sold or removed.", `fields["items.N"]` lists the line, with `onHand`).
-  - Effects: status `void`, `voidedAt`/`voidReason` set; per line a **`purchase_void` movement** removing `units` at `min(lineTotalCents, pool value)` (R4) plus a value-only **`adjustment` residual-sweep movement** when the pool quantity reaches 0 with leftover value; a **reversal cash entry** (`+totalCents`, same type `purchase_payment`, `reversesEntryId` = the original entry, **business date copied from the purchase**, posting time = now). Audit row (action `void`).
-- `POST /api/v1/purchases/:id/returns` `{ businessDate, items: [{ purchaseItemId, units }], note?, clientRef }` → `201 { item: PurchaseReturn, purchase: Purchase }`.
-  - Validation order: schema → R-FD → purchase lookup `404` → **R-RD** (`400 RETURN_BEFORE_ORIGINAL_DATE`, message names the original date, `originalDate` in the error body) → `409 PURCHASE_VOID` → quantity rules → stock. `units` ≥ 1 and ≤ item `units − returnedUnits` (`422 RETURN_EXCEEDS_PURCHASED`, `fields["items.N.units"]`); each `purchaseItemId` must belong to this purchase (`400`). Each item at most once per request. Pool quantity must cover the units (`422 INSUFFICIENT_STOCK`).
-  - Refund value per item (C7): `mulDivRound(lineTotalCents, units, item.units)`, except the return that brings the cumulative returned units to the item's full `units` takes the **remaining** value (`lineTotalCents − Σ earlier returned values`). `refundCents` = Σ values.
-  - Effects: `purchase_returns` + items; item `returnedUnits` increased; per item a **`purchase_return` movement** removing `units` at `min(purchase-cost value, pool value)` (R4) with the residual sweep as above; one **`purchase_refund` cash entry** (`+refundCents`, book = purchase book, dated the return's business date); audit (entity `purchase_return`, action `create`). If `refundCents = 0` no cash entry.
-  - The difference `refundCents − Σ value removed from stock` is not stored: it is derivable (cash entry vs movements) and is reported as a *Stock adjustment* in the P&L (BUSINESS_RULES R2/R4).
+- `POST /purchases` `{ businessDate, supplierId?, billNo? (≤ 40), items: [{ productId, packs (1–10^6), packSize (1–10^6), lineTotalCents (0–99999999999) }] (1–100), notes? (≤ 500), clientRef }` → `201 { item, warnings }`.
+  - Products must exist, be active and `kind = "stock"` (`400 PRODUCT_NOT_STOCKABLE`); all of one book, else `400 MIXED_BOOKS` "Shop and Telecom items cannot be on one bill — please split into two bills." (R11). The same product may appear on several lines. `supplierId` must exist and be active.
+  - Effects: `purchases` + `purchase_items`; per line a `purchase` movement (`+units`, `+lineTotalCents`); one `purchase_payment` cash entry (`−totalCents`, the purchase's book) when the total is above 0; audit `purchase`/`create`.
+- `GET /purchases?from=&to=&book=&supplierId=&status=&q=&limit=&offset=` → `{ items, total }` (items include lines and returns). `q` matches `billNo`. `limit` 1–200 (default 50).
+- `GET /purchases/:id` → `{ item }`.
+- `POST /purchases/:id/void` `{ reason }` → `200 { item }`. `409 HAS_RETURNS`; `422 INSUFFICIENT_STOCK` ("Some of this purchase has already been sold or removed."). Per line a `purchase_void` movement removes `units` at `min(lineTotalCents, pool value)` (R4), with a value-only `adjustment` sweep movement when the quantity reaches 0 with value left; a reversal of the payment cash entry.
+- `POST /purchases/:id/returns` `{ businessDate, items: [{ purchaseItemId, units }] (1–100, each item once), note?, clientRef }` → `201 { item: PurchaseReturn, purchase, warnings }`. Errors: R-RD, `409 PURCHASE_VOID`, `422 RETURN_EXCEEDS_PURCHASED` (`fields["items.N.units"]`), `422 INSUFFICIENT_STOCK`. Refund per item (C7): `mulDivRound(lineTotalCents, units, item.units)`, except the return that completes the item takes the remaining value. Effects: a `purchase_return` movement per item at `min(purchase-cost value, pool value)` (R4, with sweep); one `purchase_refund` cash entry (`+refundCents`) when above 0. The difference between refund and value removed from stock shows up as a Stock adjustment in the P&L.
 
-### Stock movements & inventory
-`StockMovement` = `{ id, productId, businessDate, postedAt, type, qtyDelta, valueDeltaCents, unitCostCents|null, refTable|null, refId|null, reason }` — `type` ∈ `opening|purchase|purchase_return|purchase_void|sale|sale_return|sale_void|personal_use|loss|stocktake_gain|stocktake_loss|adjustment`.
-- `GET /api/v1/products/:id/movements?from=&to=&type=&limit=&offset=` → `{ items: StockMovement[], total, product: Product }`; order `postedAt DESC, id DESC` (posting order); `limit` 1–200 default 50; `404` unknown product.
-- `GET /api/v1/inventory/reconciliation` → `{ ok: boolean, checkedProducts, mismatches: [{ productId, name, cacheQty, movementQty, cacheValueCents, movementValueCents }] }` — compares each product's cached quantity/value with the sums of its movements (must always be `ok: true`).
-- **No sale / loss / stocktake endpoints in Phase 3.** The engine functions below exist and are exercised by tests (including a `sale`-type removal that demonstrates average-cost COGS); public endpoints arrive in Phases 4–5.
-
-### Internal module contracts (Phase 3, server)
-**Stock cache is maintained by the database:** `AFTER INSERT ON stock_movements` adds `qty_delta` / `value_delta_cents` to `products.qty_on_hand` / `stock_value_cents` (existing CHECKs block negative stock/value). Application code **never writes the product cache** — it only inserts movements.
-
-`server/src/services/inventory.service.ts` (Backend)
-```ts
-export type MovementType = 'opening'|'purchase'|'purchase_return'|'purchase_void'|'sale'|'sale_return'|'sale_void'|'personal_use'|'loss'|'stocktake_gain'|'stocktake_loss'|'adjustment';
-export interface PoolState { qty: number; valueCents: number }
-export function getPool(conn, productId: number): PoolState;                       // throws NOT_FOUND
-// Inflow: adds qty and exact value (BUSINESS_RULES §3). qty ≥ 1, valueCents ≥ 0.
-export function receiveStock(conn, p: { productId; businessDate: string; type: MovementType; qty: number; valueCents: number; refTable: string|null; refId: number|null; reason: string }): { movementId: number; unitCostCents: number };
-// Outflow at weighted average: value = (qty === pool.qty) ? pool.valueCents : mulDivRound(pool.valueCents, qty, pool.qty). Blocks qty > pool.qty with AppError(422,'INSUFFICIENT_STOCK',…, details {onHand}).
-export function issueStock(conn, p: { productId; businessDate; type: MovementType; qty: number; refTable; refId; reason }): { movementId: number; valueRemovedCents: number; unitCostCents: number };
-// R4 removal for purchase return/void: removes qty at min(maxValueCents, pool.valueCents); if the pool quantity reaches 0 with value left, writes a value-only 'adjustment' sweep movement (qty 0, negative value) BEFORE the removal so every intermediate state is valid.
-export function issueStockCapped(conn, p: { productId; businessDate; type: 'purchase_return'|'purchase_void'; qty: number; maxValueCents: number; refTable; refId; reason }): { movementId: number; valueRemovedCents: number; sweepMovementId: number|null; sweptCents: number };
-export function reconcileStock(conn): { ok: boolean; checkedProducts: number; mismatches: Array<{ productId: number; name: string; cacheQty: number; movementQty: number; cacheValueCents: number; movementValueCents: number }> };
-```
-All amounts via `lib/money.ts` (`mulDivRound`); balances never computed in floating point.
-
-`server/src/services/purchases.service.ts` (Backend): `createPurchase`, `listPurchases`, `getPurchase`, `voidPurchase`, `createPurchaseReturn` — validation, idempotency (`client_ref`), derived fields (`unitCostCents`, `backdated`), audit rows (before/after JSON incl. `businessDate`, `postedAt`, `backdated`).
-
-Repositories (DB Architect; `conn` first, SQL only, camelCase rows, numbers/booleans converted):
-- `stock-movements.repo.ts`: `insertMovement(conn, m: { productId; businessDate; type; qtyDelta; valueDeltaCents; unitCostCents: number|null; refTable; refId; reason }): number`; `listMovements(conn, q: { productId; from?; to?; type?; limit; offset }): { items: MovementRow[]; total: number }`; `sumMovements(conn): Array<{ productId; qty; valueCents }>`.
-- `cash-entries.repo.ts`: `insertCashEntry(conn, e: { book; businessDate; type; amountCents; refTable; refId; reversesEntryId?: number|null; note?: string|null }): number`; `getCashEntry(conn, id)`; `findCashEntriesByRef(conn, refTable, refId)`; `cashBalance(conn, book): number`.
-- `purchases.repo.ts`: `insertPurchase(conn, p: { businessDate; supplierId; billNo; book; totalCents; notes; clientRef }): number`; `insertPurchaseItem(conn, i): number`; `getPurchase(conn, id)` / `getPurchaseByClientRef(conn, ref)` (header rows); `listPurchaseItems(conn, purchaseId)`; `listPurchases(conn, q): { items: PurchaseHeaderRow[]; total }`; `markPurchaseVoid(conn, id, reason)`; `addReturnedUnits(conn, itemId, units)`; `insertPurchaseReturn(conn, r)`; `insertPurchaseReturnItem(conn, i)`; `getPurchaseReturnByClientRef`; `listPurchaseReturns(conn, purchaseId)`; `returnedValueSoFar(conn, purchaseItemId): number`.
-- `audit.repo.ts` gains optional `businessDate?: string|null; backdated?: boolean` on `AuditInsert` and the same on `AuditRow`.
-
-Audit rows: `audit_logs.business_date` (nullable) and `backdated` (0/1) columns exist from migration 004; `GET /audit-logs` items add `postedAt` (= `at`), `businessDate`, `backdated`. (Moved forward from Phase 8 because financial records now exist — BUSINESS_RULES §12.)
-
-Web: `web/src/types/api.ts` mirrors the shapes above; purchases UI uses the Phase 1/2 converters; the purchase date picker defaults to `GET /health` `today` and has `max = today`; return forms limit the date range to *original date … today* (the server stays authoritative).
+### Stock movements and reconciliation
+`StockMovement` = `{ id, productId, businessDate, postedAt, type, qtyDelta, valueDeltaCents, unitCostCents|null, refTable|null, refId|null, reason }`; `type` is one of `opening`, `purchase`, `purchase_return`, `purchase_void`, `sale`, `sale_return`, `sale_void`, `personal_use`, `loss`, `stocktake_gain`, `stocktake_loss`, `adjustment` (`sale_void` is allowed by the database but is not written: a sale void reuses type `sale` with negated amounts, C6).
+- `GET /products/:id/movements?from=&to=&type=&limit=&offset=` → `{ items, total, product }`, newest posting first; `limit` 1–200 (default 50).
+- `GET /inventory/reconciliation` → `{ ok, checkedProducts, mismatches: [{ productId, name, cacheQty, movementQty, cacheValueCents, movementValueCents }] }`. Must always be `ok: true`.
+- `GET /inventory/valuation?book=&categoryId=&asOf=&includeZero=&includeInactive=` → `{ asOf|null, items: [{ productId, code, name, categoryId, categoryName, book, active, qty, valueCents, avgUnitCostCents|null }], totals: { qty, valueCents, byBook: { shop, telecom } } }`. `asOf` is a business date: quantities and values are the sum of movements dated on or before it; omitted (or later than today) the live pool is used. `includeZero` default false, `includeInactive` default true. Ordered by name.
 
 ---
 
-## Phase 4 endpoints — Stocktake, stock losses, personal use (goods drawings), valuation
+## Stocktake, stock losses, personal use
 
-Rules in force (BUSINESS_RULES): §3 (weighted-average pool, outflows at average, C10 gains), §9 (goods drawing at cost; no revenue/COGS/expense), §11 + R2/R3 (stock losses and stocktake differences form the *Stock adjustments (net)* line of the product's segment; goods drawings are **not** in it), C6/C9 (voids = exact negation, original business date), R-FD, §12 (business date vs posting time, audit). **No cash effect** in Phase 4. All writes: JSON schema (no coercion, `additionalProperties:false`) → R-FD → lookups (404) → business rules; one `database.tx()` containing the record(s), the stock movement(s) (via the Phase 3 inventory engine only — never write the product cache) and the audit row; `clientRef` (string 8–64 chars `[A-Za-z0-9_-]`) makes a repeat return the original with `200`.
-
-**Reversal convention (C6):** voiding a stocktake, loss or goods drawing writes new movements with the **same type**, exactly **negated** `qtyDelta`/`valueDeltaCents` of the originals, `businessDate` copied from the original, posting time = the void time, `reason` = "Void of <record> #id". Original rows are never edited (append-only).
+All writes: one transaction with the record, the movement(s) from the inventory engine and the audit row; `clientRef` idempotency. A void writes movements that are the exact negation of the originals (same type, original business date). No cash effect.
 
 ### Stocktake
-`Stocktake` = `{ id, businessDate, postedAt, backdated, book, status: "draft"|"completed"|"void", notes, completedAt|null, voidedAt|null, voidReason|null, clientRef, items: StocktakeItem[] }`.
-`StocktakeItem` = `{ id, productId, productName, productCode, countedQty, expectedQty, differenceQty, valueDeltaCents|null, gainUnitCostCents|null }`. In a **draft**, `expectedQty` is the product's *current* quantity (live) and `differenceQty = countedQty − expectedQty`, `valueDeltaCents` is `null`; in a **completed** stocktake they are the stored values at completion.
-
-- `POST /api/v1/stocktakes` `{ businessDate, book: "shop"|"telecom", notes?, items?: [{ productId, countedQty, gainUnitCostCents? }], clientRef }` → `201 { item }` (status `draft`, no stock effect). `items`: ≤ 500, each product must exist, be `kind = "stock"` and belong to `book` (`400 PRODUCT_NOT_IN_BOOK`), no duplicates; `countedQty` integer 0–1 000 000 000; `gainUnitCostCents` integer 0–99 999 999 999.
-- `PUT /api/v1/stocktakes/:id` `{ notes?, items? }` (`minProperties: 1`) → `200 { item }` — draft only (`409 NOT_DRAFT`); `items`, when present, **replaces** the whole list.
-- `GET /api/v1/stocktakes?from=&to=&book=&status=&limit=&offset=` → `{ items: Stocktake[] (with items), total }` (`limit` 1–100, default 50; order `businessDate DESC, id DESC`); `GET /api/v1/stocktakes/:id` → `{ item }`.
-- `POST /api/v1/stocktakes/:id/complete` `{}` → `200 { item }`. For every counted item, inside one transaction, in item order, against the **live** pool at that moment: `differenceQty = countedQty − pool.qty`.
-  - `< 0` → `issueStock` type **`stocktake_loss`** (qty = |difference|, at the weighted average; whole value if the whole pool leaves).
-  - `> 0` → `receiveStock` type **`stocktake_gain`**: value = `mulDivRound(pool.value, gain, pool.qty)` when pool `qty > 0` **and** `value > 0`; otherwise (C10) `gain × gainUnitCostCents` and `gainUnitCostCents` is **required** → `422 UNIT_COST_REQUIRED` with `fields["items.N.gainUnitCostCents"]` (nothing is posted). A supplied `gainUnitCostCents` is ignored when the average can be used.
-  - `= 0` → no movement. Movements carry the stocktake's `businessDate`, `refTable = "stocktakes"`, reason "Stocktake #id".
-  - Stores per item `expectedQty`, `differenceQty`, `valueDeltaCents` (signed: gain +, loss −), `gainUnitCostCents` (when used); sets `completedAt`; status `completed`. Errors: `409 NOT_DRAFT`; `400 VALIDATION_ERROR` when the draft has no items.
-- `POST /api/v1/stocktakes/:id/void` `{ reason }` (1–200) → `200 { item }`. A **draft** is simply cancelled (status `void`, no movements). A **completed** stocktake is reversed per the reversal convention; `422 INSUFFICIENT_STOCK` ("Some of the stock added by this stocktake has already been used.") if a gain can no longer be removed; `409 ALREADY_VOID`.
-- Audit: entity `stocktake`, actions `create` / `update` / `complete` / `void` (financial: `businessDate`, `backdated`).
+`Stocktake` = `{ id, businessDate, postedAt, backdated, book, status: "draft"|"completed"|"void", notes, completedAt|null, voidedAt|null, voidReason|null, clientRef, items }`; `StocktakeItem` = `{ id, productId, productName, productCode, countedQty, expectedQty, differenceQty, valueDeltaCents|null, gainUnitCostCents|null }`. In a draft, `expectedQty` is the product's current quantity and `valueDeltaCents` is null; a completed stocktake stores the values fixed at completion.
+- `POST /stocktakes` `{ businessDate, book: "shop"|"telecom", notes?, items?: [{ productId, countedQty (0–10^9), gainUnitCostCents? (0–99999999999) }] (≤ 500), clientRef }` → `201 { item }` (draft, no stock effect). Items must be stock products of the book (`400 PRODUCT_NOT_IN_BOOK`), no duplicates.
+- `PUT /stocktakes/:id` `{ notes?, items? }` (at least one) → `200 { item }`; draft only (`409 NOT_DRAFT`); `items` replaces the whole list.
+- `GET /stocktakes?from=&to=&book=&status=&limit=&offset=` → `{ items, total }`; `limit` 1–100 (default 50). `GET /stocktakes/:id` → `{ item }`.
+- `POST /stocktakes/:id/complete` `{}` → `200 { item }`. In one transaction, per item against the live pool: a shortage is a `stocktake_loss` at weighted average; a surplus is a `stocktake_gain` valued at `mulDivRound(pool value, gain, pool qty)`, or, when the pool has no quantity or no value (C10), at `gain × gainUnitCostCents` (`422 UNIT_COST_REQUIRED` if missing; nothing is posted). Equal counts post nothing. A draft with no items is `400 VALIDATION_ERROR`.
+- `POST /stocktakes/:id/void` `{ reason }` → `200 { item }`. A draft is simply cancelled; a completed stocktake is reversed (`422 INSUFFICIENT_STOCK` if gained stock was already used).
 
 ### Stock losses
-`StockLoss` = `{ id, businessDate, postedAt, backdated, productId, productName, book, qty, costCents, unitCostCents, reason: "damaged"|"lost"|"expired"|"other", note, source: "manual", status: "posted"|"void", voidedAt|null, voidReason|null, clientRef }` (`costCents` = value removed from the pool; `unitCostCents = mulDivRound(costCents, 1, qty)`).
-- `POST /api/v1/stock-losses` `{ businessDate, productId, qty, reason, note?, clientRef }` → `201 { item }`. `qty` integer ≥ 1; `note` ≤ 500; product must exist and be `kind = "stock"` (`400 PRODUCT_NOT_STOCKABLE`; inactive products are allowed); `422 INSUFFICIENT_STOCK` when `qty` exceeds the quantity on hand. Effect: `issueStock` type **`loss`** at the weighted average (`refTable = "stock_losses"`), one `stock_losses` row (`costCents` = the value removed), audit (entity `stock_loss`). **Exactly once:** one loss row ↔ exactly one movement; repeating `clientRef` returns the original.
-- `GET /api/v1/stock-losses?from=&to=&productId=&book=&reason=&status=&limit=&offset=` → `{ items: StockLoss[], total, totalCostCents }` (`totalCostCents` = Σ `costCents` of **posted** rows matching the filter). `GET /api/v1/stock-losses/:id` → `{ item }`.
-- `POST /api/v1/stock-losses/:id/void` `{ reason }` → `200 { item }`: status `void`; reversal movement (type `loss`, `+qty`, `+costCents`, original business date); `409 ALREADY_VOID`.
-- Damaged *sales returns* (`source = "damaged_return"`) are Phase 5.
+`StockLoss` = `{ id, businessDate, postedAt, backdated, productId, productName, book, qty, costCents, unitCostCents, reason: "damaged"|"lost"|"expired"|"other", note, source: "manual"|"damaged_return", salesReturnId|null, status, voidedAt|null, voidReason|null, clientRef }`.
+- `POST /stock-losses` `{ businessDate, productId, qty (1–10^9), reason, note? (≤ 500), clientRef }` → `201 { item }`. Stock product required (`400 PRODUCT_NOT_STOCKABLE`; inactive products are allowed); `422 INSUFFICIENT_STOCK`. One `loss` movement at weighted average; `costCents` is the value removed.
+- `GET /stock-losses?from=&to=&productId=&book=&reason=&status=&limit=&offset=` → `{ items, total, totalCostCents }` (total over posted rows matching the filter). `GET /stock-losses/:id`.
+- `POST /stock-losses/:id/void` `{ reason }` → `{ item }`. Refused with `409 DAMAGED_RETURN_LOSS` for rows created by a damaged sales return (they belong to the return).
 
-### Personal use — goods drawings
-`Drawing` = `{ id, businessDate, postedAt, backdated, book: "shop"|"telecom", kind: "goods"|"cash", amountCents, productId|null, productName|null, qty|null, note, status: "posted"|"void", voidedAt|null, voidReason|null, clientRef }` (`amountCents` for goods = the stock **cost** removed — never the selling price).
-- `POST /api/v1/drawings` `{ kind: "goods", businessDate, productId, qty, note?, clientRef }` → `201 { item }`. `kind: "cash"` → `400 NOT_AVAILABLE_YET` (cash drawings arrive with the cash books, Phases 8–9). Same product/quantity checks as stock losses. Effect: `issueStock` type **`personal_use`** (`refTable = "owner_drawings"`), one `owner_drawings` row (`amountCents` = value removed, `book` = product's book), audit (entity `drawing`). No revenue, no COGS, no expense, no cash entry, **not** a stock loss.
-- `GET /api/v1/drawings?kind=&from=&to=&book=&productId=&status=&limit=&offset=` → `{ items: Drawing[], total, totalAmountCents }` (posted only in the total); `GET /api/v1/drawings/:id`.
-- `POST /api/v1/drawings/:id/void` `{ reason }` → reversal movement (type `personal_use`, `+qty`, `+amountCents`, original business date); `409 ALREADY_VOID`.
-
-### Inventory valuation
-- `GET /api/v1/inventory/valuation?book=&categoryId=&asOf=&includeZero=&includeInactive=` → `{ asOf: string|null, items: [{ productId, code, name, categoryId, categoryName, book, active, qty, valueCents, avgUnitCostCents|null }], totals: { qty, valueCents, byBook: { shop: { qty, valueCents }, telecom: { qty, valueCents } } } }`.
-  - `asOf` is a **business date** (never rejected): quantities/values are Σ of movements with `business_date <= asOf`; omitted, or later than today (Asia/Colombo), the live pool is used (the same figures). `includeZero` default `false` (hides products with qty 0 and value 0); `includeInactive` default `true`. `avgUnitCostCents = mulDivRound(valueCents, 1, qty)` when `qty > 0` else `null`. Items ordered by `name` (case-insensitive). Telecom stock (scratch cards) is reported separately from Shop stock (`byBook`).
-
-### Internal module contracts (Phase 4, server)
-`services/inventory.service.ts` gains (Backend):
-```ts
-// Σ movements dated <= asOf per product (business-date basis), for valuation.
-export function poolsAsOf(conn, asOf: string): Map<number, PoolState>;
-// Value for a stocktake/opening gain per C10; throws AppError(422,'UNIT_COST_REQUIRED') when the pool cannot price it and no unit cost is given.
-export function gainValue(pool: PoolState, gainQty: number, gainUnitCostCents: number | null): number;
-// Reversal helper: inserts the exact negation of the given movements (same type, same business date), returning ids. Blocks (422 INSUFFICIENT_STOCK) when a negated inflow would drive qty or value below 0.
-export function reverseMovements(conn, movementIds: number[], reason: string): number[];
-```
-Repositories (DB Architect): `stocktakes.repo.ts` (`insertStocktake`, `getStocktake`, `getStocktakeByClientRef`, `listStocktakes`, `replaceStocktakeItems`, `listStocktakeItems`, `completeStocktakeItem(conn, itemId, {expectedQty, differenceQty, valueDeltaCents, gainUnitCostCents})`, `markStocktakeCompleted`, `markStocktakeVoid`), `stock-losses.repo.ts` (`insertStockLoss`, `getStockLoss`, `getStockLossByClientRef`, `listStockLosses` with `totalCostCents`, `markStockLossVoid`), `drawings.repo.ts` (`insertDrawing`, `getDrawing`, `getDrawingByClientRef`, `listDrawings` with `totalAmountCents`, `markDrawingVoid`), and in `stock-movements.repo.ts` `listMovementsByRef(conn, refTable, refId): MovementRow[]` and `sumMovementsAsOf(conn, asOf)`; same conventions as Phase 3.
-
-Web: `web/src/types/api.ts` mirrors the shapes above. The **Stock** section (sidebar) becomes real with tabs *Stock on hand* (valuation), *Stocktake*, *Stock losses*, *Personal use*; money/quantity inputs use the existing integer converters; the date picker defaults to `GET /health` `today` with `max = today`.
+### Goods drawings (personal use) and cash drawings
+`Drawing` = `{ id, businessDate, postedAt, backdated, book, fund|null, kind: "goods"|"cash", amountCents, productId|null, productName|null, qty|null, note, status, voidedAt|null, voidReason|null, clientRef }`. For goods, `amountCents` is the stock **cost** removed, never the selling price.
+- `POST /drawings` `{ kind, businessDate, clientRef, note? }` plus:
+  - `kind: "goods"`: `productId`, `qty` (1–10^9). Stock product required (`400 PRODUCT_NOT_STOCKABLE`). One `personal_use` movement at weighted average. No cash, no revenue, no COGS, no expense; not a stock loss. `book`, `fund` and `amountCents` are rejected.
+  - `kind: "cash"`: `book`, `fund` (iff `icecream`), `amountCents` (1–10^12). Cash-out `drawing_cash`; Ice Cream also writes a fund entry. `400 FUND_REQUIRED` / `FUND_NOT_ALLOWED`.
+  → `201 { item, warnings }`.
+- `GET /drawings?kind=&from=&to=&book=&productId=&status=&limit=&offset=` → `{ items, total, totalAmountCents, totals: { amountCents, goodsCents, cashCents } }`; `limit` 1–200 (default 50). `GET /drawings/:id` → `{ item }`.
+- `POST /drawings/:id/void` `{ reason }` → `{ item }` (reversal movement or reversal cash entry; original business date).
 
 ---
 
-## Phase 5 endpoints — POS, sales, sales returns, voids
+## Sales
 
-Rules in force (BUSINESS_RULES): §4 (cart split by book, lines in order, qty checked per product across the cart, R13 warnings, voids R1, returns R5/C5/R7), §3 (outflows at the weighted average, COGS snapshot), §2 (cash types), C6 (void = exact negation, original business date), R-FD, R-RD (sale date), §12 (business date vs posting time, audit). Scope: **stock products only** (`kind = "stock"`): Shop goods → book `shop`, line type `goods`; scratch cards (Telecom) → book `telecom`, line type `card`. Service products and printing arrive in Phase 7, reloads/EZCash in Phase 6: a `kind = "service"` product on a sale line → `400 PRODUCT_NOT_SELLABLE_YET`. `DAY_CLOSED` and the negative-cash-balance warning arrive with the cash books (Phase 8). Payment is always cash.
+Scope: stock products only. Shop goods are book `shop`, line type `goods`; scratch cards (Telecom) are book `telecom`, line type `card`. A `kind = "service"` product on a sale line is refused (`400 PRODUCT_NOT_SELLABLE_YET`); printing and photocopying are sold through `/print-sales`, reloads and EZCash through `/reload-sales` and `/ezcash-sales`. Payment is always cash.
 
-All writes: JSON schema (no coercion, `additionalProperties:false`) → R-FD → lookups (404) → R-RD (returns) → business rules; one `database.tx()` containing the record(s), stock movements (inventory engine only), cash entries and the audit row. `clientRef` (string 8–64 chars `[A-Za-z0-9_-]`) makes a repeat return the originals with `200`.
+`SaleItem` = `{ id, lineNo, lineType, productId, productName, productCode, qty, unitPriceCents, unitCostCents, revenueCents, cogsCents, extraCostCents, chargedCostCents, returnedQty }` — `revenueCents = qty × unitPriceCents`; `cogsCents` is the stock value actually removed at the weighted average and never changes afterwards; `unitCostCents` is the display snapshot of the **automatic** unit cost; `chargedCostCents = cogsCents + extraCostCents`.
+`Sale` = `{ id, businessDate, postedAt, backdated, book, totalCents, cogsCents, extraCostCents, chargedCostCents, grossProfitCents, status, notes, voidedAt|null, voidReason|null, clientRef, items, returns }` — `grossProfitCents = totalCents − chargedCostCents`, before returns.
+`SaleReturn` = `{ id, saleId, businessDate, postedAt, backdated, refundCents, cogsReversedCents, extraCostReversedCents, note, clientRef, items: [{ id, saleItemId, productId, productName, qty, resalable, revenueCents, cogsCents, extraCostCents }] }`.
 
-### Sales
-`SaleItem` = `{ id, lineNo, lineType: "goods"|"card", productId, productName, productCode, qty, unitPriceCents, unitCostCents, revenueCents, cogsCents, returnedQty }` — `revenueCents = qty × unitPriceCents` (exact); `cogsCents` = the stock value actually removed at the weighted average at sale time and **never changes afterwards**; `unitCostCents = mulDivRound(cogsCents, 1, qty)` (snapshot, display).
-`Sale` = `{ id, businessDate, postedAt, backdated, book: "shop"|"telecom", totalCents, cogsCents, grossProfitCents, status: "posted"|"void", notes, voidedAt|null, voidReason|null, clientRef, items: SaleItem[], returns: SaleReturn[] }` (`totalCents` = Σ revenue; `grossProfitCents = totalCents − cogsCents`, before returns; returns are shown on their own).
-`SaleReturn` = `{ id, saleId, businessDate, postedAt, backdated, refundCents, cogsReversedCents, note, clientRef, items: [{ id, saleItemId, productId, productName, qty, resalable, revenueCents, cogsCents }] }`.
-
-- `POST /api/v1/sales` `{ businessDate, items: [{ productId, qty, unitPriceCents }], notes?, clientRef }` → `201 { sales: Sale[], warnings: Warning[] }`.
-  - `items` 1–100; `qty` integer 1–1 000 000; `unitPriceCents` integer 0–999 999 999 (editable by the cashier; defaults come from the product in the UI); `notes` ≤ 500.
-  - Products must exist (`400 VALIDATION_ERROR` `fields["items.N.productId"]`), be `kind = "stock"` (`400 PRODUCT_NOT_SELLABLE_YET`) and **active** (`400 PRODUCT_INACTIVE`).
-  - **Mixed carts:** the server groups lines by the product's book and creates **one sale per book** (Shop and Telecom stay separate, each with its own total, cash entry and `clientRef` scope); lines keep their cart order within each sale (`lineNo` 1…n per sale). `sales` is ordered shop first, then telecom.
-  - Per line in cart order, against the live pool: `issueStock` type **`sale`** at the weighted average (`qty` checked cumulatively per product across the whole cart; `422 INSUFFICIENT_STOCK` with `fields["items.N.qty"]` and `onHand`, nothing saved). The value removed is the line's `cogsCents`.
-  - Cash (R-FD aside): one cash entry per sale with `totalCents > 0`: `sale_goods` (+total, book `shop`) or `card_sale` (+total, book `telecom`), `refTable = "sales"`; business date = the sale's.
-  - Audit: entity `sale`, action `create`, after = the Sale JSON.
-  - `Warning` = `{ code, message, lineIndex }` — **never blocks** (R13): `PRICE_BELOW_MINIMUM` (unit price < product minimum price), `PRICE_BELOW_COST` (unit price < snapshot unit cost), `ZERO_COST` (qty > 0 but cogs 0).
-- `GET /api/v1/sales?from=&to=&book=&status=&productId=&limit=&offset=` → `{ items: Sale[], total, totals: { revenueCents, cogsCents, refundsCents } }` (`totals` over **posted** sales matching the filter; `refundsCents` = Σ their returns' refunds). `from`/`to` business dates inclusive; order `businessDate DESC, id DESC`; `limit` 1–200 default 50. `GET /api/v1/sales/:id` → `{ item }`.
-- `POST /api/v1/sales/:id/void` `{ reason }` (1–200) → `200 { item }`. `409 ALREADY_VOID`; `409 HAS_RETURNS` ("This sale has returns, so it cannot be voided."). Effects: status `void`; the sale's `sale` movements are **exactly negated** (stock and value restored at the original snapshot cost, original business date, posting time now — C6); the sale's cash entry is reversed (negated, same type, `reversesEntryId`, original business date); audit action `void`.
-
-### Sales returns
-- `POST /api/v1/sales/:id/returns` `{ businessDate, items: [{ saleItemId, qty, resalable }], note?, clientRef }` → `201 { item: SaleReturn, sale: Sale }`.
-  - Validation order: schema → R-FD → sale lookup `404` → **R-RD** (`400 RETURN_BEFORE_ORIGINAL_DATE`, "The return date cannot be earlier than the original sale date ({date}). Please select {date} or a later date (not after today).", `originalDate` in the error body) → `409 SALE_VOID` → quantity rules. `qty` ≥ 1 and ≤ `sold − returnedQty` (`422 RETURN_EXCEEDS_SOLD`, `fields["items.N.qty"]`); each `saleItemId` must belong to the sale (`400`) and appear once per request; `resalable` boolean required.
-  - Values (C5): revenue portion `mulDivRound(revenueCents, qty, item.qty)` and COGS portion `mulDivRound(cogsCents, qty, item.qty)`, except the return that brings the cumulative returned quantity to the item's full `qty` takes the **remainder** of both (so the sum over all returns equals the line exactly; each capped at the remaining amount). `refundCents` = Σ revenue portions.
-  - **Resalable** (`resalable: true`): stock returns at the **original snapshot cost** — `receiveStock` type **`sale_return`** (`+qty`, `+cogs portion`, `refTable = "sales_returns"`).
-  - **Damaged** (`resalable: false`): **no stock movement, no restock**; revenue and COGS are reversed and **exactly one `stock_losses` row** per damaged line is written (`source = "damaged_return"`, `reason = "damaged"`, `qty`, `costCents` = the COGS portion, the product's book, the return's business date, `salesReturnId` set) — the loss is therefore counted once (BUSINESS_RULES §4/R2).
-  - Cash: one refund entry when `refundCents > 0`: `sale_refund` (book `shop`) or `card_refund` (book `telecom`), `−refundCents`, dated the return's business date.
-  - Item `returnedQty` increased; audit entity `sale_return`, action `create`. A repeated `clientRef` returns the original with `200`; the same `clientRef` used on another sale → `409 CLIENT_REF_CONFLICT`.
-- `GET /api/v1/stock-losses` items gain `salesReturnId: number|null` and `source` may now be `"damaged_return"` (Phase 4 contract: `source: "manual"` only). Voiding a damaged-return loss through `POST /stock-losses/:id/void` is **refused** (`409 DAMAGED_RETURN_LOSS`) — it belongs to its return.
-
-### Internal module contracts (Phase 5, server)
-Repositories (DB Architect): `sales.repo.ts` — `insertSale`, `insertSaleItem`, `getSale`, `getSaleByClientRef(conn, clientRef, book)`, `listSaleItems`, `listSales` (+ totals), `markSaleVoid`, `addReturnedQty`, `insertSaleReturn`, `insertSaleReturnItem`, `getSaleReturn`, `getSaleReturnByClientRef`, `listSaleReturns`, `listSaleReturnItems`, `returnedAmountsSoFar(conn, saleItemId): { qty, revenueCents, cogsCents }`; `stock-losses.repo.ts` gains `salesReturnId` on insert/rows and `source: 'damaged_return'` support. Services (Backend): `sales.service.ts` (`createSales`, `listSales`, `getSale`, `voidSale`, `createSaleReturn`), reusing `issueStock`, `receiveStock`, `reverseMovements`, `listMovementsByRef`, and the shared helpers in `services/validation.ts`.
-
-Web: the **Sales** section (sidebar, now built): *POS* (product search by name/code with live stock and price, cart with editable qty/price, line and grand totals as integer sums, date picker `max = today`, Save sale, per-book result summary + warnings, today's sales), *History* (filters, paging, detail with returns, Void, Return items). `clientRef` generated when the POS opens and replaced after a successful save.
-
-### Phase 5 amendment — editable sale cost / extra cost (BUSINESS_RULES C13)
-- `POST /api/v1/sales` — each cart line accepts an optional `unitCostCents` (integer 0–999 999 999) = the **cost per unit to charge**. Omitted or equal to the automatic cost → `extraCostCents = 0`.
-  - The **automatic cost** of a line is the weighted-average value the engine removes for it (its `cogsCents`). The line must satisfy `qty × unitCostCents ≥ cogsCents`; otherwise `422 COST_BELOW_AUTOMATIC` with `fields["items.N.unitCostCents"]` = "The cost cannot be lower than the automatic cost (Rs X.XX per unit). You can only increase it." and `minUnitCostCents = ceil(cogsCents / qty)` in the error body; nothing is saved.
-  - `extraCostCents = qty × unitCostCents − cogsCents` (≥ 0; exact integers). The stock still leaves at `cogsCents`; no extra movement, no extra cash entry.
-- `SaleItem` adds `extraCostCents` and `chargedCostCents` (= `cogsCents + extraCostCents`); `unitCostCents` stays the display snapshot of the **automatic** unit cost.
-- `Sale` adds `extraCostCents` and `chargedCostCents` (sums over lines); `grossProfitCents = totalCents − chargedCostCents`. `GET /sales` `totals` adds `extraCostCents` and `costCents` (= automatic + extra, posted sales).
-- `POST /sales/:id/returns`: each returned item also reverses its `extraCostCents` portion (same C5 remainder logic; the completing return takes the exact remainder); `SaleReturn` adds `extraCostReversedCents`; return items add `extraCostCents`. `cogsReversedCents` remains the automatic cost only. Stock restoration and damaged-return loss rows use the automatic cost only.
-- Voiding a sale needs no change (the whole sale, including its extra cost, is excluded from totals).
-- Warnings: `PRICE_BELOW_COST` still compares the price with the **automatic** unit cost.
-- Web: the POS cart line shows **Cost per unit**, filled from the product's current average cost and editable upward; the server's rules above are authoritative (the UI sends `unitCostCents` only when the cashier changed it).
-
-### Wave 1 contracts — Phases 6, 7, 13 (final; supersedes the "Planned endpoints" lines for these phases)
-Conventions as Phase 3–5: `/api/v1`, `clientRef` idempotency (201 created / 200 repeated original), `businessDate` required on create, future date → `400 FUTURE_DATE_NOT_ALLOWED` (exact R-FD message), unknown properties rejected, list endpoints paged `limit/offset` (default 50, max 200) with `{ items, total, totals }`, void = `POST /<resource>/:id/void` with `{ reason }` (409 `ALREADY_VOID` on a second void), audit row for every write (with `business_date` and `backdated`), all writes in one `ctx.database.tx()`.
-
-**Phase 6 — Telecom** (route file `routes/telecom.ts`)
-- `GET /reload-providers` → `{ items: [{ id, name, commissionBp (effective = own or shop default), ownCommissionBp (null = default), active }] }`; `PUT /reload-providers/:id` `{ commissionBp: int 0–10000 | null, active: bool }` (audited; never changes existing sales).
-- `POST /reload-sales` `{ businessDate, providerId, salesCents (int ≥1), extraCents? (int ≥0, default 0), notes?, clientRef }` → `{ item }`: commission = `mulDivRound(salesCents, rateBp, 10000) + extraCents`; rate snapshotted; cash +salesCents (`reload_collection`, book telecom). Inactive provider → `409 PROVIDER_INACTIVE`.
-- `GET /reload-sales` filters `from,to,providerId,status`; `totals`: `salesCents, commissionCents, extraCents` (posted rows only). `GET /reload-sales/:id`; `POST /reload-sales/:id/void`.
-- `POST /ezcash-sales` `{ businessDate, billTotalCents (≥1), notes?, clientRef }` (provider = Dialog automatically) → commission = `mulDivRound(billTotalCents, ezcashBp, 10000)`; cash +billTotal (`ezcash_collection`). `GET /ezcash-sales` (+`totals`: `billTotalCents, commissionCents`), `GET /ezcash-sales/:id`, `POST /ezcash-sales/:id/void`.
-- `POST /telecom/topups` `{ businessDate, kind: 'provider_topup'|'wallet_topup', providerId? (required for provider_topup, forbidden for wallet_topup), amountCents (≥1), notes?, clientRef }` → cash −amount. `GET /telecom/topups` (+`totals` by kind), `GET /telecom/topups/:id`, `POST /telecom/topups/:id/void`.
-- `GET /telecom/summary?from&to` → per-provider and total: `reloadSalesCents, reloadCommissionCents, ezcashBillCents, ezcashCommissionCents, topupsCents (provider/wallet), commissionRevenueCents` (posted rows; **revenue = commission only**).
-- Scratch cards are ordinary stock products in the POS (Phase 5) — no Phase 6 endpoint.
-- Web: `/telecom` tabs Reloads / EZCash / Top-ups (+ summary header and provider-rate editor inside the Reloads tab). Commission is previewed live with the same integer formula; the server value is authoritative.
-
-**Phase 7 — Printing** (route file `routes/printing.ts`)
-- `GET /print-service-types` (`?active=true`), `POST /print-service-types` `{ code (^[A-Z0-9_]{2,20}$), name, priceCents, costCents }` (`409 DUPLICATE_CODE`), `PUT /print-service-types/:id` `{ name, priceCents, costCents, active }` (audited; never changes past sales).
-- `POST /print-sales` `{ businessDate, serviceTypeId, qty (int 1–1 000 000), unitPriceCents? (default = type price; may be changed), notes?, clientRef }` → snapshot cost = type cost; revenue = qty×unitPrice; cash +revenue (`sale_service`, book shop). Warning (not block, R13): `unitPriceCents < unitCostCents` → response `warnings: ['PRICE_BELOW_COST']`. Inactive type → `409 SERVICE_TYPE_INACTIVE`.
-- `GET /print-sales` filters `from,to,serviceTypeId,status` + `totals { revenueCents, cogsCents, grossProfitCents }`; `GET /print-sales/:id`; `POST /print-sales/:id/void`.
-- `POST /printing-supplies` `{ businessDate, amountCents, description, clientRef }` (cash −amount, `printing_supplies`, book shop; **no P&L**); `GET /printing-supplies` (+`totals`), `GET /printing-supplies/:id`, `POST /printing-supplies/:id/void`.
-- Web: `/printing` tabs Print sales (quick entry buttons per service type + history) / Service types / Supplies.
-
-**Phase 13 — Opening stock & Excel import** (route file `routes/opening-stock.ts`)
-- `POST /opening-stock` `{ businessDate, items: [{ productId, qty (int ≥1), unitCostCents? | totalValueCents? (exactly one; value = exact entered total, or qty×unitCost) }], notes?, clientRef }` → creates one batch + one `opening` movement per line via the inventory engine (`receiveStock`, type opening) in one transaction. Unknown/inactive product → 422 with `fields["items.N.productId"]`. Duplicate product lines in one batch → 422 `DUPLICATE_PRODUCT`. Stock products only (shop/telecom cards); services have no stock.
-- `GET /opening-stock` (batches, paged; `?from,to,status`), `GET /opening-stock/:id` (with lines), `POST /opening-stock/:id/void` `{ reason }` (R1 reversal; `409 OPENING_BATCH_IN_USE` per schema doc).
-- `GET /excel/opening-stock-template` → `.xlsx` download (ExcelJS): sheet "Opening stock" with header row `SKU | Product name | Quantity | Unit cost (Rs) | Total value (Rs) | Notes`, sample row, data validation notes, plus sheet "Products" listing every active stock product (SKU, name, category, unit). Header names are the contract for the import.
-- `POST /excel/opening-stock/preview` multipart (`file` ≤ 5 MB, `.xlsx` only, `businessDate` field, default today) → `{ importRunId, rows: [{ rowNo, sku, productId, productName, qty, unitCostCents, totalValueCents, status 'ok'|'error', issues: [{ code, message }] }], summary { total, ok, failed, totalValueCents }, fileSha256 }`. **Nothing is written to stock.** Row validation codes: `MISSING_SKU`, `UNKNOWN_SKU`, `INACTIVE_PRODUCT`, `BAD_QTY`, `BAD_COST` (cost/total both missing or both present and inconsistent beyond the exact integer rule), `DUPLICATE_SKU_IN_FILE`, `FUTURE_DATE_NOT_ALLOWED` (per R-FD if a row/date is in the future). Money cells parsed as exact decimals (Rs with up to 2 dp, no float math; thousands commas allowed).
-- `POST /excel/opening-stock/import` same multipart + `clientRef` field → **all-or-nothing**: if any row has an error → `422 IMPORT_HAS_ERRORS` with the row list and **nothing is saved**; else one batch (source excel) is committed atomically; `409 IMPORT_ALREADY_COMMITTED` for the same file hash. Returns `{ batch, importRunId, summary }`.
-- Excel **export** of reports is Phase 11/12 (not here). Web: `/opening-stock` tabs Manual entry / Excel import (download template → upload → preview table with per-row issues → confirm).
-
-### Wave 2 contract — Phase 8 (expenses, cash books, opening balances, cash counts, daily closings, DAY_CLOSED)
-Conventions as before (clientRef idempotency, R-FD, paging, void = `POST …/:id/void { reason }`, audit row per write with business date + backdated, one transaction per write). Route files `routes/expenses.ts`, `routes/cashbooks.ts`.
-- **Expenses:** `POST /expenses` `{ businessDate, book: 'shop'|'telecom', category, amountCents (≥1, ≤10^12), description, notes?, clientRef }` → `{ item, warnings[] }`. `category: 'electricity'` → `400 ELECTRICITY_NOT_ALLOWED` ("Electricity is paid from the Ice Cream book.", `fields.category`); `book: 'icecream'` → `400 USE_ICECREAM_PAYMENTS`. Any other category value → 400 `VALIDATION_ERROR`. `GET /expenses` (filters `from,to,book,category,status`; `totals { amountCents }` posted only; paged), `GET /expenses/:id`, `POST /expenses/:id/void`. `GET /expenses/categories` → list with labels.
-- **Cash books:** `GET /cashbooks` → `{ books: [{ book, balanceCents, funds? (icecream: { cost, electricity, profit } balances), lastClosedDate }] }` (all-time ledger balance; Ice Cream funds from `icecream_fund_entries`; `warnings` if a balance < 0 or Σ funds ≠ book). `GET /cashbooks/:book?from&to&limit&offset` → `{ book, from, to, openingCents (ledger balance with business_date < from), inCents, outCents, closingCents (= opening + in − out), items: [{ id, businessDate, postedAt, type, amountCents (signed), runningBalanceCents, fund, refTable, refId, reversesEntryId, note }], total, closedDates: [...] }` — ordered by business date then id; running balance carried correctly across pages. Ice Cream adds `funds` (per-fund opening/in/out/closing for the period).
-- **Opening balance:** `POST /cashbooks/:book/opening` `{ businessDate, amountCents (≥1), fund? (required iff icecream: `400 FUND_REQUIRED`; others `400 FUND_NOT_ALLOWED`), note?, clientRef }` → `{ item, warnings }`; second posted opening for the same (book, fund) → `409 OPENING_BALANCE_EXISTS`. `GET /cashbooks/:book/opening`, `POST /capital-entries/:id/void` (opening balance void; `409 DAY_CLOSED` rules apply).
-- **Cash counts:** `POST /cash-counts` `{ businessDate, book, countedCents (≥0), fund? (required iff icecream and difference ≠ 0), note? (required iff difference ≠ 0 → `400 NOTE_REQUIRED`), clientRef }` → `{ item { expectedCents, countedCents, differenceCents }, warnings }`; `GET /cash-counts` (`book,from,to,status`), `GET /cash-counts/:id`, `POST /cash-counts/:id/void`. `GET /cash-counts/expected?book&businessDate` → `{ expectedCents }` (for the UI).
-- **Daily closings:** `POST /daily-closings` `{ book, businessDate, countedCents?, fund?, note?, clientRef }`: computes expected as of that date; if `countedCents` is given and differs it posts the cash count + adjustment first (same rules), then marks the day closed; already closed → `409 DAY_ALREADY_CLOSED`. `POST /daily-closings/:id/reopen` `{ reason (required, ≥3 chars) }` (audited; `409 DAY_NOT_CLOSED`). `GET /daily-closings?book&from&to` (each with `isClosed`), `GET /daily-closings/status?book&businessDate` → `{ isClosed }`.
-- **DAY_CLOSED enforcement (R9):** every financial write — create **and void** — whose business date falls on a closed day of **any book it touches** → `409 DAY_CLOSED`, message "That day is closed for the <Shop|Telecom|Ice Cream> cash book. Reopen it first (it will be recorded in the audit log).", `error.book`, `error.businessDate`. Voids and returns are judged on the **record's / return's business date** (a void's reversal copies the original date). Applies to all existing write services: purchases (+returns, voids), sales (+returns, voids), stocktake post, stock losses, goods drawings, opening stock batches (voids), reload/EZCash/top-up, print sales/supplies, expenses, opening balance, cash counts. Books touched: purchases/sales → the document's book; stock-only writes (stocktake, loss, goods drawing, opening stock) → the book of each product involved; Phase 6/7 records → telecom / shop. **Validation order:** schema → R-FD → (returns: lookup, R-RD) → DAY_CLOSED → other business rules. One shared helper (e.g. `services/day-closing.ts` `assertDayOpen(ctx, books, date)`) is used by every service; no per-service copies of the rule.
-- **Negative cash warning (R13):** every cash-out write returns `warnings: [{ code: 'NEGATIVE_CASH_BALANCE', message, book, balanceCents }]`-style entries via one shared helper (replace the printing-specific string warning so all services use the same shape; keep `PRICE_BELOW_COST` as is). Never a block.
-- Web: **Expenses** page (book + category filters, add dialog with Shop/Telecom switch and the electricity note "Electricity is paid from the Ice Cream book", history with paging and void); **Cash Books** page (tabs Shop / Telecom / Ice Cream; period picker; balance cards; ledger table with running balance and fund column for Ice Cream; actions: set opening balance, cash count, close day, reopen day; closed-day badge; Ice Cream fund balances block). Existing forms need no change beyond showing the `DAY_CLOSED` message and the negative-cash warning through the shared toast.
-
-### Wave 3 contracts — Phase 9 (transfers, cash drawings, capital) and Phase 10 (Ice Cream)
-Conventions as before; every write: JSON schema (additionalProperties:false) → R-FD → `assertDayOpen` for **every book touched** (a transfer touches both books) → business rules; one transaction (record + cash entries + fund entries + audit); idempotent `clientRef`; voids = reversal rows copying the original business date; cash-out writes return the shared warnings (`NEGATIVE_CASH_BALANCE`, `NEGATIVE_FUND_BALANCE`). Route files `routes/cash-transfers.ts`, `routes/capital.ts`, `routes/drawings.ts` (Phase 9) and `routes/icecream.ts` (Phase 10).
-**Phase 9**
-- `POST /cash-transfers` `{ businessDate, fromBook, toBook, fromFund?, toFund?, amountCents (1–10^12), note?, clientRef }` → `{ item, warnings }`. `fromBook = toBook` → 400 `SAME_BOOK`; fund required exactly when the book is icecream (`400 FUND_REQUIRED` / `FUND_NOT_ALLOWED`, field `fromFund`/`toFund`). `GET /cash-transfers` (`from,to,book (either side),status`, totals, paged), `GET /cash-transfers/:id`, `POST /cash-transfers/:id/void` (blocked `409 DAY_CLOSED` if **either** book's day is closed).
-- `POST /drawings` with `kind: 'cash'`: `{ kind:'cash', businessDate, book, fund? (iff icecream), amountCents (≥1), note?, clientRef }` (the `NOT_AVAILABLE_YET` answer is removed). Goods drawings unchanged. `GET /drawings` returns both kinds (`totals` add `cashCents`), void as before (cash drawing void = reversal).
-- `POST /capital` `{ businessDate, book, fund? (iff icecream), amountCents (1–10^12), note?, clientRef }` → `{ item, warnings }` (stored in `capital_entries` kind `capital`); `GET /capital` (kind filter `capital|opening_balance|all`, book, dates, status; totals) ; void via the existing `POST /capital-entries/:id/void`. Capital and opening balances never become revenue or profit.
-- Web: **Drawings** page tabs: Drawings (cash drawing dialog + list incl. goods drawings read-only with a link to Stock → Personal use), Capital, Transfers (transfer dialog with From/To book and fund pickers; ledger-style list; void).
-**Phase 10 — Ice Cream** — the endpoint list in "Planned endpoints → P10" and BUSINESS_RULES §10 (rules 10.1–10.8, D1–D4) are final and normative; where this section adds detail it fills gaps only:
-- `POST /icecream/days` (one posted day per date → `409 DAY_EXISTS` pointing to `PUT /icecream/days/:date`), `PUT /icecream/days/:date` (void-and-replace judged on the final state), `POST /icecream/days/:date/void`, `GET /icecream/days?from&to`, `GET /icecream/days/:date`. Validation: `salesCents ≥ 0`, `costAllocCents ≥ 0`, `electricityAllocCents ≥ 0`; profit share = S − C − E computed by the server; negative requires `confirmNegativeProfit: true` else `422 NEGATIVE_PROFIT_UNCONFIRMED`; optional `items[]` (itemName, qty, unitPriceCents) must sum exactly to `salesCents` (`422 ITEMS_TOTAL_MISMATCH`).
-- `POST /icecream/payments` (+ void, list), `POST /icecream/fund-moves/preview`, `POST /icecream/fund-moves` (D4 `SPLIT_CONFIRMATION_REQUIRED`), `POST /icecream/fund-moves/:id/void` (D2 `VOID_BREAKS_RELEASE`), `GET /icecream/fund-moves`, `GET /icecream/funds?asOf=` (shape exactly as in Planned endpoints P10), `GET /icecream/funds/entries?fund&from&to`. All dates are business dates; ordering for limits/splits/guards is by posting order (`posted_at`, then id), reports/`asOf` by business date (§10.6, §12).
-- **Pure calculation module:** all §10.4 logic (Charged/Settled/Unspent per line, profit-eligible limit, D4 split, Cost↔Electricity re-label, D2 guard, outstanding excess) lives in one pure, dependency-free module `services/icecream-rules.ts` operating on plain arrays, with the worked example of §10.8 as a test fixture, so Phase 11 can reuse it for reports.
-- Web: **Ice Cream** page tabs: Daily entries (entry form with live profit share, items, negative-profit confirmation, history with void/replace), Payments (materials / electricity bill / other cost with fund picker and the electricity-category rule), Fund moves (preview before posting, D4 split confirmation dialog in plain language, history), Funds (three fund tiles, cash book total with invariant check, Charged/Settled/Unspent lines, recognized profit, excess-cost warning with the three period-flow lines, fund ledger).
-
-### Wave 4 contract — Phase 11 (reports); Phase 12 (dashboard/charts) follows and reuses these services
-**Shared plumbing (orchestrator-owned, already in the repo — do not edit):** `server/src/lib/report-table.ts` (`ReportTable`, `listPeriods`, `reportTablesToXlsx`), `server/src/routes/report-common.ts` (`parseReportQuery`, `reportQueryProps`, `sendReport`), `web/src/pages/reports/shared.tsx` (`useReportPeriod`, `ReportToolbar`, `ReportTableView`, `periodQuery`), the shell `ReportsPage.tsx` and the routes (`/reports`, `/reports/cash`, `/reports/icecream`, `/reports/stock`, `/reports/activity`, `/reports/backdated`).
-**Conventions.** `GET /api/v1/reports/…?from&to&granularity=day|month&format=json|xlsx` (`from`/`to` business dates, required, inclusive, never rejected for being in the future; `from > to` or > 3,660 days → 400). JSON body: `{ from, to, granularity, rows: [{ period: { from, to, label }, …figures }], totals: {…}, table: ReportTable, warnings: [] }` (reports that are not period-based document their own body but still include `table` and `warnings`); `format=xlsx` returns the same figures as a workbook. **Every row is calculated only from records whose business date lies inside that row's period** (BUSINESS_RULES 10.6): rows are additive (days sum to the month, months to the total) and the totals row equals the report over the whole range. Only `status = 'posted'` business rows count; voided rows and reversal rows never appear in P&L figures (R1). Money is integer cents; rates basis points. Reports are read-only (no audit rows). Each report service is a pure function `(conn, query) => figures` in its own file under `server/src/services/reports/` so Phase 12 can call it directly (no HTTP self-calls).
-**Line definitions (normative; they implement BUSINESS_RULES §1, §3–§6, §8, §10, §11, C4, C5, C13 and change nothing):**
-- *Goods revenue (Shop) / Card revenue (Telecom)* = Σ revenue of posted sales of that book dated in the period − Σ revenue of sales **returns dated in the period** (R5: a return hits the period of the return date, whatever the sale's date).
-- *Cost of sales* = Σ `cogs_cents` (automatic cost) of those sales − Σ `cogs_reversed_cents` of those returns, **plus** *extra cost* = Σ `extra_cost_cents` − Σ `extra_cost_reversed_cents` (C13); show both parts ("automatic" and "extra") and their sum. Gross profit = revenue − (automatic + extra).
-- *Service revenue / cost (Shop)* = Σ posted `print_sales` revenue / cogs (R12). `printing_supplies` are **never** P&L (variance report only).
-- *Reload commission (Telecom)* = Σ `commission_cents` of posted `reload_sales` (shown as base commission + extra); *EZCash commission* = Σ `commission_cents` of posted `ezcash_sales`. Collections and top-ups are cash only, never revenue or cost (R14).
-- *Operating expenses* = Σ posted `expenses` of the segment's book by business date, with a by-category breakdown. Electricity is never an expense in any segment (E2).
-- *Stock adjustments (net)* (§11) = losses + stocktake losses + residual sweeps − stocktake gains, from `stock_movements` of the segment's products by movement business date, **including the reversal rows of voided losses/stocktakes** so voids net out; a damaged return counts exactly once (its revenue and cost are reversed and its single `stock_losses` row is the loss — never double counted); goods drawings (personal use) are **not** an adjustment. The agent maps movement types by reading migration 004 and the stock services and documents the mapping in its report.
-- *Cash over/short* = Σ `difference_cents` of posted `cash_counts` of the book (C4: over = income, short = cost); for Ice Cream it is a recognition event (§10.3) taken from the fund-ledger `cash_over_short` rows.
-- **Segment net profit** = gross profits + commissions − expenses − stock adjustments (net) ± cash over/short. Shop: goods GP + service GP − expenses − adjustments ± over/short. Telecom: reload commission + EZCash commission + card GP − expenses − adjustments ± over/short.
-- **Ice Cream** = the official recognized profit exactly as §10.6 (use `periodReport()`/the loaders in `services/icecream-rules.ts` and `icecream.service.ts`; do not re-implement §10): sales, materials charge, electricity charge, other expenses, over/short, recognized profit, the `recognition` components, the memo block, `excessCostNotChargedCents`, `profitAfterExcessCostCents`, `balancesAsOfPeriodEnd` (never summed) and the `EXCESS_COST_OUTSTANDING` warning.
-- **Combined** = Shop + Telecom + Ice Cream **recognized** profit (official), plus the informational lines of §7 E5 (electricity charged in the period and bills paid, never added or deducted) and the excess-cost lines (period change, profit after excess cost, outstanding as of `to`, warning).
-**Phase 11 endpoints — financial (agent A; files `routes/reports-financial.ts`, `services/reports/{pnl-shop,pnl-telecom,pnl-icecream,pnl-combined,cashbook-report,transfers-report,icecream-funds-report}.ts`, tests `phase11-fin-*.test.ts`, web `PnlTab`, `CashReportTab`, `IceCreamReportTab`, `api/reportsFinancial.ts`, `types/reportsFinancial.ts`):**
-`GET /reports/pnl/shop`, `/reports/pnl/telecom`, `/reports/pnl/icecream`, `/reports/pnl/combined`; `GET /reports/cashbook/:book` (per period: opening, in, out, closing, plus per-entry-type totals; Ice Cream also per fund; the closing of the last row equals the ledger balance as of `to`); `GET /reports/transfers` (posted transfers with totals by direction); `GET /reports/icecream-funds` (per fund per period: opening, allocations, opening/capital/transfers in, moves ± with profit-eligible / cash-only split, payments, drawings/transfers out, over/short, closing; total = Ice Cream cash book; recognized profit and excess-cost block separate from balances).
-**Phase 11 endpoints — operational (agent B; files `routes/reports-operational.ts`, `services/reports/{inventory-valuation,stock-movements-report,stock-losses-report,product-profitability,low-stock,purchases-report,sales-report,drawings-report,printing-variance,backdated-report}.ts`, tests `phase11-ops-*.test.ts`, web `StockReportTab`, `ActivityReportTab`, `BackdatedReportTab`, `api/reportsOperational.ts`, `types/reportsOperational.ts`):**
-`GET /reports/inventory/valuation?asOf=` (per product and per book/category: qty, value, average; total reconciles with the stock cache and the movements — as-of a past date from movements); `/reports/stock-movements` (filters product, type, book; paged); `/reports/stock-losses` (by reason, product, book); `/reports/product-profitability` (per product: net qty sold, revenue, cost incl. extra, gross profit, margin in bp, after returns); `/reports/low-stock` (products at or below their minimum stock level — agent reads the products schema for the field); `/reports/purchases` (per period/supplier/product totals, net of purchase returns); `/reports/sales` (per period and book: revenue, cost, gross profit, number of sales, returns; top products); `/reports/drawings` (cash and goods drawings by book/period, plus capital and transfers as separate memo lines); `/reports/printing-variance` (per period: standard cost charged = Σ print_sales cogs, actual supplies spent = Σ printing_supplies, difference; plus revenue and gross profit by service type); `/reports/backdated?from&to&book` (records whose business date is earlier than the Colombo date of their posting time: record type, id, amount, business date, posted at, audit entry id; paged).
-**Tests (both agents):** every figure verified against a hand-calculated scenario built through the real API (independent arithmetic in the test, never calling the report code); additivity (days sum to month, rows sum to totals); voids and returns exercised (a voided record changes nothing vs. never recorded; a return affects the return's period); closed-form reconciliations (Combined = sum of segments; cash report closing = ledger balance; valuation = stock cache = Σ movements); xlsx smoke test per report; empty-range and single-day cases; invalid dates/granularity (400); performance sanity (a one-year day-by-day report over a seeded year of data finishes quickly — no per-day query loops; use grouped SQL).
+- `POST /sales` `{ businessDate, items: [{ productId, qty (1–10^6), unitPriceCents (0–999999999), unitCostCents? (0–999999999) }] (1–100), notes? (≤ 500), clientRef }` → `201 { sales: Sale[], warnings }`.
+  - The server splits the cart by product book into **one sale per book** (shop first, then telecom), lines in cart order. Per line, `sale` movement at the weighted average; quantity is checked per product across the whole cart (`422 INSUFFICIENT_STOCK`, `fields["items.N.qty"]`, `error.onHand`; nothing is saved). Products must be active (`400 PRODUCT_INACTIVE`).
+  - Cash: one entry per sale with a total above 0: `sale_goods` (+, shop) or `card_sale` (+, telecom).
+  - **Extra cost (C13):** `unitCostCents` is the cost per unit to charge. Omitted or equal to the automatic cost → extra 0. It may be raised, never lowered: `qty × unitCostCents` below the automatic cost is `422 COST_BELOW_AUTOMATIC` (`fields["items.N.unitCostCents"]`, `error.minUnitCostCents = ceil(cogsCents / qty)`). `extraCostCents = qty × unitCostCents − cogsCents`. The extra creates no stock movement and no cash entry.
+  - `warnings` entries `{ code, message, lineIndex }`, never blocking: `PRICE_BELOW_MINIMUM`, `PRICE_BELOW_COST` (against the automatic unit cost), `ZERO_COST` (quantity sold but no cost recorded).
+- `GET /sales?from=&to=&book=&status=&productId=&limit=&offset=` → `{ items, total, totals: { revenueCents, cogsCents, extraCostCents, costCents, refundsCents } }` (totals over posted sales matching the filter). `limit` 1–200 (default 50). `GET /sales/:id` → `{ item }`.
+- `POST /sales/:id/void` `{ reason }` → `{ item, warnings }` (R13 negative-cash warning after the reversal; never blocks). `409 HAS_RETURNS`. The sale's movements are exactly negated (stock returns at the original snapshot value) and its cash entry reversed.
+- `POST /sales/:id/returns` `{ businessDate, items: [{ saleItemId, qty (1–10^6), resalable: boolean }] (1–100), note?, clientRef }` → `201 { item: SaleReturn, sale, warnings }`.
+  - Errors: R-RD, `409 SALE_VOID`, `422 RETURN_EXCEEDS_SOLD`; each line once per request and belonging to the sale (`400`).
+  - Values (C5): revenue, automatic cost and extra cost each use `mulDivRound(amount, qty, item.qty)`; the return that completes the line takes the exact remainder. `refundCents` = Σ revenue portions.
+  - **Resalable:** `sale_return` movement, stock back at the automatic snapshot cost only. **Damaged:** no stock movement; revenue and costs are reversed and exactly one `stock_losses` row per damaged line is written (`source: "damaged_return"`, `salesReturnId` set, automatic cost only, the return's business date).
+  - Cash: `sale_refund` (−, shop) or `card_refund` (−, telecom) when the refund is above 0.
 
 ---
 
-## Planned endpoints (later phases — shapes finalised in their phase, listed here so the UI shell knows the map)
-- **P2 Catalog**: specified above (Phase 2 endpoints).
-- **P3 Inventory**: specified above (purchases, movements, reconciliation). **P4**: specified above (stocktake, stock losses, goods drawings, valuation). **P13**: `POST /opening-stock` (opening stock entry/import).
-- **P5 Sales**: specified above (POS sales, history, returns, voids).
-- **P6 Telecom**: `GET/PUT /reload-providers` · `POST/GET /reload-sales` · `POST/GET /ezcash-sales` · `POST/GET /telecom/topups`
-- **P7 Printing**: `GET/POST /print-service-types`, `PUT /print-service-types/:id` · `POST /printing-supplies`
-- **P8 Money**: `POST/GET /expenses`, `POST /expenses/:id/void` · `GET /cashbooks/:book?from&to` · `POST /cashbooks/:book/opening` · `POST /cash-counts` · `POST /daily-closings`, `POST /daily-closings/:id/reopen`
-  - **Electricity rule (BUSINESS_RULES §7 E1–E5):** `POST /expenses` accepts `book` ∈ `shop|telecom` only and `category` ∈ `water|rent|internet|transport|repairs|cleaning_supplies|packaging|stationery|other`. (All books: `409 DAY_CLOSED` applies to every financial write dated in a closed day, including voids — BUSINESS_RULES R9.)
-    - `category: "electricity"` → `400 ELECTRICITY_NOT_ALLOWED` — "Electricity is paid from the Ice Cream book." (`fields.category`)
-    - `book: "icecream"` → `400 USE_ICECREAM_PAYMENTS` — ice-cream costs are recorded via `/icecream/payments`.
-  - **Funds (§10.2):** for `book = icecream`, `opening` and `cash-counts` (over/short) require `fund` ∈ `cost|electricity|profit` (`400 FUND_REQUIRED`); for other books `fund` is rejected (`400 FUND_NOT_ALLOWED`). Ice Cream cash-book entries in `GET /cashbooks/icecream` carry their `fund`.
-- **P9**: `POST/GET /cash-transfers`, `POST /cash-transfers/:id/void` · `POST/GET /drawings` · `POST/GET /capital`
-  - `fromFund` required when `fromBook = icecream`, `toFund` when `toBook = icecream`; drawings and capital in the Ice Cream book require `fund`. None of these ever change recognized profit; capital/opening/transfer-in money is never profit-eligible.
-- **P10 Ice cream (BUSINESS_RULES §10 — final, P-1 approved with D1–D4)**. Every write is one transaction: business record + fund-ledger rows + cash entry (if cash moves) + audit row. All writes take `clientRef` (idempotent).
-  - Every Ice Cream write dated in a closed day → `409 DAY_CLOSED` (reopen first, R9). `fund` is **required** in every API body; the defaults in §10.2 (Cost for materials, Electricity for the bill, Profit for over/short) are UI presets only.
-  - `POST /icecream/days` `{ businessDate, salesCents, costAllocCents, electricityAllocCents, items?, confirmNegativeProfit?, clientRef }` → `{ day: { …, profitShareCents }, funds, warnings }` — profit share server-computed; `422 NEGATIVE_PROFIT_UNCONFIRMED` without confirmation.
-  - `PUT /icecream/days/:date` (void-and-replace, judged on the final state) · `POST /icecream/days/:date/void` — `409 DAY_CLOSED` unless reopened; `422 VOID_BREAKS_RELEASE` ("profit already released depends on this entry — reverse the release first") when the §10.4 void guard (D2) fails.
-  - `GET /icecream/days?from&to`
-  - `GET /icecream/funds?asOf=` → fund balances and recognized profit returned **separately**:
-    `{ funds: { cost: { balanceCents }, electricity: { balanceCents }, profit: { balanceCents } }, totalCents, cashBookBalanceCents, lines: { materials: { chargedCents, settledCents, unspentCents }, electricity: { chargedCents, settledCents, unspentCents } }, unspentAllocationCents, outstandingExcessCostCents, recognizedProfitToDateCents, profitAfterExcessCostToDateCents, warnings: [{ code: "NEGATIVE_FUND_BALANCE" | "EXCESS_COST_OUTSTANDING", message, … }] }`
-  - `POST /icecream/fund-moves/preview` `{ fromFund, toFund, amountCents }` → `{ profitEligibleCents, cashOnlyCents, chargeRelabelCents, profitEffectCents, explanation, warnings }` — no write; the UI shows this before confirmation.
-  - `POST /icecream/fund-moves` `{ businessDate, fromFund, toFund, amountCents, confirmSplit?, confirmedProfitEligibleCents?, note?, clientRef }` → `{ move: { …, profitEffectCents, chargeRelabelCents, cashOnlyCents }, funds, warnings }`
-    - `400 SAME_FUND`.
-    - **D4:** a move into Profit with `amountCents` > profit-eligible limit and without `confirmSplit: true` → `409 SPLIT_CONFIRMATION_REQUIRED` `{ profitEligibleCents, cashOnlyCents, explanation }` (nothing posted). Resent with `confirmSplit: true` and `confirmedProfitEligibleCents` → the server recomputes; if the split changed meanwhile it answers `409 SPLIT_CONFIRMATION_REQUIRED` again with the new split; otherwise it posts one record with both parts.
-    - Negative fund balances only produce `warnings`.
-  - `POST /icecream/fund-moves/:id/void` — `422 VOID_BREAKS_RELEASE` for re-allocations and Cost↔Electricity moves when the void guard fails; releases can always be voided.
-  - `POST /icecream/payments` `{ businessDate, kind: "materials" | "electricity_bill" | "other_cost", fund, amountCents, category?, description, clientRef }` → `{ payment: { …, pnlTreatment: "settlement" | "expense" }, funds, warnings }` — `category: "electricity"` → `400 ELECTRICITY_NOT_ALLOWED` (use `kind: "electricity_bill"`). `pnlTreatment` is derived: `expense` only for `other_cost` paid from the Profit fund. · `POST /icecream/payments/:id/void`
-  - History: `GET /icecream/payments?from&to`, `GET /icecream/fund-moves?from&to`, `GET /icecream/funds/entries?fund&from&to` (complete fund ledger incl. reversals).
-- **P11/P12 Reports** (`?from&to&granularity=day|month&format=json|xlsx`): `/reports/pnl/shop|telecom|icecream|combined`, `/reports/cashbook/:book`, `/reports/transfers`, `/reports/inventory/valuation`, `/reports/stock-movements`, `/reports/stock-losses`, `/reports/product-profitability`, `/reports/low-stock`, `/reports/purchases`, `/reports/sales`, `/reports/drawings`, `/reports/printing-variance`, `/reports/icecream-funds`, `/dashboard`
-  - **D3 rule for every report that shows Ice Cream or Combined profit** (daily rows, monthly rows, any period, totals, dashboard) — BUSINESS_RULES §10.6: each row is computed **only from movements dated inside that row's period** and carries `recognizedProfitCents` (period), `excessCostNotChargedCents` (= change in uncovered excess during the period; may be negative), `profitAfterExcessCostCents` (= recognized − excess change). These three are additive (daily rows sum to the month). `outstandingExcessCostCents` (as of period end) is informational for the warning only and is never summed. A `warnings` entry `EXCESS_COST_OUTSTANDING` appears whenever outstanding excess > 0. Excess cost is never deducted from official profit.
-  - `/reports/pnl/icecream` (per day or month row and total) → `{ salesCents, materialsChargeCents, electricityChargeCents, otherExpensesCents, cashOverShortCents, recognizedProfitCents, recognition: { dailyProfitShareCents, profitEligibleReleasesCents, reallocationsCents, otherExpensesCents, cashOverShortCents }, memo: { actualMaterialsPaidCents, actualElectricityPaidCents, otherCostsFromCostElecFundsCents }, excessCostNotChargedCents, profitAfterExcessCostCents, balancesAsOfPeriodEnd: { unspentByLine: { materialsCents, electricityCents }, outstandingExcessCostCents }, warnings }` — charge lines are movements dated in the period; `recognition` components are signed contributions to profit (re-allocations negative); `balancesAsOfPeriodEnd` is never summed (a total row carries the value at `to`)`
-  - `/reports/icecream-funds` → per fund: opening, + allocations, + opening/capital/transfers in, ± moves (with profit-eligible / cash-only split), − payments, − drawings/transfers out, ± over/short, = closing; total = Ice Cream cash book; recognized profit, `excessCostNotChargedCents`, `profitAfterExcessCostCents` (period flows) and `outstandingExcessCostCents` with the warning, shown in a separate block from the fund balances.
-  - `/reports/pnl/combined` → `recognizedProfitCents` per segment (Shop, Telecom, Ice Cream) and combined (official), `electricityChargedCents` (Ice Cream electricity charge for the period) and `electricityBillsPaidCents` (memo) **plus** `icecreamExcessCostNotChargedCents` (period change), `combinedProfitAfterExcessCostCents`, `outstandingExcessCostCents`, the excess-cost warning, and an informational electricity line (E5).
-  - `/dashboard` → Ice Cream tile shows recognized profit, fund balances (separately) plus today's and this month's `excessCostNotChargedCents` / `profitAfterExcessCostCents` (period flows), `outstandingExcessCostCents` and the excess-cost warning when present.
-  - `/reports/backdated?from&to&book` → every record whose `businessDate` is earlier than the Colombo date of its `postedAt`, with both values, the record type, amount and the audit entry id.
-- **P13 Excel**: `GET /excel/opening-stock-template`, `POST /excel/opening-stock/preview`, `POST /excel/opening-stock/import` — `preview` and `import` take one `businessDate` for the opening stock (default today in Asia/Colombo); a future `businessDate` → `400 FUTURE_DATE_NOT_ALLOWED`; a future date in a row's date column is reported in the preview as an `import_issues` row with the R-FD message and that row is not imported.
-- **System**: `GET /go-live` (checklist status)
+## Telecom
 
-`book` ∈ `shop | telecom | icecream`.
+Cash-only module (R14: no float or wallet balances). Revenue is the commission only. Rates are snapshotted on every sale.
+
+- `GET /reload-providers` → `{ items: [{ id, name, commissionBp (effective: own rate or the shop default), ownCommissionBp (null = use default), active }] }`. Providers (seeded): Dialog, Mobitel, Hutch, Airtel.
+- `PUT /reload-providers/:id` `{ commissionBp: integer 0–10000 | null, active: boolean }` → `{ item }`; audited; never changes existing sales.
+- `POST /reload-sales` `{ businessDate, providerId, salesCents (1–10^12), extraCents? (0–10^12, default 0), notes?, clientRef }` → `201 { item }`. `commissionCents = mulDivRound(salesCents, rateBp, 10000) + extraCents`, where `rateBp` is the provider's own rate or `settings.rates.reloadCommissionBp` (default 600). Cash `reload_collection` +`salesCents` (telecom). `409 PROVIDER_INACTIVE`.
+- `GET /reload-sales?from=&to=&providerId=&status=&limit=&offset=` → `{ items, total, totals: { salesCents, commissionCents, extraCents } }` (posted rows). `GET /reload-sales/:id`; `POST /reload-sales/:id/void` → `{ item, warnings }`.
+  `ReloadSale` = `{ id, businessDate, postedAt, backdated, providerId, providerName, salesCents, commissionBp, extraCents, commissionCents, notes, status, voidedAt, voidReason, clientRef }`.
+- `POST /ezcash-sales` `{ businessDate, billTotalCents (1–10^12), notes?, clientRef }` → `201 { item }`. Provider is Dialog automatically. `commissionCents = mulDivRound(billTotalCents, rateBp, 10000)` with `settings.rates.ezcashCommissionBp` (default 80); Dialog's own reload rate is not used and an inactive Dialog does not block EZCash. Cash `ezcash_collection` +`billTotalCents`.
+- `GET /ezcash-sales` (same filters without `providerId`; `totals: { billTotalCents, commissionCents }`), `GET /ezcash-sales/:id`, `POST /ezcash-sales/:id/void` → `{ item, warnings }`.
+- `POST /telecom/topups` `{ businessDate, kind: "provider_topup"|"wallet_topup", providerId? (required for provider_topup, forbidden for wallet_topup), amountCents (1–10^12), notes?, clientRef }` → `201 { item, warnings }`. Cash-out `provider_topup` or `wallet_topup` (telecom). `409 PROVIDER_INACTIVE`; wrong `providerId` usage is `400 VALIDATION_ERROR` (`fields.providerId`).
+- `GET /telecom/topups?from=&to=&kind=&providerId=&status=` → `{ items, total, totals: { providerTopupCents, walletTopupCents, totalCents } }`; `GET /telecom/topups/:id`; `POST /telecom/topups/:id/void`.
+- `GET /telecom/summary?from=&to=` → `{ from|null, to|null, providers: [{ providerId, name, reloadSalesCents, reloadCommissionCents (incl. extra), ezcashBillCents, ezcashCommissionCents, topupsCents, commissionRevenueCents }], totals: { reloadSalesCents, reloadCommissionCents, reloadExtraCents, ezcashBillCents, ezcashCommissionCents, providerTopupsCents, walletTopupsCents, topupsCents, commissionRevenueCents } }` (posted rows).
+- List paging: default 50, max 200. Scratch cards are ordinary stock products sold in the POS.
 
 ---
 
-## Internal module contracts (Phase 1, server)
+## Printing
 
-These TypeScript signatures are the hand-off between agents. Relative imports use `.ts` extensions. Only erasable TS syntax.
+- `GET /print-service-types?active=` → `{ items: [{ id, code, name, priceCents, costCents, active, sortOrder }] }`. Seven types are seeded (codes `BW_1S`, `BW_2S`, `CLR_1S`, `CLR_2S`, `PC_BW_1S`, `PC_BW_2S`, `CUSTOM`; prices and costs in DATABASE_SCHEMA.md).
+- `POST /print-service-types` `{ code (^[A-Z0-9_]{2,20}$), name, priceCents, costCents (0–10^9) }` → `201 { item }`; `409 DUPLICATE_CODE`.
+- `PUT /print-service-types/:id` `{ name, priceCents, costCents, active }` (all required) → `{ item }`. Codes never change, types are never deleted, past sales are never changed.
+- `POST /print-sales` `{ businessDate, serviceTypeId, qty (1–10^6), unitPriceCents? (0–10^9, default = the type's price), notes?, clientRef }` → `201 { item, warnings }`. `unit_cost` is a snapshot of the type's current standard cost; `revenueCents = qty × unitPriceCents`; `cogsCents = qty × unitCostCents`. Cash `sale_service` +revenue (shop). `warnings: ["PRICE_BELOW_COST"]` when the price is below the standard cost. `409 SERVICE_TYPE_INACTIVE`; an unknown type is `400 VALIDATION_ERROR`.
+- `GET /print-sales?from=&to=&serviceTypeId=&status=` → `{ items, total, totals: { revenueCents, cogsCents, grossProfitCents } }`; `GET /print-sales/:id`; `POST /print-sales/:id/void` → `{ item, warnings }`.
+  `PrintSale` = `{ id, businessDate, postedAt, backdated, serviceTypeId, serviceTypeCode, description, qty, unitPriceCents, unitCostCents, revenueCents, cogsCents, grossProfitCents, status, voidedAt, voidReason, notes, clientRef }`.
+- `POST /printing-supplies` `{ businessDate, amountCents (1–10^12), description, clientRef }` → `201 { item, warnings }`. Cash-out `printing_supplies` (shop); **no P&L effect** (R12; the Printing variance report compares supplies spent with standard cost charged).
+- `GET /printing-supplies?from=&to=&status=` → `{ items, total, totals: { amountCents } }`; `GET /printing-supplies/:id`; `POST /printing-supplies/:id/void` → `{ item }`.
+- List paging: default 50, max 200.
 
-### `server/src/db/db.ts` (DB Architect)
-```ts
-import type { DatabaseSync } from 'node:sqlite';
-export class AppDatabase {
-  constructor(filePath: string);          // opens + applies PRAGMAs (journal_mode=WAL, foreign_keys=ON, busy_timeout=5000, synchronous=FULL)
-  readonly filePath: string;
-  get conn(): DatabaseSync;               // throws DB_CLOSED error if closed
-  get isOpen(): boolean;
-  tx<T>(fn: (conn: DatabaseSync) => T): T; // BEGIN IMMEDIATE / COMMIT; ROLLBACK + rethrow on error; nested call → SAVEPOINT/RELEASE
-  close(): void;                          // idempotent; checkpoints WAL (PRAGMA wal_checkpoint(TRUNCATE)) before closing
-  reopen(): void;                         // close() if open, then open again with PRAGMAs
-}
-export function openDatabase(filePath: string): DatabaseSync; // raw open + PRAGMAs (used by AppDatabase)
-```
-`tx()` must not use async functions (node:sqlite is synchronous); passing an async fn should throw.
+---
 
-### `server/src/db/migrate.ts` (DB Architect)
-```ts
-import type { DatabaseSync } from 'node:sqlite';
-export interface MigrationFile { version: number; name: string; checksum: string; sql: string }
-export const MIGRATIONS_DIR: string;                       // absolute path to ./migrations
-export function loadMigrations(dir?: string): MigrationFile[];   // sorted; file names ^\d{3}_[a-z0-9_]+\.sql$; duplicate versions → throw
-export function checksumOf(sql: string): string;           // sha256 hex of text with CRLF→LF
-export function currentVersion(conn: DatabaseSync): number; // 0 if table missing/empty
-export function latestVersion(dir?: string): number;
-export function migrate(conn: DatabaseSync, dir?: string): { applied: string[]; version: number };
-// - creates schema_migrations IF NOT EXISTS
-// - for already-applied versions: checksum mismatch → throw Error code MIGRATION_CHECKSUM_MISMATCH
-// - each pending file runs inside its own transaction together with its schema_migrations insert
-// - database version > latestVersion → throw MIGRATION_DB_TOO_NEW
-export const REQUIRED_TABLES: readonly string[];            // ['schema_migrations','settings','audit_logs'] for Phase 1
-```
+## Opening stock and Excel import
 
-### `server/src/repositories/settings.repo.ts` (DB Architect)
-```ts
-export interface SettingsRow { key: string; valueJson: string; updatedAt: string }
-export function getAllSettings(conn: DatabaseSync): SettingsRow[];
-export function getSetting(conn: DatabaseSync, key: string): SettingsRow | undefined;
-export function upsertSetting(conn: DatabaseSync, key: string, valueJson: string): void; // sets updated_at = now
-```
+Opening stock adds stock without cash, purchase or P&L (BUSINESS_RULES §3). Each batch writes one `opening` movement per line through the inventory engine.
 
-### `server/src/repositories/audit.repo.ts` (DB Architect)
-```ts
-export interface AuditInsert { entity: string; entityId?: string | null; action: string; beforeJson?: string | null; afterJson?: string | null; note?: string | null }
-export interface AuditRow { id: number; at: string; entity: string; entityId: string | null; action: string; beforeJson: string | null; afterJson: string | null; note: string | null }
-export function insertAudit(conn: DatabaseSync, row: AuditInsert): number;   // returns id
-export function listAudit(conn: DatabaseSync, q: { entity?: string; limit: number; beforeId?: number }): AuditRow[]; // id DESC
-```
+- `POST /opening-stock` `{ businessDate, items: [{ productId, qty (1–10^9), unitCostCents? | totalValueCents? (0–99999999999; give one: the value is the exact entered total, or qty × unit cost) }] (1–1000), notes?, clientRef }` → `201 { item: OpeningBatchDetail }`. `422 DUPLICATE_PRODUCT` (same product twice), `422 INVALID_PRODUCT` (unknown, inactive or service product; `fields["items.N.productId"]`).
+- `GET /opening-stock?from=&to=&status=&limit=&offset=` → `{ items: OpeningBatch[], total, totals: { valueCents, lines } }`; `GET /opening-stock/:id` → `{ item }` with `items: [{ productId, productCode, productName, qty, valueCents, unitCostCents }]`.
+  `OpeningBatch` = `{ id, businessDate, postedAt, backdated, source: "manual"|"excel", fileName|null, rowCount, totalValueCents, status, notes, voidedAt, voidReason, clientRef }`.
+- `POST /opening-stock/:id/void` `{ reason }` → `{ item }`. Reverses the movements; `409 OPENING_BATCH_IN_USE` if any product no longer holds the batch quantity.
+- `GET /excel/opening-stock-template` → `.xlsx` (ExcelJS): sheet `Opening stock` with headers `SKU`, `Product name`, `Quantity`, `Unit cost (Rs)`, `Total value (Rs)`, `Notes`, plus sheet `Products` listing the active stock products (SKU, name, category, book). The importer finds columns by these header names; `SKU`, `Quantity`, `Unit cost (Rs)` and `Total value (Rs)` are required.
+- `POST /excel/opening-stock/preview` multipart: `file` (`.xlsx`, ≤ 5 MB) and optional `businessDate` (default today). → `{ importRunId, rows: [{ rowNo, sku, productId, productName, qty, unitCostCents, totalValueCents, status: "ok"|"error", issues: [{ code, message }] }], summary: { total, ok, failed, totalValueCents }, fileSha256, alreadyCommitted }`. Writes nothing to stock (an `import_runs` / `import_issues` record is kept). Row issue codes: `MISSING_SKU`, `UNKNOWN_SKU`, `INACTIVE_PRODUCT`, `BAD_QTY`, `BAD_COST`, `DUPLICATE_SKU_IN_FILE`, `FUTURE_DATE_NOT_ALLOWED`. Money cells are parsed as exact decimals (up to 2 places, thousands commas allowed), never as floats. File-level errors: `400 INVALID_FILE`/`INVALID_FILE_TYPE`, `422 MISSING_SHEET`, `MISSING_HEADERS`, `EMPTY_FILE`, `TOO_MANY_ROWS` (limit 5,000 stock rows), `413 FILE_TOO_LARGE`.
+- `POST /excel/opening-stock/import` multipart: `file`, optional `businessDate`, required `clientRef`. **All or nothing:** any bad row is `422 IMPORT_HAS_ERRORS` and nothing is saved; otherwise one batch (`source: "excel"`) is committed. `201`/`200 { batch, importRunId, summary }`. `409 IMPORT_ALREADY_COMMITTED` for the same file bytes (SHA-256) while that earlier batch is still posted; a corrected file can be imported after a void.
 
-### `server/src/lib/money.ts` (Backend)
-```ts
-export function isCents(n: unknown): n is number;                    // safe integer
-export function mulDivRound(a: number, b: number, c: number): number; // exact BigInt; half away from zero; c ≠ 0; all args safe integers; result must be safe integer else throw RangeError
-export function applyBp(amountCents: number, bp: number): number;    // mulDivRound(amountCents, bp, 10000)
-export function rupeesToCents(input: string | number): number;      // "1,320.50" → 132050, "15" → 1500, "-2.5" → -250; >2 decimals or junk → throw RangeError
-export function formatLKR(cents: number): string;                    // 1234567 → "Rs. 12,345.67"; -123450 → "-Rs. 1,234.50"; 0 → "Rs. 0.00"
-```
+---
 
-### `server/src/lib/dates.ts` (Backend)
-```ts
-export const BUSINESS_TZ = 'Asia/Colombo';
-export function todayBusinessDate(now?: Date): string;  // YYYY-MM-DD in Asia/Colombo
-export function isIsoDate(s: string): boolean;          // strict YYYY-MM-DD and a real calendar date
-export function nowIso(): string;                       // new Date().toISOString()
-export function backupStamp(now?: Date): string;        // YYYYMMDD-HHmmss in Asia/Colombo
-```
+## Expenses
 
-### `server/src/lib/errors.ts` (Backend)
-```ts
-export class AppError extends Error {
-  readonly statusCode: number; readonly code: string; readonly fields?: Record<string, string>;
-  constructor(statusCode: number, code: string, message: string, fields?: Record<string, string>);
-}
-```
-(Declare fields explicitly and assign in the constructor — parameter properties are not erasable.)
+Shop and Telecom only. Ice Cream costs use the Ice Cream endpoints. There is no Electricity category.
 
-### `server/src/app.ts` (Backend)
-```ts
-export interface AppOptions { dataDir: string; webDistDir?: string | null; logger?: boolean }
-export interface AppContext { database: AppDatabase; dataDir: string; backupsDir: string; dbPath: string; appVersion: string; isRestoring: boolean }
-export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance; ctx: AppContext }>;
-// - mkdir dataDir/backups; open <dataDir>/viman.db; migrate; register routes under /api/v1; static web if webDistDir exists
-// - does NOT create the startup backup (index.ts does) so tests control backups
-// - app.addHook('onClose') closes the database
-```
+- `GET /expenses/categories` → `{ items: [{ value, label }] }`: `water` Water, `rent` Rent, `internet` Internet, `transport` Transport, `repairs` Repairs, `cleaning_supplies` Cleaning supplies, `packaging` Packaging, `stationery` Stationery, `other` Other.
+- `POST /expenses` `{ businessDate, book: "shop"|"telecom", category, amountCents (1–10^12), description (required), notes?, clientRef }` → `201 { item, warnings }`. `category` containing only "electricity" (any case or spacing) → `400 ELECTRICITY_NOT_ALLOWED` ("Electricity is paid from the Ice Cream book.", `fields.category`); `book: "icecream"` → `400 USE_ICECREAM_PAYMENTS`; any other unknown category → `400 VALIDATION_ERROR`. Cash-out `expense` in the expense's book.
+- `GET /expenses?from=&to=&book=&category=&status=` → `{ items, total, totals: { amountCents } }` (posted rows); `GET /expenses/:id`; `POST /expenses/:id/void` → `{ item }`. Paging default 50, max 200.
+  `Expense` = `{ id, businessDate, postedAt, backdated, book, category, amountCents, description, notes, status, voidedAt, voidReason, clientRef }`.
 
-### `server/src/services/backup.service.ts` (Backend)
-```ts
-export type BackupReason = 'startup' | 'manual' | 'pre-restore';
-export interface BackupInfo { name: string; reason: BackupReason; sizeBytes: number; createdAt: string }
-export const BACKUP_NAME_RE: RegExp;
-export const KEEP_REGULAR = 30; export const KEEP_PRE_RESTORE = 10;
-export function createBackup(ctx: AppContext, reason: BackupReason, now?: Date): BackupInfo; // VACUUM INTO tmp → rename; then rotate
-export function listBackups(ctx: AppContext): BackupInfo[];                                  // newest first
-export function rotateBackups(ctx: AppContext): string[];                                    // returns deleted names
-export function validateDatabaseFile(filePath: string): { schemaVersion: number };          // throws AppError(422, RESTORE_*)
-export function restoreFromFile(ctx: AppContext, sourcePath: string, label: string): { restoredFrom: string; safetyBackup: string; schemaVersion: number };
-```
+---
 
-### Wave 1 — implementation notes (as built, 2026-11-11)
-- **Telecom:** `GET /telecom/summary?from&to` → `{from,to,providers[],totals}`; per provider `reloadSalesCents, reloadCommissionCents (incl. extra), ezcashBillCents, ezcashCommissionCents, topupsCents, commissionRevenueCents`; totals add `reloadExtraCents, providerTopupsCents, walletTopupsCents, topupsCents`. Top-up list totals `{providerTopupCents, walletTopupCents, totalCents}`. EZCash always uses `settings.rates.ezcashCommissionBp` (Dialog's own rate is its reload rate only) and is not blocked when Dialog reloads are inactive. Provider top-up to an inactive provider → 409 `PROVIDER_INACTIVE`. Unknown provider or wrong providerId usage → 400 `VALIDATION_ERROR` (`fields.providerId`).
-- **Printing:** create responses are `{ item, warnings[] }` (`PRICE_BELOW_COST`; supplies also `NEGATIVE_CASH_BALANCE`, R13). Limits: price/cost ≤ 1,000,000,000 cents, qty ≤ 1,000,000, one supplies purchase ≤ 10^12 cents. Unknown `serviceTypeId` → 400 `VALIDATION_ERROR`. `GET /print-service-types` includes `sortOrder`. Audit entities `print_service_type`, `print_sale`, `printing_supply`.
-- **Opening stock:** added codes `INVALID_PRODUCT` (422), `INVALID_FILE_TYPE`, `INVALID_FILE` (400), `FILE_TOO_LARGE` (413), `MISSING_SHEET`, `MISSING_HEADERS`, `EMPTY_FILE`, `TOO_MANY_ROWS` (>5000) (422), `CLIENT_REF_CONFLICT` (409). Preview adds `alreadyCommitted`. `IMPORT_HAS_ERRORS` carries `rows, summary, importRunId, fileSha256` in the `error` object. The same-file guard applies only while the earlier batch is still posted (a corrected file can be re-imported after a void). Required headers: SKU, Quantity, Unit cost (Rs), Total value (Rs); the template's Products sheet lists Book (not unit).
+## Cash books, opening balances, cash counts, daily closings
 
-### Wave 2 — Phase 8 implementation notes (as built, 2026-11-11)
-- **Warnings (shared helper `services/cash-warnings.ts`):** `{ code, message, book, balanceCents, fund? }` with codes `NEGATIVE_CASH_BALANCE`, `NEGATIVE_FUND_BALANCE` (Ice Cream fund < 0, §10.2), `ICECREAM_FUNDS_MISMATCH` (only in `GET /cashbooks`). Creates that now return `warnings`: purchases, purchase returns, sale returns, top-ups, printing supplies (previously a string array; now this object), expenses; voids of cash-in records (`POST /capital-entries/:id/void`, `POST /cash-counts/:id/void`) return `{ item, warnings }`. Daily closing returns `{ item, count, warnings }`.
-- **Errors added:** `NOTE_REQUIRED`, `FUND_REQUIRED`, `FUND_NOT_ALLOWED`, `DAY_NOT_CLOSED`, `DAY_ALREADY_CLOSED`, `OPENING_BALANCE_EXISTS`, `CLIENT_REF_CONFLICT`; `DAY_CLOSED`/`DAY_ALREADY_CLOSED` carry `error.book` and `error.businessDate`. Electricity (any case/spacing), `USE_ICECREAM_PAYMENTS` and `FUND_*` checks run as request validation before R-FD.
-- **DAY_CLOSED scope as built:** `assertDayOpen(conn, books, date)` runs after the clientRef-repeat check (a retry still returns the original) and before business rules; voids check right after the record lookup (before `ALREADY_VOID`); opening stock is checked on create (manual and Excel) as well as void; stocktake only on completing (or voiding a completed one) — drafts post nothing; sale carts and opening stock resolve products first because the book comes from them.
-- **Cash counts/closings:** a `fund` sent with a zero difference is ignored; closing with `countedCents` always records a count (even if equal) so `cash_count_id` is linked; a retry of a closing with the clientRef of its saved count returns 200 with `count: null`; re-close updates the same row (`closed_at` forced ≥ 1 ms after `reopened_at`).
-- **Cash book ledger:** no `from` → opening 0; no `to` → unbounded; page 50 (max 200); running balance is a window function over the whole period, then paged. Web Cash Books tabs use `?book=`; period defaults to the current month with "All time".
+`CashBook` = `shop | telecom | icecream`; `IceFund` = `cost | electricity | profit`. For `icecream` a `fund` is required wherever the money moves (`400 FUND_REQUIRED`); for other books it is rejected (`400 FUND_NOT_ALLOWED`).
 
-### Wave 3 — implementation notes (as built, 2026-11-12)
-**Phase 9.** Transfers: `POST /cash-transfers` → `{ item, warnings }` (warning on the source book/fund; transfer void warns on the destination); `SAME_BOOK` is reported on `fields.toBook`; `FUND_REQUIRED` / `FUND_NOT_ALLOWED` on `fromFund` / `toFund`; `DAY_CLOSED` names the first closed book of the two. Each leg is written by the transfers service (the shared posting helper cannot set `transfer_id`); reversal legs carry the same `transfer_id` (4 rows per voided transfer, net zero). `POST /drawings` kind `cash` is enabled (`NOT_AVAILABLE_YET` removed); responses are `{ item, warnings }`, the drawing object exposes `fund`, list totals `{ amountCents, goodsCents, cashCents }` (old `totalAmountCents` kept), `book=icecream` filter allowed. Goods drawings reject `book/fund/amountCents`. `POST /capital`, `GET /capital` (`kind=capital|opening_balance|all`), `GET /capital/:id`; void via `POST /capital-entries/:id/void`. A clientRef reused for a different book/kind → 409 `CLIENT_REF_CONFLICT`.
-**Phase 10.** Every write returns `{ record, funds, warnings }` where `funds` is the full summary (`reconciled`, `recognition` components, `period` = the three period-flow lines for `from..asOf`); warnings `NEGATIVE_CASH_BALANCE`, `NEGATIVE_FUND_BALANCE`, `EXCESS_COST_OUTSTANDING` (moves only fund + excess warnings). `GET /icecream/funds?asOf=&from=`; `GET /icecream/funds/entries` returns `totals { inCents, outCents, netCents }`. D4 confirmation requires BOTH `confirmSplit: true` and `confirmedProfitEligibleCents` equal to the server's current eligible amount, otherwise 409 `SPLIT_CONFIRMATION_REQUIRED` again with the current split. `PUT /icecream/days/:date` body has no `businessDate` (path date; R-FD applied) and an optional `reason`; audit rows `void` (old) + `replace` (new); no `replaces_day_id` column. `GET /icecream/days/:date` returns the posted entry only. Payments' electricity check: `trim().toLowerCase() === 'electricity'` (so "Electrical repair" is allowed), same as the DB CHECK. Paging for days/payments/moves/ledger: default 100, max 500. Pure module `services/icecream-rules.ts` (`periodReport()` already returns the `/reports/pnl/icecream` figures) is reused by Phase 11.
+- `GET /cashbooks` → `{ books: [{ book, balanceCents, lastClosedDate|null, funds? (icecream: { cost, electricity, profit } as plain cents) }], warnings }`. Balances are all-time ledger sums; warnings are `NEGATIVE_CASH_BALANCE`, `NEGATIVE_FUND_BALANCE`, `ICECREAM_FUNDS_MISMATCH`.
+- `GET /cashbooks/:book?from=&to=&limit=&offset=` → `{ book, from|null, to|null, openingCents (ledger balance before `from`; 0 when no `from`), inCents, outCents, closingCents (= opening + in − out), items: [{ id, businessDate, postedAt, type, amountCents (signed), runningBalanceCents, fund, refTable, refId, reversesEntryId, note }], total, closedDates, funds? }`. Ordered by business date then id; the running balance is carried correctly across pages. `limit` 1–200 (default 50). For `icecream`, `funds` has per-fund `{ openingCents, inCents, outCents, closingCents }`. `from > to` is `400`.
+- `POST /cashbooks/:book/opening` `{ businessDate, amountCents (1–10^12), fund?, note?, clientRef }` → `201 { item, warnings }` (cash-in `opening_balance`; may be backdated to the go-live date). A second posted opening balance for the same book (and fund) is `409 OPENING_BALANCE_EXISTS`; correct a wrong one by voiding it and entering it again. `GET /cashbooks/:book/opening` → `{ items }`.
+- `POST /capital-entries/:id/void` `{ reason }` → `{ item, warnings }`. Voids an opening balance or a capital entry (`409 DAY_CLOSED` rules apply).
+- `GET /cash-counts/expected?book=&businessDate=` → `{ expectedCents }`: the ledger balance of the book (Ice Cream: the whole book) as of the end of that business date.
+- `POST /cash-counts` `{ businessDate, book, countedCents (0–10^12), fund? (required for icecream when the difference is not zero; ignored when it is zero), note? (required when the difference is not zero: `400 NOTE_REQUIRED`), clientRef }` → `201 { item, warnings }`. `item` = `{ id, book, fund, businessDate, postedAt, backdated, expectedCents, countedCents, differenceCents (= counted − expected), note, status, voidedAt, voidReason, cashEntryId, clientRef }`. A non-zero difference posts one `cash_adjustment` cash entry (signed difference, dated the count's business date; Ice Cream also a fund entry of kind `cash_over_short` in the chosen fund). A zero difference posts nothing.
+- `GET /cash-counts?book=&from=&to=&status=&limit=&offset=`; `GET /cash-counts/:id`; `POST /cash-counts/:id/void` `{ reason }` → `{ item, warnings }` (reverses the adjustment).
+- `POST /daily-closings` `{ book, businessDate, countedCents?, fund?, note?, clientRef }` → `201 { item, count|null, warnings }`. Computes expected as of that date; if `countedCents` is given it always records a cash count first (adjustment included, same rules), then marks the day closed. `409 DAY_ALREADY_CLOSED`. R-FD applies (cannot close a date after today). A retry with the `clientRef` of its saved count returns `200` with `count: null`.
+- `POST /daily-closings/:id/reopen` `{ reason (at least 3 characters) }` → `{ item }` (audited; `409 DAY_NOT_CLOSED`). Re-closing updates the same row.
+- `GET /daily-closings?book=&from=&to=` → `{ items }`; `GET /daily-closings/status?book=&businessDate=` → `{ isClosed }`. `DailyClosing` = `{ id, book, businessDate, postedAt, closedAt, reopenedAt, reopenReason, expectedCents, countedCents|null, overShortCents, cashCountId|null, isClosed }`.
+- **`DAY_CLOSED` (R9).** Every financial write, create **and void**, dated in a closed day of **any book it touches** is `409 DAY_CLOSED`: "That day is closed for the <Shop|Telecom|Ice Cream> cash book. Reopen it first (it will be recorded in the audit log).", with `error.book` and `error.businessDate`. Voids and returns are judged on the record's (return's) own business date. Books touched: sales and purchases → the document's book; stock-only writes (stocktake completion, loss, goods drawing, opening stock) → the book of each product; telecom records → telecom; printing → shop; transfers → both books; Ice Cream records → `icecream`. A stocktake is checked only when completed (or when a completed one is voided). One shared helper (`assertDayOpen`) implements it.
 
-### Wave 4 — Phase 11 implementation notes (as built, 2026-11-12)
-**Stock adjustments (net) mapping (financial P&L):** losses come from **posted `stock_losses` rows of every source** (manual and `damaged_return`) by the row's business date and book — voided rows excluded; the `loss` stock movement a manual loss also writes is deliberately **not** read (counted once). A damaged sales return writes only its loss row (no stock movement), at the automatic cost only (its extra cost is reversed with the revenue, C13). Stocktake losses, stocktake gains and residual sweeps come from `stock_movements` types `stocktake_loss`, `stocktake_gain`, `adjustment` including reversal rows (reversals keep the type, so voids net out). Not adjustments: `personal_use`, `sale`, `sale_return`, `sale_void`, `purchase*`, `opening`. Net = losses + damaged-return losses + stocktake losses + sweeps − gains.
-**Financial reports:** Combined rows carry `segments.{shop,telecom,icecream}.recognizedProfitCents` and a top-level `recognizedProfitCents`; the totals row is the same function run over the whole range as one period (so rows summing to it is a real check); Ice Cream `balancesAsOfPeriodEnd` in the totals row is the value at `to`. Cash report returns `ledgerBalanceAsOfToCents`, `typeTable`, `fundTable` (fund breakdown from the fund ledger; a reversal row takes the kind of the row it reverses); transfers and funds reports also return `itemsTable`/`profitTable`. A cash book's in/out include the opposite rows of voided records (a voided transfer appears in both books' in and out while the net stays zero) — P&L figures never include them.
-**Operational reports:** query params — valuation `asOf, book, categoryId, includeZero, includeInactive`; movements `from,to,productId,type,book,limit,offset`; losses `from,to,granularity,book`; profitability `from,to,book,categoryId`; low-stock `book,categoryId,includeInactive`; purchases `…,supplierId`; sales `…,topN`; drawings; printing-variance; backdated `from,to,book,limit,offset`. JSON includes `table`, `warnings` and `extraTables` (also written to the workbook). **Low stock:** active stock product with `reorderLevel > 0` and `qty <= reorderLevel` (equal included; minimum 0 = not set). **Backdated:** `business_date < date(posted_at,'+330 minutes')` (same expression as the triggers), 21 record types, voided records listed with `status = 'void'`, `from/to` filter on business date. **Valuation** always from the movement sum up to `asOf` (equals the cache for today); a past date shows `matchesCache = null`; `NEGATIVE_STOCK_AS_OF` warning when a backdated sale leaves an earlier date negative. **Printing variance** = supplies spent − standard cost charged (supplies never in gross profit). **Drawings:** capital counts only `kind = 'capital'`; transfers/opening balances are memo lines outside the totals. **Sales:** revenue net of returns with gross and returns shown separately.
+---
 
-### Phase 12 contract — dashboard, charts, export pack
-Files (agent-owned): `routes/dashboard.ts`, `services/dashboard.service.ts` (+ `services/dashboard-*.ts`), tests `phase12-*.test.ts`, web `pages/Dashboard.tsx` (+ `pages/dashboard/*`), `api/dashboard.ts`, `types/dashboard.ts`. Recharts 2.15.4 is already installed in the web workspace (orchestrator); no other new dependency. The dashboard **calls the Phase 11 report services directly** (`services/reports/*`, `services/icecream*.ts`, `cashbooks.service.ts`, `backup.service.ts`) — it never re-derives a figure and never calls HTTP itself. Read-only: no writes, no audit rows, no migration.
-- `GET /dashboard?asOf=` (business date, default today Asia/Colombo; future `asOf` accepted) → `{ asOf, today: { salesCents, profitCents, bySegment: { shop, telecom, icecream } }, month: { …same for 1st of asOf's month..asOf }, cash: { books: [{ book, balanceCents, funds? }], totalCents }, stock: { valueCents, lowStockCount, lowStock: [top 10 { productId, name, qty, reorderLevel }], negativeOrWarning: [] }, icecream: { recognizedProfitMonthCents, funds: { cost, electricity, profit } (separate from profit), excessCostNotChargedTodayCents, excessCostNotChargedMonthCents, profitAfterExcessCostMonthCents, outstandingExcessCostCents, warnings }, closings: { lastClosedByBook, openDaysBehind: [per book: dates up to 7 days back not yet closed] }, backup: { latestAt, ageHours, status }, series: { daily: [{ date, salesCents, profitCents }] (last 30 days to asOf), monthly: [{ month, shopCents, telecomCents, icecreamCents, combinedCents }] (last 12 months), topProducts: [{ name, revenueCents, grossProfitCents }] (this month, top 5) }, warnings: [] }`. "Sales" = revenue lines of the P&L reports (goods + services + card + commissions are **not** sales — define `salesCents` per segment exactly as the report's revenue lines: Shop goods+service revenue, Telecom card revenue + reload/EZCash commission, Ice Cream `salesCents`; state the definition in the response `definitions` block). Profit = the reports' segment net profit; Ice Cream profit = **recognized** profit, shown with the three period-flow lines and the excess-cost warning whenever outstanding excess > 0 (D3), fund balances always separate from profit (§10.1). Every number must equal the corresponding Phase 11 report for the same range (tested).
-- `GET /reports/export-pack?from&to` → one `.xlsx` with sheets: Combined P&L (by month), Shop P&L, Telecom P&L, Ice Cream P&L, Ice Cream funds, Cash books (3 sheets or one with a book column), Inventory valuation (as of `to`), Low stock, Sales, Purchases, Drawings, Printing variance — built from the same report services and `reportTablesToXlsx` (no new calculation). Range ≤ 3,660 days; 400 otherwise.
-- Web: `Dashboard.tsx` home screen: tiles (today / this month: sales and profit per segment and combined; cash per book with Ice Cream fund balances shown separately and an "= book" check; stock value and low-stock count; Ice Cream recognized profit with fund balances and the excess-cost warning block when applicable; backup status; days not yet closed), charts with Recharts (30-day sales vs profit line/bars, 12-month profit by segment stacked bars, top products bar, cash per book bar) — each chart has an accessible text/table alternative (`<table>` under a "Show as table" toggle, aria-labels), colours distinguish the three segments consistently, negative profit visibly negative, empty data states, loading and error states with retry, auto refresh on window focus. Keep the system-status card (health, newest backup) from the current dashboard. Mobile-width layout works (tiles stack, charts responsive). A "Download Excel pack" button (period picker, default this month) calls the export-pack endpoint. The existing Phase 1 backup-list query hooks stay.
-- Tests: every dashboard figure equals the matching Phase 11 report service result on a scripted multi-month world built through the real API with HAND-calculated expected values; Combined/segment definitions; Ice Cream funds separate from profit and the invariant Cost+Electricity+Profit = Ice Cream cash book; excess-cost scenario shows the warning and period flows; empty database returns zeros and no errors; `asOf` past and future; series lengths (30 daily rows, 12 monthly rows, zero-filled); closings `openDaysBehind`; backup block; export-pack workbook opens with ExcelJS and key figures match; read-only proof (no table changes, no audit rows); performance sanity on a seeded year (dashboard under a second or two); web: build + typecheck, and browser smoke test.
+## Capital and cash drawings
 
-### Phase 12 — implementation notes (as built, 2026-11-12)
-`GET /dashboard?asOf=` runs in one `ctx.database.tx` (all tiles describe the same instant); bad date / unknown field → 400; past and future `asOf` accepted. Extras beyond the contract: `cash.books[icecream].fundsMatchBook`, `icecream.fundsTotalCents`, `icecream.fundsMatchBook`, and a `definitions` block (keys `sales, salesShop, salesTelecom, salesIcecream, salesCombined, profit, today, month, cash, stock, excessCost, closings, backup, seriesDaily, seriesMonthly, topProducts`). **Sales definitions:** Shop = goods + print revenue net of returns; Telecom = scratch-card revenue + reload commission + EZCash commission; Ice Cream = `salesCents`; Combined = sum (net of returns, so a month with more returns than sales is negative). **openDaysBehind:** window asOf−7..asOf−1, only days on/after the book's first cash entry (a new database lists nothing); `lastClosedByBook` = latest closed date ≤ asOf (reopened days count as not closed). **Backup status:** `ok`, `stale` (> 48 h, constant `BACKUP_STALE_HOURS`) or `none`; `ageHours` uses the real clock. **Stock:** `valueCents` as of `asOf` (movement sums), low-stock list live, `STOCK_CACHE_MISMATCH` warning on a cache mismatch. **Series:** 12 months = asOf's month and the 11 before (last clipped to asOf); 30 days end on asOf; top 5 products by gross profit this month (stock products only). `GET /reports/export-pack?from&to` → one `.xlsx` of 15 sheets: Combined P&L (by month), Shop P&L, Telecom P&L, Ice Cream P&L, Ice Cream funds, Ice Cream profit and excess, Cash book ×3, Inventory valuation (as of `to`), Low stock, Sales, Purchases, Drawings, Printing variance; from > to or > 3,660 days → 400. Web: dashboard tiles, four Recharts charts each with a "Show as table" alternative, Ice Cream block (funds separate from profit, D3 warning), closings/backup blocks, "Show figures as of" picker, Excel pack download, refetch on window focus (dashboard query only).
+- `POST /capital` `{ businessDate, book, fund? (iff icecream), amountCents (1–10^12), note?, clientRef }` → `201 { item, warnings }`. Stored as `capital_entries` kind `capital`; cash-in `capital`. Never revenue, never profit-eligible.
+- `GET /capital?kind=&book=&from=&to=&status=&limit=&offset=` (`kind` = `capital`, `opening_balance` or `all`) → `{ items, total, totals: { amountCents } }`; `GET /capital/:id` → `{ item }`. Void through `POST /capital-entries/:id/void`.
+  `CapitalEntry` = `{ id, businessDate, postedAt, backdated, book, fund|null, kind, amountCents, note, status, voidedAt, voidReason, clientRef }`.
+- Cash drawings are `POST /drawings` with `kind: "cash"` (see [Stocktake, losses, personal use](#goods-drawings-personal-use-and-cash-drawings)).
+
+---
+
+## Cash transfers
+
+- `POST /cash-transfers` `{ businessDate, fromBook, toBook, fromFund?, toFund?, amountCents (1–10^12), note?, clientRef }` → `201 { item, warnings }`. `fromBook = toBook` → `400 SAME_BOOK` (`fields.toBook`). `fromFund` is required exactly when `fromBook` is `icecream`, `toFund` exactly when `toBook` is `icecream` (`FUND_REQUIRED` / `FUND_NOT_ALLOWED` on those fields). One transaction writes a `transfer_out` and a `transfer_in` cash entry sharing `transfer_id`, plus Ice Cream fund entries on Ice Cream sides. No P&L effect. The warning is about the source book or fund.
+- `GET /cash-transfers?from=&to=&book=&status=&limit=&offset=` (`book` matches either side) → `{ items, total, totals: { amountCents } }`; `GET /cash-transfers/:id`.
+- `POST /cash-transfers/:id/void` `{ reason }` → `{ item, warnings }` (warning about the destination book). Writes the opposite pair (4 rows in total, net zero). `409 DAY_CLOSED` if either book's day is closed (names the first closed book).
+  `Transfer` = `{ id, businessDate, postedAt, backdated, fromBook, toBook, fromFund, toFund, amountCents, note, status, voidedAt, voidReason, clientRef }`.
+
+---
+
+## Ice Cream
+
+Three-fund system (BUSINESS_RULES §10). Every write is one transaction: the business record, its fund-ledger rows, its Ice Cream cash entries (if cash moves) and an audit row; `clientRef` idempotency; `DAY_CLOSED` applies. **`fund` is required in every body that moves money**; the defaults in §10.2 (Cost for materials, Electricity for the bill, Profit for over/short) are screen presets only.
+Every write answers `{ <record>, funds, warnings }` where `funds` is the full `FundsSummary` below and `warnings` may contain `NEGATIVE_CASH_BALANCE`, `NEGATIVE_FUND_BALANCE`, `EXCESS_COST_OUTSTANDING` (fund moves return only the fund and excess warnings). List paging for days, payments, moves and the fund ledger: default 100, max 500.
+
+**Daily entries** (`IceDay` = `{ id, businessDate, postedAt, backdated, salesCents, costAllocCents, electricityAllocCents, profitShareCents, negativeConfirmed, notes, status, voidedAt, voidReason, clientRef, items: [{ id, itemName, qty, unitPriceCents, lineTotalCents }] }`)
+- `POST /icecream/days` `{ businessDate, salesCents, costAllocCents, electricityAllocCents (each 0–10^12), items?: [{ itemName, qty (1–10^6), unitPriceCents }] (≤ 200), confirmNegativeProfit?, notes?, clientRef }` → `201 { day, funds, warnings }`. The profit share S − C − E is computed by the server. A negative share without `confirmNegativeProfit: true` → `422 NEGATIVE_PROFIT_UNCONFIRMED`. Items must sum exactly to `salesCents` (`422 ITEMS_TOTAL_MISMATCH`). One posted entry per date: `409 DAY_EXISTS` (use `PUT`). Writes one `icecream_sale` cash entry per non-zero fund share (Cost C, Electricity E, Profit S − C − E) with matching fund entries.
+- `PUT /icecream/days/:date` same body without `businessDate`, plus optional `reason` → `200 { day, funds, warnings }`. Void-and-replace, judged on the final state for the D2 guard (`422 VOID_BREAKS_RELEASE`); R-FD applies to the path date. Audit rows `void` (old) and `replace` (new). `404 NOT_FOUND` when there is no posted entry for the date.
+- `POST /icecream/days/:date/void` `{ reason }` → `{ day, funds, warnings }`; `422 VOID_BREAKS_RELEASE` when profit already released depends on the entry ("profit already released depends on this entry — reverse the release first").
+- `GET /icecream/days?from=&to=&status=&limit=&offset=` → `{ items, total, totals: { salesCents, costAllocCents, electricityAllocCents, profitShareCents } }`; `GET /icecream/days/:date` → `{ day }` (the posted entry only).
+
+**Payments** (`IcePayment` = `{ id, businessDate, postedAt, backdated, kind, fund, amountCents, category|null, description, pnlTreatment: "settlement"|"expense", status, voidedAt, voidReason, clientRef }`)
+- `POST /icecream/payments` `{ businessDate, kind: "materials"|"electricity_bill"|"other_cost", fund, amountCents (1–10^12), category?, description, clientRef }` → `201 { payment, funds, warnings }`. A `category` equal to "electricity" (trimmed, case-insensitive; "Electrical repair" is allowed) → `400 ELECTRICITY_NOT_ALLOWED` (use `kind: "electricity_bill"`). `pnlTreatment` is derived: `expense` only for `other_cost` paid from the Profit fund. Cash types `icecream_materials_payment`, `icecream_electricity_payment`, `icecream_other_cost`.
+- `POST /icecream/payments/:id/void` `{ reason }` → `{ payment, funds, warnings }` (releases and payments only loosen the limits, so no guard).
+- `GET /icecream/payments?from=&to=&kind=&fund=&status=` → `{ items, total, totals: { amountCents } }`.
+
+**Fund moves** (`IceMove` = `{ id, businessDate, postedAt, backdated, fromFund, toFund, amountCents, kind: "release"|"reallocation"|"relabel", profitEffectCents, chargeRelabelCents, cashOnlyCents, note, status, voidedAt, voidReason, clientRef }`)
+- `POST /icecream/fund-moves/preview` `{ fromFund, toFund, amountCents }` → `{ profitEligibleCents, cashOnlyCents, chargeRelabelCents, profitEffectCents, needsConfirmation, kind, explanation, warnings }`. No write. `400 SAME_FUND`.
+- `POST /icecream/fund-moves` `{ businessDate, fromFund, toFund, amountCents, confirmSplit?, confirmedProfitEligibleCents?, note?, clientRef }` → `201 { move, funds, warnings }`. **D4:** a move into Profit above the profit-eligible limit is not posted unless the body has `confirmSplit: true` **and** `confirmedProfitEligibleCents` equal to the server's current eligible amount; otherwise `409 SPLIT_CONFIRMATION_REQUIRED` with `{ profitEligibleCents, cashOnlyCents, explanation }` (nothing posted; if the split changed meanwhile, the new split is returned again). One record then carries both parts. A move writes two fund entries and no cash entry.
+- `POST /icecream/fund-moves/:id/void` `{ reason }` → `{ move, funds, warnings }`; `422 VOID_BREAKS_RELEASE` for re-allocations and Cost↔Electricity moves when the D2 guard fails; releases can always be voided.
+- `GET /icecream/fund-moves?from=&to=&status=` → `{ items, total, totals: { amountCents, profitEffectCents, cashOnlyCents } }`.
+
+**Funds and fund ledger**
+- `GET /icecream/funds?asOf=&from=` → `FundsSummary`:
+  `{ asOf|null, funds: { cost: { balanceCents }, electricity: { balanceCents }, profit: { balanceCents } }, totalCents, cashBookBalanceCents, reconciled, lines: { materials: { chargedCents, settledCents, unspentCents }, electricity: { … } }, unspentAllocationCents, outstandingExcessCostCents, recognizedProfitToDateCents, profitAfterExcessCostToDateCents, recognition: { dailyProfitShareCents, profitEligibleReleasesCents, reallocationsCents, otherExpensesCents, cashOverShortCents }, period: { from, to, recognizedProfitCents, excessCostNotChargedCents, profitAfterExcessCostCents }, warnings }`.
+  Fund balances and recognized profit are separate figures (§10.1); `period` holds the three period-flow lines for `from..asOf` (§10.6); `warnings` may hold `NEGATIVE_FUND_BALANCE`, `EXCESS_COST_OUTSTANDING`, `ICECREAM_FUNDS_MISMATCH`. `from > asOf` is `400`.
+- `GET /icecream/funds/entries?fund=&from=&to=&limit=&offset=` → `{ items: [{ id, businessDate, postedAt, fund, amountCents, kind, refTable, refId, reversesEntryId, note }], total, totals: { inCents, outCents, netCents } }` — the complete fund ledger including reversals.
+
+All limits, splits and guards use posting order; reports use business dates. The pure calculation module is `services/icecream-rules.ts`.
+
+---
+
+## Reports
+
+All reports are read-only (no audit rows) and are plain functions in `server/src/services/reports/` called by the routes and by the dashboard.
+
+**Common query** for period reports: `from`, `to` (required business dates, inclusive, never rejected for being in the future; `from > to` or a range over 3,660 days is `400 VALIDATION_ERROR`), `granularity=day|month` (default `day`), `format=json|xlsx` (default `json`; `xlsx` returns the same figures as a workbook). JSON body: `{ from, to, granularity, rows: [{ period: { from, to, label }, …figures }], totals, table, warnings }` — reports that are not period-based document their own body but still include `table` and `warnings`; some add `extraTables`.
+**Every row is calculated only from records whose business date lies inside that row's period** (BUSINESS_RULES §10.6): days add up to the month, months to the total, and the totals row equals the report over the whole range. Only `status = 'posted'` rows count; voided rows and reversal rows never appear in P&L figures (R1). Money is integer cents.
+
+### Financial
+- `GET /reports/pnl/shop`, `/reports/pnl/telecom`, `/reports/pnl/icecream`, `/reports/pnl/combined`.
+  - **Shop** = goods revenue − cost of sales (automatic + extra cost, C13) + print revenue − print standard cost − Shop expenses − stock adjustments (net) ± cash over/short. **Telecom** = reload commission (base + extra) + EZCash commission + card revenue − card cost − Telecom expenses − stock adjustments ± cash over/short. Revenue lines are net of returns dated in the period. Collections, top-ups, printing supplies, drawings, capital, transfers and opening balances never appear.
+  - **Stock adjustments (net)** = stock-loss rows of every source (manual and damaged-return) by business date and book + stocktake losses + residual sweeps − stocktake gains − **purchase refund gain** (R4: Σ purchase-return refunds by return date + Σ voided purchase totals by original date − value removed by `purchase_return`/`purchase_void` movements; exposed as `adjustments.purchaseRefundGainCents`, a positive number meaning gain, and as its own report column), with reversal rows netting out voids. The `loss` movement of a manual loss is not read (counted once). `personal_use` is not an adjustment.
+  - **Ice Cream** returns the official recognized profit exactly as BUSINESS_RULES §10.6 (`salesCents`, materials and electricity charge lines, other expenses, cash over/short, `recognizedProfitCents`, `recognition`, `memo`, `excessCostNotChargedCents`, `profitAfterExcessCostCents`, `balancesAsOfPeriodEnd`, warning `EXCESS_COST_OUTSTANDING`). Balances are never summed; a totals row carries the value at `to`.
+  - **Combined** = Shop + Telecom + Ice Cream recognized profit, each row with `segments.{shop,telecom,icecream}.recognizedProfitCents` and a top-level `recognizedProfitCents`, plus the informational electricity line (E5: electricity charged in the period and bills paid, never added or deducted) and the excess-cost lines.
+- `GET /reports/cashbook/:book` — per period: opening, in, out, closing, per entry-type totals (`typeTable`), per fund for Ice Cream (`fundTable`), `ledgerBalanceAsOfToCents`. A cash book's in and out include the opposite rows of voided records (a voided transfer appears in both books' in and out; the net stays zero).
+- `GET /reports/transfers` — posted transfers with totals by direction (`itemsTable`).
+- `GET /reports/icecream-funds` — per fund per period: opening, allocations, opening/capital/transfers in, moves (profit-eligible and cash-only split), payments, drawings and transfers out, over/short, closing; total equals the Ice Cream cash book; recognized profit and excess-cost block (`profitTable`) kept separate from balances.
+
+### Operational
+- `GET /reports/inventory/valuation?asOf=&book=&categoryId=&includeZero=&includeInactive=` — always from the movement sum up to `asOf` (equals the cache for today; a past date shows `matchesCache: null`); warning `NEGATIVE_STOCK_AS_OF` when a backdated sale leaves an earlier date negative.
+- `GET /reports/stock-movements?from=&to=&productId=&type=&book=&limit=&offset=`
+- `GET /reports/stock-losses?from=&to=&granularity=&book=` — by reason, product, book.
+- `GET /reports/product-profitability?from=&to=&book=&categoryId=` — net quantity sold, revenue, cost incl. extra, gross profit, margin (bp), after returns.
+- `GET /reports/low-stock?book=&categoryId=&includeInactive=` — active stock products with `reorderLevel > 0` and quantity at or below it (equal counts; a level of 0 means "not set").
+- `GET /reports/purchases?from=&to=&granularity=&book=&supplierId=` — net of purchase returns.
+- `GET /reports/sales?from=&to=&granularity=&book=&topN=` — revenue net of returns (gross and returns shown separately), cost, gross profit, sale counts, top products.
+- `GET /reports/drawings?from=&to=&granularity=&book=` — cash and goods drawings; capital counts only `kind = 'capital'`; transfers and opening balances are memo lines outside the totals.
+- `GET /reports/printing-variance?from=&to=&granularity=` — standard cost charged (Σ print sale cost) vs supplies spent; difference = spent − charged; revenue and gross profit by service type. Supplies never enter gross profit.
+- `GET /reports/backdated?from=&to=&book=&limit=&offset=` — records whose business date is earlier than the Colombo date of their posting time (`business_date < date(posted_at,'+330 minutes')`), 21 record types, voided records included with `status = 'void'`; `from`/`to` filter on business date.
+
+---
+
+## Dashboard and export pack
+
+- `GET /dashboard?asOf=` (business date, default today; past and future dates accepted; bad date or unknown parameter is 400). Runs in one transaction. Response:
+  `{ asOf, today: { salesCents, profitCents, bySegment: { shop, telecom, icecream } }, month: { same, 1st of asOf's month .. asOf }, cash: { books: [{ book, balanceCents, funds?, fundsMatchBook? }], totalCents }, stock: { valueCents, lowStockCount, lowStock: [top 10 { productId, name, qty, reorderLevel }], negativeOrWarning }, icecream: { recognizedProfitMonthCents, funds: { cost, electricity, profit }, fundsTotalCents, fundsMatchBook, excessCostNotChargedTodayCents, excessCostNotChargedMonthCents, profitAfterExcessCostMonthCents, outstandingExcessCostCents, warnings }, closings: { lastClosedByBook, openDaysBehind }, backup: { latestAt, ageHours, status: "ok"|"stale"|"none" }, series: { daily (last 30 days to asOf), monthly (asOf's month and the 11 before), topProducts (top 5 by gross profit this month) }, warnings, definitions }`.
+  - "Sales" per segment: Shop = goods + print revenue net of returns; Telecom = scratch-card revenue + reload commission + EZCash commission (collections and top-ups are cash only); Ice Cream = daily sales; Combined = the sum. Profit = the Phase 11 segment net profit; Ice Cream profit is the recognized profit, with fund balances kept separate.
+  - `openDaysBehind`: per book, dates in the 7 days before `asOf` not yet closed, only on or after the book's first cash entry. `backup.status` is `stale` after 48 hours (real clock) and `none` without a backup. The `definitions` block spells these out in plain language.
+  - Every figure equals the matching report for the same range (tested).
+- `GET /reports/export-pack?from=&to=` → one `.xlsx` of 15 sheets: Combined P&L (by month), Shop P&L, Telecom P&L, Ice Cream P&L, Ice Cream funds, Ice Cream profit and excess, Cash book - Shop, Cash book - Telecom, Cash book - Ice Cream, Inventory valuation (as of `to`), Low stock, Sales, Purchases, Drawings, Printing variance. `from > to` or a range over 3,660 days is `400`.
+
+---
+
+## Internal module signatures
+
+For developers. Relative imports in `server/` include the `.ts` extension; only erasable TypeScript syntax is used (no `enum`, `namespace` or parameter properties).
+
+**`db/db.ts`** `AppDatabase(filePath)` opens the file with `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`, `synchronous=FULL`. `conn` (throws `DB_CLOSED` when closed), `isOpen`, `tx(fn)` (outermost call `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`, nested calls use savepoints, async functions are refused), `close()` (checkpoints the WAL; idempotent), `reopen()`. `openDatabase(path)` is the raw open.
+
+**`db/migrate.ts`** `loadMigrations(dir?)` (file names `^\d{3}_[a-z0-9_]+\.sql$`, duplicate versions throw), `checksumOf(sql)` (SHA-256 of the CRLF-normalised text), `currentVersion(conn)`, `latestVersion(dir?)`, `migrate(conn, dir?)` (applied checksum mismatch → `MIGRATION_CHECKSUM_MISMATCH`; database newer than the program → `MIGRATION_DB_TOO_NEW`; each file in its own transaction), `REQUIRED_TABLES = ['schema_migrations','settings','audit_logs']`.
+
+**`lib/money.ts`** `isCents`, `mulDivRound(a, b, c)` (exact BigInt, half away from zero, safe integers only, throws `RangeError` otherwise), `applyBp(cents, bp)`, `rupeesToCents("1,320.50") = 132050` (more than 2 decimals or junk throws), `formatLKR(1234567) = "Rs. 12,345.67"` (negative `-Rs. 1,234.50`).
+**`lib/dates.ts`** `BUSINESS_TZ = 'Asia/Colombo'`, `todayBusinessDate(now?)`, `isIsoDate(s)` (strict and a real calendar date), `nowIso()`, `backupStamp(now?)`.
+**`lib/errors.ts`** `AppError(statusCode, code, message, fields?, extra?)`.
+**`lib/report-table.ts`** `ReportTable`, `listPeriods`, `daysInRange`, `reportTablesToXlsx`, `MAX_REPORT_DAYS = 3660`.
+
+**`app.ts`** `buildApp({ dataDir, webDistDir?, logger? })` creates `<dataDir>/backups`, opens `<dataDir>/viman.db`, migrates, registers every route under `/api/v1`, serves `webDistDir` when it holds `index.html`, and returns `{ app, ctx }` where `ctx = { database, dataDir, backupsDir, dbPath, appVersion, isRestoring }`. It does not take the start-up backup (`index.ts` does), so tests control backups.
+
+**Services** (`server/src/services/`): `inventory.service.ts` is the only writer of stock movements — `receiveStock`, `issueStock` (weighted average; `INSUFFICIENT_STOCK` above the pool), `issueStockCapped` (R4 purchase return/void), `reverseMovements` (exact negation), `gainValue` (C10), `poolsAsOf`, `reconcileStock`. `cash-posting.ts` (`postCash`, `reverseCash`) writes a cash entry and, for Ice Cream, its fund entry. `day-closing.ts` (`assertDayOpen`), `cash-warnings.ts`, `audit.service.ts` (`logAudit`, called inside the caller's transaction), `validation.ts` (`checkBusinessDate`, `futureDateError`, `trimmed`, ...), `icecream-rules.ts` (pure §10 logic). Repositories in `server/src/repositories/` take the connection first, contain SQL only and map snake_case to camelCase.

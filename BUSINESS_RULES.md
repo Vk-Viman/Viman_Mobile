@@ -27,7 +27,7 @@ Below the line (never P&L): owner drawings (cash & goods), capital, transfers, o
 | `ezcash_collection` | telecom | commission only (from `ezcash_sales`) |
 | `provider_topup`, `wallet_topup` | telecom | none |
 | `purchase_payment`, `purchase_refund` | shop or telecom (by products) | none (stock only) |
-| `expense`, `expense_refund` | **shop or telecom only** (never icecream; category never electricity) | that segment's operating expenses |
+| `expense`, `expense_refund` (reserved, never written: an expense void reverses the `expense` entry) | **shop or telecom only** (never icecream; category never electricity) | that segment's operating expenses |
 | `icecream_sale` | icecream | revenue (from `icecream_days`) |
 | `icecream_materials_payment`, `icecream_electricity_payment` | icecream (any fund) | none — settlements of the daily allocations; **never an expense in any segment** |
 | `icecream_other_cost` | icecream (any fund) | from the Profit Fund → other ice-cream expense; from the Cost/Electricity fund → settlement (category never electricity) |
@@ -40,24 +40,24 @@ Non-cash: goods drawing (no P&L) · stock loss / stocktake (Stock adjustments li
 
 ## 3. Inventory & weighted-average costing
 - Per product cache: `qty_on_hand`, `stock_value_cents`; average = value / qty (display only).
-- **Inflows** add qty and exact value: opening stock (no cash, no purchase), purchase (line total), resalable sales return (original snapshot cost), stocktake gain (current average × qty via `mulDivRound(value, gainQty, qty)`; if qty = 0, an entered unit cost).
+- **Inflows** add qty and exact value: opening stock (no cash, no purchase), purchase (line total), resalable sales return (original snapshot cost), stocktake gain (current average via `mulDivRound(value, gainQty, qty)` when the product has both quantity and value; if its quantity is 0 or its value is 0, an entered unit cost — see C10).
 - **Outflows** remove `mulDivRound(value, q, qty)`; when `q = qty` remove the entire remaining value: sale, personal use, loss, stocktake loss.
 - **Purchase return / void (R4):** remove min(purchase-cost value, pool value); if qty reaches 0 with residual value, sweep it via a value-only `adjustment` movement → Stock adjustments line. Return date ≥ original purchase date (R-RD, §12).
 - Every change writes exactly one `stock_movements` row in the same transaction as the cache update. Invariant: SUM(movements) = cache, per product.
-- **Blocked:** any outflow > qty on hand ("Only 3 in stock — record a purchase or stocktake"); negative quantities/prices.
+- **Blocked:** any outflow > qty on hand (message: "Not enough stock: 3 on hand, 5 needed."); negative quantities/prices.
 - **Pack size:** units = packs × pack_size; value = exact line total (no per-unit rounding loss).
 - **COGS snapshot:** stored on the sale line; later purchases never change it.
 - Costing follows posting order; reports follow business date (R7).
 
 ## 4. Sales, returns, voids
-- POS cart is split by product book into one sale per book (shop / telecom). Lines processed in id order; qty checked per product across the whole cart (R13).
+- POS cart is split by product book into one sale per book (shop / telecom). Lines processed in cart order; qty checked per product across the whole cart (R13).
 - **Voids (R1):** business document gets `status='void'`; ledger tables get **new reversal rows** (never edited/deleted). Balances sum all ledger rows; P&L reads only `status='posted'` business rows and never reads reversal rows. Void is blocked if returns exist.
 - **Returns (R5, R7):** qty capped at sold − already returned; partial return value = `mulDivRound(lineTotal, q, lineQty)` except the final unit takes the remainder. Resalable → stock back at original snapshot cost. Damaged → revenue and COGS reversed + one `stock_losses` row at original cost (no restock, loss counted once). Returns hit the period of the return date. Return date ≥ original sale date (R-RD, §12).
 - **Warnings, not blocks (R13):** price < min price, price < snapshot cost, service cost > price, qty > 0 with value 0, negative cash-book balance.
 
 ## 5. Telecom
-- Reload (daily total per provider: Dialog, Mobitel, Hutch, Airtel): `commission = mulDivRound(sales, rateBp, 10000) + extra` (extra ≥ 0, default 0; rate snapshotted, default 600 bp). Telecom cash +sales. No reload stock, float, or balances.
-- EZCash (under Dialog): `commission = mulDivRound(billTotal, rateBp, 10000)`, default 80 bp. Telecom cash +billTotal; wallet top-ups are cash-outs.
+- Reload (one or more entries per provider per day; providers Dialog, Mobitel, Hutch, Airtel): `commission = mulDivRound(sales, rateBp, 10000) + extra` (extra ≥ 0, default 0; rate snapshotted, default 600 bp; each provider may carry its own rate, otherwise the shop default applies). Telecom cash +sales. No reload stock, float, or balances.
+- EZCash (under Dialog): `commission = mulDivRound(billTotal, rateBp, 10000)`, default 80 bp; it uses the shop-wide EZCash rate and does not depend on the provider's reload rate. Telecom cash +billTotal; wallet top-ups are cash-outs.
 - Scratch cards: stock products in the Scratch Cards category (book `telecom`); normal stock sale with COGS.
 - Example: 50,000 @ 600 bp + 50 extra → 3,050 commission; 50,000 @ 80 bp → 400.
 - R14: Telecom cash book will not reconcile to Telecom profit (no float tracking — owner decision).
@@ -187,7 +187,8 @@ Sales 100,000 split Cost 60,000 / Electricity 10,000 / Profit 30,000 · opening 
 
 ## 11. Stock losses & adjustments (R2, R3)
 - Losses (damaged / lost / expired / other) remove at average cost; book = product's book.
-- P&L line per segment: **Stock adjustments (net) = losses + stocktake losses + residual sweeps − stocktake gains**.
+- P&L line per segment: **Stock adjustments (net) = losses + stocktake losses + residual sweeps − stocktake gains − purchase refund gain**.
+- **Purchase refund gain (R4, made explicit in Phase 14 — it was the documented intent, found missing from the reports by the independent QA pass):** when a purchase is returned or voided, the supplier refunds the full purchase value in cash but only min(purchase-cost value, pool value) leaves stock. When the pool value is lower than the purchase cost (the average cost fell after a cheaper purchase) the difference `refund − value removed from stock` is a real gain; it is shown as its own line ("Purchase refund above stock value removed") and reduces Stock adjustments (net), so segment profit reconciles with cash + stock. A return puts the gain in the return's period; a void puts it in the original purchase's period (R1). The residual sweep (pool value above cost) and this gain cannot both arise on one line.
 
 ## 12. Audit & integrity
 - Audit log for every edit, void, reopen, restore, settings change (before/after JSON).
@@ -196,7 +197,7 @@ Sales 100,000 split Cost 60,000 / Electricity 10,000 / Profit 30,000 · opening 
 - **No future-dated transactions (owner rule R-FD, approved 2026-11-10):** no financial record may have a business date later than **today in Asia/Colombo** (UTC+5:30, no daylight saving). **Backdated entries remain allowed** (and are audited as above). The **server** enforces this on every financial write — the frontend date pickers (max = today) are a convenience only — and rejects with the message **"Future-dated transactions are not allowed. Please select today or an earlier date."** (error code `FUTURE_DATE_NOT_ALLOWED`; also enforced by database triggers, DATABASE_SCHEMA). It applies to every record that carries a business date: sales and sales returns, purchases and purchase returns, opening stock, stocktakes, stock losses, goods drawings, reload and EZCash entries, provider/wallet top-ups, printing supplies, expenses, cash-book opening balances, capital, cash drawings, transfers, cash counts and over/short, daily closings, Ice Cream days (incl. the replacement row of a void-and-replace), payments and fund moves, opening-stock import rows, and the ledger rows derived from all of these (stock movements, cash entries, Ice Cream fund entries). Reversal rows keep the original business date (never later than today), so voids are unaffected; reopening a closed day carries no business date and is unaffected. The posting timestamp is always set by the server and can never be supplied or edited by the user. **Scope:** R-FD applies to transactions only — report and query dates (`asOf`, `from`, `to`) are never rejected; a date after today simply shows the same figures as today, because nothing can be dated later.
 - **Returns not dated before the original (owner rule R-RD, approved 2026-11-10):** a **sales return** may not have a business date earlier than its original sale's business date, and a **purchase return** may not have a business date earlier than its original purchase's business date. A return dated **on or after** the original date is allowed — including backdated returns (audited as backdated) — and R-FD still caps it at today, so the valid window is *original date ≤ return date ≤ today*. Enforced by the **server** and by **database triggers**; the message names the original date: **"The return date cannot be earlier than the original {type} date ({date}). Please select {date} or a later date (not after today)."** (error code `RETURN_BEFORE_ORIGINAL_DATE`). It applies to every return, full or partial, judged against the original document's business date (each partial return independently; partial returns may be in any order among themselves). Unchanged: partial-return quantities and values (R5, C5, C7), returns hit the period of their own date (R7), no return on a voided document and no void of a document that has returns (R1), closed days (R9), future dates (R-FD). A damaged sales return's stock-loss row uses the return's date, so it also satisfies the rule. A purchase-return residual sweep (R4) carries the return's business date; the sweep of a purchase void carries the voided purchase's business date; both are ≥ the original purchase date and ≤ today. Original sales and purchases can never have their business date changed after posting (correction = void-and-replace), so an existing return can never come to precede its original.
 - **Reversals:** a reversal row copies the **business date** of the row it reverses (so the correction lands in the same report period); its **posting timestamp** is the time of the void; the voided document's `voided_at` = that posting timestamp. The audit entry of the void records both.
-- **Audit columns:** from Phase 3 (the first financial records) every audit entry for a financial record carries `business_date` and `backdated` as columns (planned migration, see DATABASE_SCHEMA); non-financial entries (settings, backups) have `business_date` NULL.
+- **Audit columns:** from Phase 3 (the first financial records) every audit entry for a financial record carries `business_date` and `backdated` as columns (migration 004, see DATABASE_SCHEMA); non-financial entries (settings, backups) have `business_date` NULL.
 
 ## 13. Clarifications (Phase 1 Financial Logic review, accepted by orchestrator)
 These complete rules above; they introduce no new owner decisions.
@@ -218,6 +219,23 @@ These complete rules above; they introduce no new owner decisions.
   - **Profit uses the cost charged:** line gross profit = revenue − (automatic cost + extra cost). The extra is part of the cost of sales for the period, shown separately ("Cost: automatic Rs X + extra Rs Y").
   - **Returns and voids (C5/C6):** a return reverses the extra cost in proportion (the same exact-remainder split as revenue and automatic cost, the final return takes the remainder) together with the automatic cost; a void removes the whole sale including its extra. Resalable returns restore stock at the **automatic** snapshot cost only; a damaged return's stock-loss row is the automatic cost only (the extra is just reversed from cost of sales).
   - **Default:** if the cashier leaves the cost as filled in, the extra cost is 0 and behaviour is exactly as before (§3, §4). Supersedes the earlier "COGS is always automatic" wording for the *sale screen only*; costing of stock itself remains automatic.
+
+## 13A. Implementation decisions awaiting owner confirmation (recorded 2026-11-12, Phase 14 review)
+These behaviours were chosen by implementers to complete approved rules. **None changes a formula, and none is an approved business rule until the owner confirms it.** They are listed so nothing is hidden.
+1. **One opening balance per cash book** (per fund for Ice Cream) may be posted at a time; a wrong one is voided and entered again. Later money from the owner is capital (§8, §9).
+2. **Expected cash** for a count or closing = the book's ledger balance of all entries with business date on or before the count date (backdated entries made later change what the same count would have expected). **A day may be closed without a count.** Reopening needs a reason of at least 3 characters.
+3. **Per-provider reload rate** (§5) may differ from the shop default; EZCash always uses the shop-wide rate. An inactive provider blocks reload sales and provider top-ups but not EZCash.
+4. **Stocktake:** a draft holds counted quantities; completion compares against the live quantity at completion time.
+5. **Opening stock:** inactive and service products refused; a batch cannot be voided once its stock was sold or used; an Excel file already imported cannot be imported again while its batch is posted; all-or-nothing import (max 5 MB, 5,000 rows).
+6. **Inactive products** cannot be sold or purchased; stock losses may still be recorded for them.
+7. **Service-kind products cannot be sold in the POS.** "Other services" are sold through a print service type (for example CUSTOM) in the Printing screen. Print sales may change the unit price per job; the cost is always the type's standard cost (the C13 editable cost applies to POS stock sales only).
+8. **Damaged-return losses** cannot be voided on their own, and a sale with returns cannot be voided, so a return is permanent.
+9. **A purchase line may have value 0** (no cash entry is written for a total of 0).
+10. **No limit on how far back** a business date may go (only R-FD caps the future); backdated entries are flagged and listed in the Backdated report.
+11. **Backups:** one at every start-up and on request (newest 30 kept); a safety copy before every restore (newest 10 kept); the dashboard marks the newest backup "stale" after 48 hours.
+12. **Dashboard and report definitions:** "Sales" = Shop goods + print revenue net of returns; Telecom scratch-card revenue + reload commission + EZCash commission (collections are not sales); Ice Cream daily sales; Combined = sum (can be negative in a month with more returns than sales). Low stock = active stock product with reorder level above 0 and quantity at or below it. "Days not yet closed" = the 7 days before the dashboard date, from the book's first cash entry on. Valuation as of a past date = movements dated up to that date (a backdated loss can make an earlier date negative; the report warns).
+13. **Limits:** amounts up to 10^12 cents, quantities 10^6–10^9, 100 lines per sale or purchase, 1,000 per manual opening-stock entry, 500 per stocktake, 200 Ice Cream item lines, 3,660 days per report.
+14. **Negative-cash warning (R13)** is returned by every write that removes cash from a book and by voids of cash-in records (including voids of sales, print sales, reload and EZCash sales — added in Phase 14).
 
 ## 14. Owner decisions log (Phase 1 final review)
 

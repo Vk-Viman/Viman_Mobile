@@ -9,7 +9,7 @@
  *  - A damaged sales return writes exactly one loss row (section 4); it is included once here and shown in its own
  *    column ("from returns"), never added again anywhere.
  *  - The memo block `stockAdjustmentsNetCents` is the section 11 line: posted losses (manual and damaged-return) +
- *    stocktake losses + residual sweeps - stocktake gains. Stocktake and sweep parts come from the stock MOVEMENTS by
+ *    stocktake losses + residual sweeps - stocktake gains - purchase refund gain (R4, same as the P&L). Stocktake and sweep parts come from the stock MOVEMENTS by
  *    business date including the reversal rows of voids (so voided stocktakes net out): `stocktake_loss`, `stocktake_gain`
  *    and the value-only `adjustment` (R4 sweep), each as -sum(value_delta). Losses come from `stock_losses` (not from
  *    `loss` movements) because a damaged sales return writes a loss row but NO stock movement. Personal use is not an adjustment (section 9).
@@ -34,6 +34,8 @@ export interface LossFigures {
   fromReturnsCents: number;
   /** Memo (section 11): stocktake losses, stocktake gains, residual sweeps and the net stock-adjustments line, from movements. */
   stocktakeLossCents: number; stocktakeGainCents: number; sweepCents: number; stockAdjustmentsNetCents: number;
+  /** R4: purchase refund (return / void) above the stock value removed - a gain; it reduces `stockAdjustmentsNetCents` (same figure as the P&L). */
+  purchaseRefundGainCents: number;
 }
 
 /** Breakdown line over the whole range. */
@@ -54,7 +56,7 @@ export interface LossesReport {
 
 const zero = (): LossFigures => ({
   lossCount: 0, qty: 0, costCents: 0, damagedCents: 0, lostCents: 0, expiredCents: 0, otherCents: 0, fromReturnsCents: 0,
-  stocktakeLossCents: 0, stocktakeGainCents: 0, sweepCents: 0, stockAdjustmentsNetCents: 0,
+  stocktakeLossCents: 0, stocktakeGainCents: 0, sweepCents: 0, stockAdjustmentsNetCents: 0, purchaseRefundGainCents: 0,
 });
 
 /** Stock losses report for [from, to]. */
@@ -94,8 +96,25 @@ export function stockLossesReport(conn: DatabaseSync, q: LossesQuery): LossesRep
     f.stocktakeLossCents = num(r.st_loss); f.stocktakeGainCents = num(r.st_gain); f.sweepCents = num(r.sweep);
   }
 
-  // Section 11 line: posted losses (manual AND damaged-return, which writes no stock movement) + stocktake losses + sweeps - gains.
-  for (const f of byLabel.values()) f.stockAdjustmentsNetCents = f.costCents + f.stocktakeLossCents + f.sweepCents - f.stocktakeGainCents;
+  // R4 purchase refund gain (same definition as fin-queries.ts adjustmentsByPeriod): refunds of returns (return date) + totals of voided
+  // purchases (original date) - value removed by the purchase_return / purchase_void movements (the residual sweep is NOT in that value).
+  const pBook = q.book !== undefined ? ' AND pu.book = ?' : '';
+  const gainRows: Array<[string, string, SQLInputValue[]]> = [
+    [periodKeySql('r.business_date', q.granularity),
+      `SELECT KEY AS k, SUM(r.refund_cents) AS v FROM purchase_returns r JOIN purchases pu ON pu.id = r.purchase_id
+        WHERE r.business_date BETWEEN ? AND ?${pBook} GROUP BY k`, base],
+    [periodKeySql('pu.business_date', q.granularity),
+      `SELECT KEY AS k, SUM(pu.total_cents) AS v FROM purchases pu WHERE pu.status = 'void' AND pu.business_date BETWEEN ? AND ?${pBook} GROUP BY k`, base],
+    [mKey,
+      `SELECT KEY AS k, SUM(m.value_delta_cents) AS v FROM stock_movements m JOIN products p ON p.id = m.product_id
+        WHERE m.type IN ('purchase_return', 'purchase_void') AND m.business_date BETWEEN ? AND ?${mBook} GROUP BY k`, base],
+  ];
+  for (const [kSql, sql, params] of gainRows) {
+    for (const r of conn.prepare(sql.replace('KEY', kSql)).all(...params) as unknown as SqlRow[]) at(String(r.k)).purchaseRefundGainCents += num(r.v);
+  }
+
+  // Section 11 line: posted losses (manual AND damaged-return, which writes no stock movement) + stocktake losses + sweeps - gains - refund gain.
+  for (const f of byLabel.values()) f.stockAdjustmentsNetCents = f.costCents + f.stocktakeLossCents + f.sweepCents - f.stocktakeGainCents - f.purchaseRefundGainCents;
   const rows = fillPeriods(q.from, q.to, q.granularity, byLabel, zero);
   const totals = zero();
   for (const r of rows) addInto(totals, r);
@@ -123,13 +142,14 @@ export function stockLossesReport(conn: DatabaseSync, q: LossesQuery): LossesRep
       { key: 'expiredCents', label: 'Expired', kind: 'money' }, { key: 'otherCents', label: 'Other', kind: 'money' },
       { key: 'fromReturnsCents', label: 'From damaged returns', kind: 'money' }, { key: 'stocktakeLossCents', label: 'Stocktake losses', kind: 'money' },
       { key: 'stocktakeGainCents', label: 'Stocktake gains', kind: 'money' }, { key: 'sweepCents', label: 'Residual sweeps', kind: 'money' },
+      { key: 'purchaseRefundGainCents', label: 'Purchase refund above stock value removed (R4)', kind: 'money' },
       { key: 'stockAdjustmentsNetCents', label: 'Stock adjustments (net)', kind: 'money' },
     ],
     rows: rows.map((r) => ({ period: r.period.label, ...numericOnly(r) })),
     totals: { period: 'Total', ...numericOnly(totals) },
     notes: [
       'Losses are valued at the average cost when recorded. Voided losses are not counted.',
-      'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains (voids net out). Personal-use goods drawings are not adjustments.',
+      'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain (voids net out). Personal-use goods drawings are not adjustments.',
     ],
   };
   const extraTables: ReportTable[] = [

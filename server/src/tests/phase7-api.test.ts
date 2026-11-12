@@ -414,7 +414,7 @@ describe('POST /print-sales/:id/void', () => {
     expect(shopBalance(s)).toBe(4500);
     const r = await psVoid(s, created.id, '  wrong qty  ');
     expect(r.status).toBe(200);
-    expect(Object.keys(r.body)).toEqual(['item']);
+    expect(Object.keys(r.body)).toEqual(['item', 'warnings']);
     expect(r.body.item).toMatchObject({ id: created.id, status: 'void', voidReason: 'wrong qty', revenueCents: 4500, cogsCents: 1950, businessDate: d });
     expect(r.body.item.voidedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     const cash = cashRows(s.ctx);

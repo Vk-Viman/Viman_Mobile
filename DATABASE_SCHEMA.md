@@ -1,204 +1,192 @@
 # Database Schema
 
-SQLite (`node:sqlite`), WAL, `foreign_keys=ON`, `synchronous=FULL` (every commit flushed to disk — protects the last entries against power cuts). Money = INTEGER cents, rates = INTEGER basis points, quantities = INTEGER selling units, business dates = TEXT `YYYY-MM-DD`, timestamps = TEXT ISO-8601 UTC (`strftime('%Y-%m-%dT%H:%M:%fZ','now')`). Every FK column gets an index. Enumerations are enforced with `CHECK`. Ledger tables (`cash_entries`, `stock_movements`, `audit_logs`) are **append-only** (rule R1).
+As built: migrations `001`–`014` (schema version **14**). This file is the single reference for the tables, columns, constraints and triggers that exist today. The migration files in `server/src/db/migrations/` are the source of truth; `server/src/db/migrations/README.md` explains why each file exists. If this file and a migration disagree, the migration wins and this file is wrong.
 
-**Business date vs posting time (all financial tables, Phase 2+):** every business document and ledger row has `business_date TEXT NOT NULL` (owner-entered, `YYYY-MM-DD`, drives reports) **and** `posted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))` (server-set, immutable, drives posting order). In the planned tables below, `created_at` and ledger `at` **are** this `posted_at` column (to be named `posted_at` in the migrations). Indexes on `(business_date)` and `(posted_at)` for every financial table. A row is *backdated* when `business_date` < the Colombo date of `posted_at`; its audit row stores both. A **reversal** row copies the business_date of the row it reverses; its posted_at is the void time; the voided document's `voided_at` = that posted_at.
+SQLite (`node:sqlite`), WAL mode, `foreign_keys=ON`, `busy_timeout=5000`, `synchronous=FULL` (every commit is flushed to disk, which protects the last entries against power cuts). 40 tables.
 
-**No future business dates (R-FD, approved):** enforced first by the service layer (`business_date <= todayBusinessDate()` in Asia/Colombo → `FUTURE_DATE_NOT_ALLOWED`). As defence in depth every financial table gets, in its own migration, `BEFORE INSERT` and `BEFORE UPDATE OF business_date` triggers: `WHEN NEW.business_date > date('now', '+330 minutes') BEGIN SELECT RAISE(ABORT, 'FUTURE_DATE_NOT_ALLOWED'); END` (Colombo = UTC+5:30, no DST). A `CHECK` cannot be used because SQLite forbids non-deterministic `date('now')` in CHECK constraints. `posted_at` is server-set by its DEFAULT and never written by application code from user input; every non-ledger financial table also gets `BEFORE UPDATE OF posted_at … RAISE(ABORT, 'POSTED_AT_IMMUTABLE')` (append-only ledgers already forbid any update, so they need only the INSERT date trigger). Every financial table also gets the deterministic format check `CHECK (business_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(business_date) = business_date)`, so malformed or impossible dates (e.g. `2026-02-31`) can never be stored or mis-compared. The service error handler maps a SQLite `ABORT` with `FUTURE_DATE_NOT_ALLOWED` to `400` with the standard message. `audit_logs.business_date` is a copy of an already-validated date and gets no trigger.
+## Conventions
 
-**Returns not dated before the original (R-RD, approved):** enforced first by the service (`RETURN_BEFORE_ORIGINAL_DATE`), and in the database by triggers on the return headers — a CHECK cannot read another table, a trigger can: `sales_returns` `BEFORE INSERT` and `BEFORE UPDATE OF business_date, sale_id`: `WHEN NEW.business_date < (SELECT business_date FROM sales WHERE id = NEW.sale_id) BEGIN SELECT RAISE(ABORT, 'RETURN_BEFORE_ORIGINAL_DATE'); END`; the same on `purchase_returns` against `purchases.business_date` via `purchase_id`. The service maps the ABORT to `400` with the standard message. Return items inherit the header's date; the service also verifies every `sales_return_items.sale_item_id` belongs to the return's `sale_id` (and likewise for purchase return items) so the date comparison is always against the right original. Original documents' `business_date` is never edited after posting (void-and-replace only), so a later change cannot invalidate an existing return. **Defence in depth:** (a) `sales` and `purchases` get `BEFORE UPDATE OF business_date WHEN NEW.business_date <> OLD.business_date BEGIN SELECT RAISE(ABORT, 'BUSINESS_DATE_IMMUTABLE'); END` (correction = void-and-replace); (b) `sales_returns.sale_id` and `purchase_returns.purchase_id` are `NOT NULL`; (c) `sales_return_items` gets `BEFORE INSERT … WHEN (SELECT sale_id FROM sale_items WHERE id = NEW.sale_item_id) IS NOT (SELECT sale_id FROM sales_returns WHERE id = NEW.sales_return_id) BEGIN SELECT RAISE(ABORT, 'RETURN_ITEM_MISMATCH'); END`, and the same for `purchase_return_items` against `purchase_items`/`purchase_returns`; (d) BEFORE triggers run before CHECK constraints, so the service validates the date format (JSON schema + `isIsoDate`) before any write — the R-FD/R-RD triggers rely on well-formed `YYYY-MM-DD` text.
+- **Money** = INTEGER cents. **Rates** = INTEGER basis points (600 = 6.00%). **Quantities** = INTEGER selling units. **Business dates** = TEXT `YYYY-MM-DD`. **Timestamps** = TEXT ISO-8601 UTC, written by SQLite as `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.
+- **Booleans** are INTEGER 0/1 with `CHECK (x IN (0,1))`. Enumerations are `CHECK (x IN (...))`.
+- **Book** = `shop` | `telecom` | `icecream`. **Fund** (Ice Cream only) = `cost` | `electricity` | `profit`. **Status** of a business record = `posted` | `void`.
+- **Business date vs posting time (BUSINESS_RULES §12).** Every financial table has `business_date` (owner-entered, drives reports) and `posted_at` (server default, drives posting order). A row is *backdated* when `business_date` is earlier than the Colombo date of `posted_at`. `posted_at` is never supplied by application code from user input; a `POSTED_AT_IMMUTABLE` trigger protects it on the non-ledger tables (ledger tables forbid every update anyway).
+- **Strict date CHECK.** Every business-date column has `CHECK (business_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(business_date) = business_date)`. Migrations 010 and later also add `date(x) IS NOT NULL`. In SQLite a CHECK that evaluates to NULL passes, so `2020-13-01` slipped through the older form; migration 012 closed the gap with `INVALID_BUSINESS_DATE` triggers (see below).
+- **R-FD (no future dates).** `BEFORE INSERT` trigger `trg_<table>_future_date` aborts with `FUTURE_DATE_NOT_ALLOWED` when `business_date > date('now','+330 minutes')` (Colombo is UTC+5:30, no daylight saving). A CHECK cannot be used because SQLite forbids non-deterministic `date('now')` there. The services check first and give the friendly message; the trigger is the backstop. Tables with this trigger: `stock_movements`, `cash_entries`, `purchases`, `purchase_returns`, `stocktakes`, `stock_losses`, `owner_drawings`, `sales`, `sales_returns`, `reload_sales`, `ezcash_sales`, `telecom_topups`, `print_sales`, `printing_supplies`, `opening_stock_batches`, `expenses`, `capital_entries`, `cash_counts`, `daily_closings`, `icecream_fund_entries`, `cash_transfers`, `icecream_days`, `icecream_payments`, `icecream_fund_moves`. `import_runs` has only the `INVALID_BUSINESS_DATE` trigger (the import service applies R-FD to the date itself).
+- **Immutability.** Business documents (the tables with `status`) can only change from `posted` to `void` (`status`, `voided_at`, `void_reason` together); nothing else changes and a void never goes back. Each has `trg_<table>_business_date_immutable` (`BUSINESS_DATE_IMMUTABLE`), `trg_<table>_posted_at_immutable` (`POSTED_AT_IMMUTABLE`) and a `trg_<table>_immutable` trigger (`<TABLE>_IMMUTABLE`). A correction is a void plus a new record.
+- **Append-only ledgers and return tables** reject every UPDATE and DELETE (`trg_<table>_no_update` / `_no_delete`): `audit_logs`, `stock_movements`, `cash_entries`, `icecream_fund_entries`, `purchase_returns`, `purchase_return_items`, `sales_returns`, `sales_return_items`, `icecream_sales`, `import_runs`, `import_issues`.
+- **No hard deletes.** Every other business table has a `BEFORE DELETE` trigger that aborts with `RECORD_DELETE_FORBIDDEN` (migration 007 for the older tables; the newer tables carry their own). Not covered on purpose: `stocktake_items` (a draft sheet is rewritten by delete + insert; completed and void sheets are frozen by triggers) and the catalogue tables (`categories`, `suppliers`, `products`: retired with `active = 0`).
+- **Idempotency.** Business tables have `client_ref TEXT NOT NULL UNIQUE` (`sales` has `UNIQUE (client_ref, book)`). The browser sends a fresh reference per form submission.
+- **Caps.** Amounts in the newer tables are limited to 10^12 cents (`1000000000000`); quantities to 10^6 where noted.
+- **Every FK column has an index.**
+- **Trigger aborts reach the API only if a service maps them.** Each write service maps the aborts it expects (`FUTURE_DATE_NOT_ALLOWED`, `DAY_CLOSED`, `INVALID_BUSINESS_DATE`, `RETURN_BEFORE_ORIGINAL_DATE`, `STOCK_VALUE_WITHOUT_QTY`, ...) to the API errors in API_CONTRACTS.md. An abort nobody maps (for example `PRODUCT_BOOK_MISMATCH` if a service missed its own check) surfaces as `500 INTERNAL_ERROR`.
 
-Migrations live in `server/src/db/migrations/NNN_name.sql`. Each phase adds its own migration; applied migrations are never edited.
+## Migrations
 
-| Migration | Phase | Status |
+| File | Phase | Adds |
 |---|---|---|
-| `001_foundation.sql` | 1 | **implemented in Phase 1** |
-| `002_audit_append_only.sql` | 1 (final review) | **implemented** — triggers block UPDATE/DELETE on `audit_logs` |
-| `003_catalog.sql` | 2 | **implemented** — categories (+12 seeded defaults), products, suppliers + triggers |
-| `004_purchases_inventory.sql` | 3 | **implemented** — stock_movements (+cache trigger), cash_entries, purchases, purchase_items, purchase_returns(+items), audit_logs columns |
-| `005_stocktake_losses_drawings.sql` | 4 | **implemented** — stocktakes(+items), stock_losses, owner_drawings (goods only in Phase 4) |
-| `006_sales_returns.sql` | 5 | **implemented** — sales, sale_items, sales_returns(+items), stock_losses.sales_return_id |
-| `008_sale_extra_cost.sql` | 5 amendment | sale_items/sales_returns/sales_return_items extra-cost columns (BUSINESS_RULES C13) |
-| `007_no_hard_deletes.sql` | 5 | BEFORE DELETE triggers (`RECORD_DELETE_FORBIDDEN`) on purchases(+items), stocktakes, stock_losses, owner_drawings, sales(+items) — BUSINESS_RULES §12 |
+| `001_foundation.sql` | 1 | `schema_migrations`, `settings`, `audit_logs` |
+| `002_audit_append_only.sql` | 1 | triggers that make `audit_logs` append-only |
+| `003_catalog.sql` | 2 | `categories` (12 seeded), `suppliers`, `products` + triggers |
+| `004_purchases_inventory.sql` | 3 | `stock_movements` (+ cache trigger), `cash_entries`, `purchases`, `purchase_items`, `purchase_returns`, `purchase_return_items`; `audit_logs.business_date`, `audit_logs.backdated` |
+| `005_stocktake_losses_drawings.sql` | 4 | `stocktakes`, `stocktake_items`, `stock_losses`, `owner_drawings` |
+| `006_sales_returns.sql` | 5 | `sales`, `sale_items`, `sales_returns`, `sales_return_items`; `stock_losses.sales_return_id` |
+| `007_no_hard_deletes.sql` | 5 | `BEFORE DELETE` guards on purchases, purchase_items, stocktakes, stock_losses, owner_drawings, sales, sale_items |
+| `008_sale_extra_cost.sql` | 5 amendment | extra-cost columns (BUSINESS_RULES C13) |
+| `009_telecom.sql` | 6 | `reload_providers` (4 seeded), `reload_sales`, `ezcash_sales`, `telecom_topups` |
+| `010_printing.sql` | 7 | `print_service_types` (7 seeded), `print_sales`, `printing_supplies` |
+| `011_opening_stock_import.sql` | 13 | `opening_stock_batches`, `import_runs`, `import_issues` |
+| `012_cashbooks_expenses.sql` | 8 | `expenses`, `capital_entries`, `cash_counts`, `daily_closings`, `icecream_fund_entries`; `DAY_CLOSED` trigger on `cash_entries`; `INVALID_BUSINESS_DATE` triggers on 14 older tables |
+| `013_cash_transfers.sql` | 9 | `cash_transfers`; transfer-leg trigger on `cash_entries`; cash-drawing amount trigger |
+| `014_icecream.sql` | 10 | `icecream_days`, `icecream_sales`, `icecream_payments`, `icecream_fund_moves` + day-closed triggers |
+
+Migrations are applied in order, each in its own transaction together with its `schema_migrations` row. The checksum is SHA-256 of the file text with CRLF normalised to LF. A changed applied file stops startup (`MIGRATION_CHECKSUM_MISMATCH`); a database newer than the program stops startup (`MIGRATION_DB_TOO_NEW`). The restore check requires only the Phase 1 tables (`schema_migrations`, `settings`, `audit_logs`); an older backup is upgraded by `migrate()` after the swap.
 
 ---
 
-## Phase 1 — `001_foundation.sql` (exact)
+## Table reference
 
-```sql
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version     INTEGER PRIMARY KEY,           -- NNN from the file name
-  name        TEXT    NOT NULL,              -- file name, e.g. 001_foundation.sql
-  checksum    TEXT    NOT NULL,              -- sha256 hex of LF-normalised file text
-  applied_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
+Columns are listed as `name TYPE` with constraints that matter. `id` is `INTEGER PRIMARY KEY AUTOINCREMENT` everywhere except `schema_migrations` and `settings`. Unless stated, every business table also has `business_date`, `posted_at` and the conventions above.
 
-CREATE TABLE settings (
-  key         TEXT PRIMARY KEY CHECK (key IN ('shop','rates','printDefaults')),
-  value_json  TEXT NOT NULL CHECK (json_valid(value_json)),
-  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
+### Bookkeeping and audit
 
-CREATE TABLE audit_logs (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  entity      TEXT    NOT NULL,              -- e.g. 'settings', 'backup', 'sale'
-  entity_id   TEXT,                          -- id or key of the entity (text to allow keys)
-  action      TEXT    NOT NULL,              -- e.g. 'update', 'create', 'void', 'restore', 'reopen'
-  before_json TEXT CHECK (before_json IS NULL OR json_valid(before_json)),
-  after_json  TEXT CHECK (after_json  IS NULL OR json_valid(after_json)),
-  note        TEXT
-);
-CREATE INDEX idx_audit_logs_entity ON audit_logs(entity, entity_id);
-CREATE INDEX idx_audit_logs_at     ON audit_logs(at);
-```
-Notes:
-- The migration runner itself creates `schema_migrations` (IF NOT EXISTS) before reading it, so `001` must also use `IF NOT EXISTS` for that table.
-- `settings.key` is restricted by CHECK; later phases that add keys must rebuild the CHECK via a new migration (SQLite cannot ALTER a CHECK — use table-rebuild pattern) **or** future keys go into new tables. Default values are applied by the service when a row is absent (no seed rows required).
-- Audit rows are never updated or deleted — enforced by triggers `audit_logs_no_update` / `audit_logs_no_delete` (migration 002, `RAISE(ABORT, 'audit_logs is append-only')`).
+**`schema_migrations`** `version INTEGER PK`, `name`, `checksum`, `applied_at`.
+
+**`settings`** `key TEXT PK CHECK IN ('shop','rates','printDefaults')`, `value_json TEXT CHECK json_valid`, `updated_at`. No seed rows: when a row is missing the service uses its built-in default (below). Adding a key needs a table rebuild because SQLite cannot alter a CHECK.
+
+Defaults applied by `settings.service.ts`:
+- `shop`: name `Viman Mobile`, address `162 Padiliyathuduwa Rd, Hunupitiya, Wattala`, phone `+94 71 900 4044`, email `viman.mobile.shop@gmail.com`.
+- `rates`: `reloadCommissionBp = 600`, `ezcashCommissionBp = 80`.
+- `printDefaults`: the same seven types as `print_service_types` below. **Nothing reads this list at run time** (see "Printing defaults" under `print_service_types`).
+
+**`audit_logs`** `at`, `entity`, `entity_id TEXT`, `action`, `before_json`, `after_json` (NULL or valid JSON), `note`, `business_date TEXT` (NULL for non-financial entries), `backdated INTEGER NOT NULL DEFAULT 0`. Append-only (`audit_logs_no_update`, `audit_logs_no_delete`). Indexes `(entity, entity_id)`, `at`, `business_date`.
+Entities and actions written today: `settings` update; `backup` restore; `category`, `product`, `supplier` create/update; `purchase` create/void; `purchase_return` create; `stocktake` create/update/complete/void; `stock_loss` create/void; `drawing` create/void; `sale` create/void; `sale_return` create; `reload_provider` update; `reload_sale`, `ezcash_sale`, `telecom_topup` create/void; `print_service_type` create/update; `print_sale`, `printing_supply` create/void; `opening_stock_batch` create/void; `expense` create/void; `capital_entry` create/void; `cash_count` create/void; `daily_closing` close/reopen; `cash_transfer` create/void; `icecream_day` create/replace/void; `icecream_payment` create/void; `icecream_fund_move` create/void. Manual and start-up backups are not audited.
+
+### Catalogue (not financial: no `client_ref`, no business date)
+
+**`categories`** `name TEXT UNIQUE COLLATE NOCASE`, `book IN ('shop','telecom')`, `is_default`, `active`, `created_at`, `updated_at`. Seeded (all `is_default = 1`): shop — Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other; telecom — Scratch Cards (12 rows). Triggers: `DEFAULT_CATEGORY_LOCKED` (name/book of a default row cannot change), `CATEGORY_HAS_PRODUCTS` (book cannot change while products exist).
+
+**`suppliers`** `name UNIQUE COLLATE NOCASE`, `phone`, `notes`, `active`, timestamps.
+
+**`products`** `code TEXT UNIQUE COLLATE NOCASE NULL`, `name UNIQUE COLLATE NOCASE`, `description`, `category_id FK`, `kind IN ('stock','service')`, `book IN ('shop','telecom')`, `sell_price_cents`, `min_price_cents`, `reorder_level`, `active`, `qty_on_hand`, `stock_value_cents` (the stock cache), timestamps. CHECKs: `qty_on_hand >= 0 AND stock_value_cents >= 0`; a service holds no stock; `0 <= min_price <= sell_price`; `reorder_level >= 0`; non-empty name; `code` NULL or non-empty. Triggers: `PRODUCT_BOOK_MISMATCH` (book must equal the category's book, on insert and on category/book update), `PRODUCT_KIND_IMMUTABLE` (kind and book never change), `STOCK_VALUE_WITHOUT_QTY` (quantity 0 with value left is refused). The cache columns are written only by `trg_stock_movements_cache`.
+
+### Inventory and purchases
+
+**`stock_movements`** (append-only) `product_id FK`, `business_date`, `posted_at`, `type IN ('opening','purchase','purchase_return','purchase_void','sale','sale_return','sale_void','personal_use','loss','stocktake_gain','stocktake_loss','adjustment')`, `qty_delta`, `value_delta_cents`, `unit_cost_cents NULL`, `ref_table NULL`, `ref_id NULL`, `reason`. `CHECK (qty_delta <> 0 OR value_delta_cents <> 0)`. `trg_stock_movements_cache` (AFTER INSERT) adds the deltas to `products.qty_on_hand` / `stock_value_cents`, so the cache can only change through a movement. Indexes `(product_id, posted_at)`, `business_date`, `(ref_table, ref_id)`. Invariant (tested, checked by `GET /inventory/reconciliation`): per product, Σ movements = cache.
+`ref_table` values written: `purchases`, `purchase_returns`, `stocktakes`, `stock_losses`, `owner_drawings`, `sales`, `sales_returns`, `opening_stock_batches`. Movement types written: `purchase`, `purchase_return`, `purchase_void`, `sale`, `sale_return`, `personal_use`, `loss`, `stocktake_gain`, `stocktake_loss`, `opening`, `adjustment` (value-only residual sweep, R4). A void writes exact negations with the **same type** as the original (BUSINESS_RULES C6); `sale_void` is allowed by the CHECK but the sale void path reuses `sale`.
+
+**`purchases`** `business_date`, `posted_at`, `supplier_id FK NULL`, `bill_no TEXT DEFAULT ''`, `book IN ('shop','telecom')`, `total_cents >= 0`, `status`, `client_ref UNIQUE`, `notes`, `voided_at`, `void_reason`. Triggers: R-FD, `PURCHASE_IMMUTABLE`, date/posted-at immutability, no delete.
+
+**`purchase_items`** `purchase_id FK`, `product_id FK`, `packs >= 1`, `pack_size >= 1`, `units`, `line_total_cents >= 0`, `returned_units DEFAULT 0`. `CHECK (units = packs * pack_size)`, `CHECK (returned_units BETWEEN 0 AND units)`. `PURCHASE_ITEM_IMMUTABLE`: only `returned_units` may change, never downwards. No delete.
+
+**`purchase_returns`** (append-only) `purchase_id FK`, `business_date`, `posted_at`, `refund_cents >= 0`, `note`, `client_ref UNIQUE`. Triggers: R-FD; `RETURN_BEFORE_ORIGINAL_DATE` (R-RD: return date earlier than the purchase's date); `PURCHASE_VOID` (no return against a void purchase).
+
+**`purchase_return_items`** (append-only) `purchase_return_id FK`, `purchase_item_id FK`, `units >= 1`, `value_cents >= 0`. `RETURN_ITEM_MISMATCH`: the line must belong to the same purchase as the return.
+
+### Stocktake, losses, drawings
+
+**`stocktakes`** `business_date`, `posted_at`, `book IN ('shop','telecom')`, `status IN ('draft','completed','void') DEFAULT 'draft'`, `notes`, `client_ref UNIQUE`, `completed_at`, `voided_at`, `void_reason`. CHECKs: void needs `voided_at` and `void_reason`; completed needs `completed_at`. `STOCKTAKE_TRANSITION`: only draft→completed, draft→void, completed→void; `notes` change only while draft.
+
+**`stocktake_items`** `stocktake_id FK`, `product_id FK`, `counted_qty >= 0`, `expected_qty NULL`, `difference_qty NULL`, `value_delta_cents NULL`, `gain_unit_cost_cents NULL >= 0`, `UNIQUE (stocktake_id, product_id)`. Triggers: `STOCKTAKE_NOT_DRAFT` (insert, delete and update only while the parent is a draft), `PRODUCT_NOT_IN_BOOK` (stock product of the stocktake's book).
+
+**`stock_losses`** `business_date`, `posted_at`, `product_id FK`, `book IN ('shop','telecom')`, `qty >= 1`, `cost_cents >= 0`, `reason IN ('damaged','lost','expired','other')`, `note`, `source IN ('manual','damaged_return') DEFAULT 'manual'`, `status`, `client_ref UNIQUE`, `voided_at`, `void_reason`, `sales_return_id FK NULL` (added by 006). Triggers: `STOCK_LOSS_IMMUTABLE`; `DAMAGED_RETURN_LINK` (`source = 'damaged_return'` iff `sales_return_id` set), `DAMAGED_RETURN_DATE` (same business date as the return), `DAMAGED_RETURN_REASON` (reason `damaged`); `sales_return_id` frozen after insert.
+
+**`owner_drawings`** `business_date`, `posted_at`, `book IN ('shop','telecom','icecream')`, `fund NULL`, `kind IN ('cash','goods')`, `amount_cents >= 0`, `product_id FK NULL`, `qty NULL`, `note`, `status`, `client_ref UNIQUE`, `voided_at`, `void_reason`. CHECKs: `(book = 'icecream') = (fund IS NOT NULL)`; no goods drawing in the Ice Cream book; goods needs a product and `qty >= 1`; cash has neither. `OWNER_DRAWING_IMMUTABLE`; `CASH_DRAWING_AMOUNT` (013): a cash drawing must be 1..10^12 cents (a goods drawing of 0 is allowed).
+
+### Sales
+
+**`sales`** `business_date`, `posted_at`, `book IN ('shop','telecom')`, `total_cents >= 0`, `status`, `notes`, `client_ref`, `voided_at`, `void_reason`, `UNIQUE (client_ref, book)`. `SALE_IMMUTABLE`.
+
+**`sale_items`** `sale_id FK`, `line_no >= 1`, `line_type IN ('goods','card')`, `product_id FK`, `description`, `qty >= 1`, `unit_price_cents >= 0`, `unit_cost_cents >= 0` (automatic unit cost, display snapshot), `revenue_cents`, `cogs_cents` (stock value removed, frozen), `returned_qty DEFAULT 0`, `extra_cost_cents NOT NULL DEFAULT 0 CHECK (>= 0)` (008). `UNIQUE (sale_id, line_no)`, `CHECK (revenue_cents = qty * unit_price_cents)`, `CHECK (returned_qty BETWEEN 0 AND qty)`. `SALE_ITEM_IMMUTABLE` (only `returned_qty`, upwards), `SALE_ITEM_BOOK_MISMATCH` (goods ⇔ shop sale, card ⇔ telecom sale, product book = sale book). Print and other services are **not** sale lines: printing has its own table.
+
+**`sales_returns`** (append-only) `sale_id FK`, `business_date`, `posted_at`, `refund_cents`, `cogs_reversed_cents`, `extra_cost_reversed_cents NOT NULL DEFAULT 0` (008), `note`, `client_ref UNIQUE`. Triggers: R-FD, `RETURN_BEFORE_ORIGINAL_DATE`, `SALE_VOID`.
+
+**`sales_return_items`** (append-only) `sales_return_id FK`, `sale_item_id FK`, `qty >= 1`, `resalable IN (0,1)`, `revenue_cents`, `cogs_cents`, `extra_cost_cents NOT NULL DEFAULT 0` (008). Triggers: `RETURN_ITEM_MISMATCH`, `RETURN_EXCEEDS_SOLD` (qty ≤ sold − returned at insert time), `RETURN_EXCEEDS_EXTRA_COST` (cumulative reversed extra ≤ the line's extra).
+
+### Telecom
+
+**`reload_providers`** `name TEXT UNIQUE NOT NULL`, `commission_bp NULL CHECK (NULL or 0..10000)` (NULL = use `settings.rates.reloadCommissionBp`), `active`, `sort_order`. Seeded: Dialog (1), Mobitel (2), Hutch (3), Airtel (4), all with `commission_bp` NULL. Triggers: `PROVIDER_NAME_IMMUTABLE`, no delete. Editable: rate and active.
+
+**`reload_sales`** `business_date`, `posted_at`, `provider_id FK`, `sales_cents` (1..10^12), `commission_bp` (0..10000, snapshot), `extra_cents` (0..10^12, default 0), `commission_cents >= 0`, `status`, `voided_at`, `void_reason`, `notes`, `client_ref UNIQUE`. `COMMISSION_MISMATCH` (before insert): `commission_cents` must equal `(sales_cents * commission_bp + 5000) / 10000 + extra_cents` in integer arithmetic (half-up, the same as half away from zero for non-negative numbers). Indexes `business_date`, `(provider_id, business_date)`.
+
+**`ezcash_sales`** `business_date`, `posted_at`, `provider_id FK`, `bill_total_cents` (1..10^12), `commission_bp`, `commission_cents`, status columns, `notes`, `client_ref UNIQUE`. `EZCASH_PROVIDER_NOT_DIALOG` (provider must be the one named `Dialog`), `COMMISSION_MISMATCH` (same formula without extra).
+
+**`telecom_topups`** `business_date`, `posted_at`, `kind IN ('provider_topup','wallet_topup')`, `provider_id FK NULL`, `amount_cents` (1..10^12), status columns, `notes`, `client_ref UNIQUE`. CHECK: provider top-up needs a provider; wallet top-up has none.
+
+### Printing
+
+**`print_service_types`** `code TEXT UNIQUE` (2–20 chars, `A-Z 0-9 _`), `name`, `price_cents` (0..10^9), `cost_cents` (0..10^9), `active`, `sort_order`. Seeded (code, name, price, standard cost, in cents):
+
+| Code | Name | Price | Cost |
+|---|---|---|---|
+| `BW_1S` | B/W print – one side | 1500 | 650 |
+| `BW_2S` | B/W print – double side | 2500 | 900 |
+| `CLR_1S` | Colour print – one side | 2000 | 650 |
+| `CLR_2S` | Colour print – double side | 3000 | 900 |
+| `PC_BW_1S` | Photocopy B/W – one side | 1000 | 650 |
+| `PC_BW_2S` | Photocopy B/W – double side | 1500 | 900 |
+| `CUSTOM` | Custom image print | 4000 | 650 |
+
+Triggers: `PRINT_TYPE_CODE_IMMUTABLE`, no delete. Editable: name, price, cost, active.
+*Printing defaults:* this table is the operational source of truth. It is seeded once by the migration. The Settings → Printing defaults tab shows `settings.printDefaults` read-only; no service reads it, so it never changes any print service type or price.
+
+**`print_sales`** `business_date`, `posted_at`, `service_type_id FK`, `description` (snapshot of the type name), `qty` (1..10^6), `unit_price_cents` (0..10^9), `unit_cost_cents` (0..10^9, snapshot of the type's standard cost), `revenue_cents`, `cogs_cents`, status columns, `notes`, `client_ref UNIQUE`. `CHECK (revenue_cents = qty * unit_price_cents AND cogs_cents = qty * unit_cost_cents)`. `SERVICE_TYPE_INACTIVE` trigger refuses a sale on an inactive type.
+
+**`printing_supplies`** `business_date`, `posted_at`, `amount_cents` (1..10^12), `description`, status columns, `client_ref UNIQUE`. (No `notes` column.)
+
+### Opening stock
+
+**`opening_stock_batches`** `business_date`, `posted_at`, `source IN ('manual','excel')`, `file_name NULL` (required iff excel), `row_count >= 0`, `total_value_cents >= 0`, `status`, `voided_at`, `void_reason`, `notes`, `client_ref UNIQUE`. There is no lines table: the lines of a batch are its `opening` stock movements (`ref_table = 'opening_stock_batches'`, `ref_id` = batch id). No cash entry, no purchase, no P&L.
+
+**`import_runs`** (append-only) `kind = 'opening_stock'`, `file_name`, `file_sha256` (64 chars), `business_date`, `mode IN ('preview','commit')`, `status IN ('previewed','committed','rejected')`, `rows_total`, `rows_ok`, `rows_failed` (`ok + failed = total`), `batch_id FK NULL`, `created_at`. CHECK ties mode, status and `batch_id` together (a committed run has a batch and no failed rows).
+
+**`import_issues`** (append-only) `import_run_id FK`, `row_no`, `column_name`, `code`, `message`.
+
+### Cash ledger and cash books
+
+**`cash_entries`** (append-only) `book`, `business_date`, `posted_at`, `type`, `amount_cents` (signed: in +, out −), `fund NULL`, `ref_table NULL`, `ref_id NULL`, `transfer_id NULL`, `reverses_entry_id FK NULL`, `note NULL`. Balance of a book = Σ `amount_cents`. `type` is one of 24 values (BUSINESS_RULES §2): `sale_goods`, `sale_service`, `sale_refund`, `card_sale`, `card_refund`, `reload_collection`, `ezcash_collection`, `provider_topup`, `wallet_topup`, `purchase_payment`, `purchase_refund`, `expense`, `expense_refund`, `icecream_sale`, `icecream_materials_payment`, `icecream_electricity_payment`, `icecream_other_cost`, `printing_supplies`, `cash_adjustment`, `opening_balance`, `capital`, `drawing_cash`, `transfer_out`, `transfer_in`.
+CHECKs: `(book = 'icecream') = (fund IS NOT NULL)`; `type NOT LIKE 'icecream_%' OR book = 'icecream'`; purchase payment/refund only in shop or telecom.
+Triggers: R-FD; `INVALID_BUSINESS_DATE`; `DAY_CLOSED` (insert refused when a closed `daily_closings` row exists for that book and date); `TRANSFER_LEG_MISMATCH` (013: `transfer_out`/`transfer_in` must carry an existing `transfer_id` and sit in the right book and fund; no other type may carry a `transfer_id`).
+A reversal is a new row with negated amount, the same type, `reverses_entry_id` set and the original's business date. Every type is written by some service except `expense_refund`, which is **never written** (an expense void reverses the `expense` entry instead). For example `sale_service` and `printing_supplies` come from print sales and printing supplies, and `cash_adjustment` from cash counts and daily closings.
+
+**`expenses`** `business_date`, `posted_at`, `book IN ('shop','telecom')`, `category IN ('water','rent','internet','transport','repairs','cleaning_supplies','packaging','stationery','other')`, `amount_cents` (1..10^12), `description`, `notes`, status columns, `client_ref UNIQUE`. No `electricity` value can be stored (BUSINESS_RULES E2).
+
+**`capital_entries`** `business_date`, `posted_at`, `book`, `fund NULL`, `kind IN ('opening_balance','capital')`, `amount_cents` (1..10^12), `note`, status columns, `client_ref UNIQUE`. `CHECK ((book = 'icecream') = (fund IS NOT NULL))`. Unique index `ux_capital_opening_balance` on `(book, COALESCE(fund,''))` where `kind = 'opening_balance' AND status = 'posted'`: at most one posted opening balance per book (per fund for Ice Cream); a wrong one is voided and entered again.
+
+**`cash_counts`** `book`, `fund NULL`, `business_date`, `posted_at`, `expected_cents`, `counted_cents` (0..10^12), `difference_cents` (CHECK = counted − expected), `note`, status columns, `cash_entry_id FK NULL`, `client_ref UNIQUE`. CHECKs: a non-zero difference needs a non-empty note; `fund` is set iff the book is `icecream` and the difference is not zero. `expected_cents` is the ledger balance of the book as of the end of the business date.
+
+**`daily_closings`** `book`, `business_date`, `posted_at`, `closed_at`, `reopened_at NULL`, `reopen_reason NULL`, `expected_cents`, `counted_cents NULL`, `over_short_cents DEFAULT 0`, `cash_count_id FK NULL`, `UNIQUE (book, business_date)`. A day is **closed** iff `reopened_at IS NULL OR closed_at > reopened_at`. `DAILY_CLOSING_IMMUTABLE` allows only a reopen (set `reopened_at`, reason of at least 3 characters) or a re-close (new `closed_at` later than `reopened_at`, with the figures). No delete. (No `client_ref`, no status.)
+
+### Cash transfers
+
+**`cash_transfers`** `business_date`, `posted_at`, `from_book`, `to_book`, `from_fund NULL`, `to_fund NULL`, `amount_cents` (1..10^12), `note`, status columns, `client_ref UNIQUE`. CHECKs: `from_book <> to_book`; `from_fund` set iff `from_book = 'icecream'`; `to_fund` set iff `to_book = 'icecream'`. Cash: `transfer_out` (−) in the from book and `transfer_in` (+) in the to book, both with `cash_entries.transfer_id` = the transfer id. A void adds the opposite pair (4 rows, net zero).
+
+### Ice Cream
+
+**`icecream_days`** `business_date`, `posted_at`, `sales_cents`, `cost_alloc_cents`, `electricity_alloc_cents` (each 0..10^12), `profit_share_cents` (server-computed), `negative_confirmed`, `notes`, status columns, `client_ref UNIQUE`. CHECKs: `cost_alloc + electricity_alloc + profit_share = sales`; `profit_share >= 0 OR negative_confirmed = 1`. Unique index `ux_icecream_days_posted` on `business_date` where `status = 'posted'` (one posted entry per date; a replacement voids the old row first). Triggers: `DAY_CLOSED` on insert and on void.
+
+**`icecream_sales`** (append-only) optional item lines of a day: `icecream_day_id FK`, `item_name`, `qty` (1..10^6), `unit_price_cents`, `line_total_cents` (CHECK = qty × price). The service requires the lines to sum to `sales_cents`.
+
+**`icecream_payments`** `business_date`, `posted_at`, `kind IN ('materials','electricity_bill','other_cost')`, `fund`, `amount_cents` (1..10^12), `category NULL`, `description`, status columns, `client_ref UNIQUE`. `CHECK (category IS NULL OR lower(trim(category)) <> 'electricity')` (BUSINESS_RULES E4). `DAY_CLOSED` trigger on insert. Cash types: `materials` → `icecream_materials_payment`, `electricity_bill` → `icecream_electricity_payment`, `other_cost` → `icecream_other_cost`.
+
+**`icecream_fund_moves`** `business_date`, `posted_at`, `from_fund`, `to_fund` (`from <> to`), `amount_cents` (1..10^12), `profit_effect_cents`, `charge_relabel_cents DEFAULT 0`, `cash_only_cents DEFAULT 0`, `note`, status columns, `client_ref UNIQUE`. A three-way CHECK fixes the sign rules: into Profit (release) `profit_effect + cash_only = amount`, `relabel = 0`; out of Profit (re-allocation) `profit_effect = −amount`; Cost ↔ Electricity `profit_effect = 0`, `cash_only = 0`, `0 <= relabel <= amount`. `DAY_CLOSED` triggers on insert and on void (a fund move writes no cash entry, so the `cash_entries` trigger alone would not protect it).
+
+**`icecream_fund_entries`** (append-only fund ledger) `business_date`, `posted_at`, `fund`, `amount_cents <> 0` (signed), `kind IN ('daily_allocation','payment','fund_move','drawing','transfer_out','transfer_in','opening_balance','capital','cash_over_short','reversal')`, `ref_table`, `ref_id`, `reverses_entry_id FK NULL` (`kind = 'reversal'` iff set), `note`. Fund balance = Σ per fund. Invariant (tested; reported by `GET /cashbooks` as `ICECREAM_FUNDS_MISMATCH` if broken): Σ fund entries of all funds = Σ `cash_entries` of the `icecream` book. Only fund moves write a fund entry without a cash entry. A daily entry writes one `icecream_sale` cash entry plus one matching `daily_allocation` fund entry per non-zero fund share.
+
+Not stored: Charged/Settled/Unspent per line, profit-eligible limits, D4 splits, the D2 guard and excess cost. They are derived from posted rows in posting order (`posted_at`, then `id`) every time (BUSINESS_RULES §10.4).
 
 ---
 
-## Planned tables (later phases; final DDL written in the phase's migration and reviewed by the orchestrator)
+## Cross-table rules and invariants
 
-**Book** = `TEXT CHECK (book IN ('shop','telecom','icecream'))`. **Status** for business documents = `TEXT CHECK (status IN ('posted','void'))`.
-
-### Phase 2 — catalog (migration `003_catalog.sql`)
-- `categories(id, name UNIQUE COLLATE NOCASE, book shop|telecom, is_default, active, created_at, updated_at)` — triggers: `BEFORE UPDATE OF name, book` on `is_default = 1` aborts `DEFAULT_CATEGORY_LOCKED`; `BEFORE UPDATE OF book` aborts `CATEGORY_HAS_PRODUCTS` when products exist — 12 defaults: Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other (shop) and Scratch Cards (telecom).
-- `products(id, code UNIQUE NULL, name UNIQUE (case-insensitive), description, category_id FK, kind stock|service, book shop|telecom, sell_price_cents, min_price_cents, reorder_level, active, qty_on_hand, stock_value_cents, created_at, updated_at)` with `CHECK (qty_on_hand >= 0 AND stock_value_cents >= 0)`, `CHECK (kind = 'stock' OR (qty_on_hand = 0 AND stock_value_cents = 0))`, `CHECK (sell_price_cents >= 0 AND min_price_cents >= 0 AND min_price_cents <= sell_price_cents AND reorder_level >= 0)`, `CHECK (code IS NULL OR length(code) > 0)`; `name` and `code` use `COLLATE NOCASE` unique constraints. Triggers: `BEFORE INSERT` / `BEFORE UPDATE OF category_id, book` abort `PRODUCT_BOOK_MISMATCH` unless `book` = the category's book; `BEFORE UPDATE OF kind, book` aborts `PRODUCT_KIND_IMMUTABLE` (kind and book never change after creation). Indexes: `category_id`, `(active, name)`.
-- `suppliers(id, name UNIQUE COLLATE NOCASE, phone, notes, active, created_at, updated_at)`. The 12 default categories are seeded by the migration (`is_default = 1`). Restore validation keeps requiring only the Phase 1 tables (`REQUIRED_TABLES`), because later tables arrive via `migrate()` after a restore.
-
-### Phase 3 — purchases, stock movements, cash ledger (migration `004_purchases_inventory.sql`, detail)
-Implements the planned tables below for Phase 3 (`stocktakes`, `stock_losses` stay Phase 4) plus the **cash ledger created early** (owner decision 2026-11-10). Common rules from the conventions above apply to every table here: `business_date` + `posted_at` (server default, immutable), strict date-format CHECK, R-FD `BEFORE INSERT` trigger (`FUTURE_DATE_NOT_ALLOWED`).
-
-- **`stock_movements`** (`id, product_id FK NOT NULL, business_date, posted_at, type CHECK IN (the 12 types), qty_delta, value_delta_cents, unit_cost_cents NULL, ref_table NULL, ref_id NULL, reason`) — `CHECK (qty_delta <> 0 OR value_delta_cents <> 0)`; **append-only** (`BEFORE UPDATE`/`BEFORE DELETE` abort `stock_movements is append-only`); index `(product_id, posted_at)`, `(business_date)`.
-- **Stock cache trigger:** `AFTER INSERT ON stock_movements` → `UPDATE products SET qty_on_hand = qty_on_hand + NEW.qty_delta, stock_value_cents = stock_value_cents + NEW.value_delta_cents WHERE id = NEW.product_id`. The Phase 2 CHECKs (qty ≥ 0, value ≥ 0, services hold no stock) abort any movement that would break them. Extra backstop: `BEFORE UPDATE OF qty_on_hand, stock_value_cents ON products WHEN NEW.qty_on_hand = 0 AND NEW.stock_value_cents <> 0` → abort `STOCK_VALUE_WITHOUT_QTY` (the R4 residual sweep is written *before* the removal).
-- **`cash_entries`** (`id, book CHECK IN ('shop','telecom','icecream'), business_date, posted_at, type CHECK IN (all 24 types in BUSINESS_RULES §2), amount_cents, fund NULL, ref_table NULL, ref_id NULL, transfer_id NULL, reverses_entry_id NULL FK, note NULL`) — `CHECK ((book = 'icecream') = (fund IS NOT NULL))`, `CHECK (type NOT LIKE 'icecream_%' OR book = 'icecream')`, `CHECK (type NOT IN ('purchase_payment','purchase_refund') OR book IN ('shop','telecom'))`; append-only triggers; indexes `(book, business_date)`, `(ref_table, ref_id)`. A reversal is a new row with the negated amount, the same type, `reverses_entry_id` set and the original's `business_date`. Phase 3 writes only `purchase_payment` / `purchase_refund`.
-- **`purchases`** (`id, business_date, posted_at, supplier_id FK NULL, bill_no TEXT NOT NULL DEFAULT '', book CHECK IN ('shop','telecom'), total_cents >= 0, status CHECK IN ('posted','void') DEFAULT 'posted', client_ref UNIQUE NOT NULL, notes DEFAULT '', voided_at NULL, void_reason NULL`) — `CHECK (status = 'posted' OR (voided_at IS NOT NULL AND void_reason IS NOT NULL))`. Triggers: `BUSINESS_DATE_IMMUTABLE`, `POSTED_AT_IMMUTABLE`, `PURCHASE_IMMUTABLE` (any change to supplier, bill_no, book, total, notes, client_ref aborts; only `status`/`voided_at`/`void_reason` may change, and only `posted → void`). Indexes `(business_date)`, `(supplier_id)`, `(book, business_date)`.
-- **`purchase_items`** (`id, purchase_id FK NOT NULL, product_id FK NOT NULL, packs >= 1, pack_size >= 1, units, line_total_cents >= 0, returned_units DEFAULT 0`) — `CHECK (units = packs * pack_size)`, `CHECK (returned_units BETWEEN 0 AND units)`; trigger `PURCHASE_ITEM_IMMUTABLE` (only `returned_units` may change, never decrease). Indexes `(purchase_id)`, `(product_id)`.
-- **`purchase_returns`** (`id, purchase_id FK NOT NULL, business_date, posted_at, refund_cents >= 0, note DEFAULT '', client_ref UNIQUE NOT NULL`) — R-RD triggers (`BEFORE INSERT`, `BEFORE UPDATE OF business_date, purchase_id`: `business_date < purchases.business_date` → abort `RETURN_BEFORE_ORIGINAL_DATE`); also abort `PURCHASE_VOID` on insert when the purchase is void. Append-only (no UPDATE/DELETE).
-- **`purchase_return_items`** (`id, purchase_return_id FK NOT NULL, purchase_item_id FK NOT NULL, units >= 1, value_cents >= 0`) — `BEFORE INSERT` trigger `RETURN_ITEM_MISMATCH` unless the item belongs to the return's purchase; append-only.
-- **`audit_logs`** (additive, `ALTER TABLE … ADD COLUMN`): `business_date TEXT NULL`, `backdated INTEGER NOT NULL DEFAULT 0`; index on `business_date`. The append-only triggers from migration 002 are untouched.
-- Restore validation (`REQUIRED_TABLES`) stays Phase 1 only.
-
-### Phase 4 — stocktakes, stock losses, owner drawings (migration `005_stocktake_losses_drawings.sql`, detail)
-Same common rules as Phase 3 (business date + immutable `posted_at`, strict date CHECK, R-FD `BEFORE INSERT` trigger, `BUSINESS_DATE_IMMUTABLE`, `POSTED_AT_IMMUTABLE`). `owner_drawings` is created now (planned for Phases 8/9) because personal-use stock must be recorded as an owner drawing in Phase 4; Phase 4 writes only `kind = 'goods'`.
-- **`stocktakes`** (`id, business_date, posted_at, book CHECK IN ('shop','telecom'), status CHECK IN ('draft','completed','void') DEFAULT 'draft', notes DEFAULT '', client_ref UNIQUE NOT NULL, completed_at NULL, voided_at NULL, void_reason NULL`) — `CHECK (status <> 'void' OR (voided_at IS NOT NULL AND void_reason IS NOT NULL))`, `CHECK (status <> 'completed' OR completed_at IS NOT NULL)`. Trigger `STOCKTAKE_TRANSITION`: only `draft → completed`, `draft → void`, `completed → void` are allowed; `notes` may change only while `draft`; `book`, `client_ref`, dates never change. Indexes `(business_date)`, `(book, status)`.
-- **`stocktake_items`** (`id, stocktake_id FK NOT NULL, product_id FK NOT NULL, counted_qty >= 0, expected_qty NULL, difference_qty NULL, value_delta_cents NULL, gain_unit_cost_cents NULL >= 0`) — `UNIQUE (stocktake_id, product_id)`; triggers: `INSERT`/`DELETE` and `UPDATE OF counted_qty, product_id, gain_unit_cost_cents` only while the parent is `draft` (`STOCKTAKE_NOT_DRAFT`); `UPDATE OF expected_qty, difference_qty, value_delta_cents` allowed only while the parent is `draft` (completion fills them before the status flips); product must be `kind = 'stock'` and of the stocktake's book (`PRODUCT_NOT_IN_BOOK`). Index `(product_id)`.
-- **`stock_losses`** (`id, business_date, posted_at, product_id FK NOT NULL, book CHECK IN ('shop','telecom'), qty >= 1, cost_cents >= 0, reason CHECK IN ('damaged','lost','expired','other'), note DEFAULT '', source CHECK IN ('manual','damaged_return') DEFAULT 'manual', status CHECK IN ('posted','void') DEFAULT 'posted', client_ref UNIQUE NOT NULL, voided_at NULL, void_reason NULL`) — `CHECK (status = 'posted' OR (voided_at IS NOT NULL AND void_reason IS NOT NULL))`; trigger `STOCK_LOSS_IMMUTABLE` (only `status`/`voided_at`/`void_reason`, only `posted → void`). `sales_return_id` is added by the Phase 5 migration (`ALTER TABLE … ADD COLUMN … REFERENCES sales_returns(id)`). Indexes `(business_date)`, `(product_id)`, `(book, reason)`.
-- **`owner_drawings`** (`id, business_date, posted_at, book CHECK IN ('shop','telecom','icecream'), fund NULL, kind CHECK IN ('cash','goods'), amount_cents >= 0, product_id FK NULL, qty NULL, note DEFAULT '', status CHECK IN ('posted','void') DEFAULT 'posted', client_ref UNIQUE NOT NULL, voided_at NULL, void_reason NULL`) — `CHECK ((book = 'icecream') = (fund IS NOT NULL))`, `CHECK (NOT (kind = 'goods' AND book = 'icecream'))`, `CHECK (kind <> 'goods' OR (product_id IS NOT NULL AND qty >= 1))`, `CHECK (kind <> 'cash' OR (product_id IS NULL AND qty IS NULL))`, void CHECK as above; same immutability trigger style (`OWNER_DRAWING_IMMUTABLE`). Indexes `(business_date)`, `(kind, status)`, `(product_id)`.
-- Stock cache, reversal rows and append-only rules are unchanged from Phase 3. Movement `ref_table` values used: `'stocktakes'`, `'stock_losses'`, `'owner_drawings'`. Restore validation (`REQUIRED_TABLES`) stays Phase 1 only.
-
-### Phase 3/4 — inventory (planned columns; Phase 3 detail above supersedes where it differs)
-- `stock_movements(id, product_id FK, at, business_date, type opening|purchase|purchase_return|purchase_void|sale|sale_return|sale_void|personal_use|loss|stocktake_gain|stocktake_loss|adjustment, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason)` — append-only; SUM(qty_delta)/SUM(value_delta_cents) per product must equal the product cache.
-- `purchases(id, business_date, supplier_id FK NULL, bill_no, book, total_cents, status, client_ref UNIQUE, notes, created_at, voided_at, void_reason)`.
-- `purchase_items(id, purchase_id FK, product_id FK, packs, pack_size, units, line_total_cents, returned_units)`.
-- `purchase_returns(id, purchase_id FK, business_date, refund_cents, client_ref UNIQUE, created_at)` + `purchase_return_items(id, purchase_return_id FK, purchase_item_id FK, units, value_cents)`. — R-RD trigger: `business_date >= purchases.business_date`.
-- `stocktakes(id, business_date, book, status draft|completed, notes, created_at, completed_at)` + `stocktake_items(id, stocktake_id FK, product_id FK, expected_qty, counted_qty, diff_qty, value_delta_cents)`.
-- `stock_losses(id, business_date, product_id FK, book, qty, cost_cents, reason damaged|lost|expired|other, note, source manual|damaged_return, status, client_ref UNIQUE, created_at)`. — plus `sales_return_id FK NULL`, required iff `source = 'damaged_return'`; the loss row copies the return's `business_date` in the same transaction (R-RD/R-FD satisfied by construction).
-
-### Phase 5 — sales, sales returns, damaged-return losses (migration `006_sales_returns.sql`, detail)
-Same common rules as Phases 3–4 (business date + immutable `posted_at`, strict date CHECK, R-FD `BEFORE INSERT` trigger, `BUSINESS_DATE_IMMUTABLE`, `POSTED_AT_IMMUTABLE`). **NULL-in-CHECK:** write explicit `IS NOT NULL` where a nullable column is compared.
-- **`sales`** (`id, business_date, posted_at, book CHECK IN ('shop','telecom'), total_cents >= 0, status CHECK IN ('posted','void') DEFAULT 'posted', notes DEFAULT '', client_ref NOT NULL, voided_at NULL, void_reason NULL`) — `UNIQUE (client_ref, book)` (one cart may create a shop sale and a telecom sale), void CHECK (void ⇒ `voided_at` and `void_reason` set). Trigger `SALE_IMMUTABLE`: only `status`/`voided_at`/`void_reason` may change, only `posted → void`. Indexes `(business_date)`, `(book, business_date)`.
-- **`sale_items`** (`id, sale_id FK NOT NULL, line_no >= 1, line_type CHECK IN ('goods','card') (print/service added in Phase 7), product_id FK NOT NULL, description NOT NULL, qty >= 1, unit_price_cents >= 0, unit_cost_cents >= 0, revenue_cents >= 0, cogs_cents >= 0, returned_qty DEFAULT 0`) — `CHECK (revenue_cents = qty * unit_price_cents)`, `CHECK (returned_qty BETWEEN 0 AND qty)`, `UNIQUE (sale_id, line_no)`; trigger `SALE_ITEM_IMMUTABLE` (only `returned_qty` may change, never decrease); trigger `SALE_ITEM_BOOK_MISMATCH` (line type goods ⇔ shop sale, card ⇔ telecom sale; product's book = the sale's book). Indexes `(sale_id)`, `(product_id)`.
-- **`sales_returns`** (`id, sale_id FK NOT NULL, business_date, posted_at, refund_cents >= 0, cogs_reversed_cents >= 0, note DEFAULT '', client_ref UNIQUE NOT NULL`) — **R-RD** triggers: `business_date < sales.business_date` → abort `RETURN_BEFORE_ORIGINAL_DATE`; insert on a void sale → abort `SALE_VOID`; append-only (no UPDATE/DELETE).
-- **`sales_return_items`** (`id, sales_return_id FK NOT NULL, sale_item_id FK NOT NULL, qty >= 1, resalable CHECK IN (0,1), revenue_cents >= 0, cogs_cents >= 0`) — trigger `RETURN_ITEM_MISMATCH` (the item must belong to the return's sale); a trigger rejects a return quantity above `sold − returned` (`RETURN_EXCEEDS_SOLD`) as a backstop; append-only.
-- **`stock_losses`** (additive): `ALTER TABLE stock_losses ADD COLUMN sales_return_id INTEGER REFERENCES sales_returns(id)`; triggers: `BEFORE INSERT` abort `DAMAGED_RETURN_LINK` unless `(source = 'damaged_return') = (sales_return_id IS NOT NULL)`; for `damaged_return` rows `business_date` must equal the return's (`DAMAGED_RETURN_DATE`) and `reason = 'damaged'`; index `(sales_return_id)`. Phase 4's `STOCK_LOSS_IMMUTABLE` is unchanged.
-- Movements used: `sale` (`ref_table = 'sales'`), `sale_return` (`ref_table = 'sales_returns'`). Cash types used: `sale_goods`, `card_sale`, `sale_refund`, `card_refund`. Restore validation (`REQUIRED_TABLES`) stays Phase 1 only.
-
-### Phase 5 amendment — extra cost on sales (migration `008_sale_extra_cost.sql`, detail)
-Implements BUSINESS_RULES C13. Additive only (`ALTER TABLE … ADD COLUMN`); migrations 001–007 are not edited.
-- `sale_items.extra_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (extra_cost_cents >= 0)` — cost charged above the automatic cost (`cogs_cents`). Trigger: `UPDATE OF extra_cost_cents` aborts `SALE_ITEM_IMMUTABLE` (the existing immutability trigger predates the column and must be extended by a new trigger).
-- `sales_return_items.extra_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (extra_cost_cents >= 0)` and `sales_returns.extra_cost_reversed_cents INTEGER NOT NULL DEFAULT 0 CHECK (extra_cost_reversed_cents >= 0)`. Backstop trigger on `sales_return_items` insert: the cumulative reversed extra of a line may not exceed the line's `extra_cost_cents` (`RETURN_EXCEEDS_EXTRA_COST`). Return tables stay append-only.
-- No change to stock movements, cash entries or the stock cache: the extra cost never touches stock or cash.
-- Migration table row: `008_sale_extra_cost.sql` — Phase 5 amendment.
-
-### Phase 5 — sales (planned columns; the Phase 5 detail above supersedes where it differs)
-- `sales(id, business_date, book, total_cents, status, client_ref, notes, created_at, voided_at, void_reason)` — `UNIQUE(client_ref, book)` (one cart may split into a shop sale and a telecom sale).
-- `sale_items(id, sale_id FK, line_no, line_type goods|card|print|service, product_id FK NULL, print_type_id FK NULL, description, qty, unit_price_cents, unit_cost_cents, revenue_cents, cogs_cents, returned_qty)`.
-- `sales_returns(id, sale_id FK, business_date, refund_cents, client_ref UNIQUE, created_at)` + `sales_return_items(id, sales_return_id FK, sale_item_id FK, qty, resalable, revenue_cents, cogs_cents)`. — R-RD trigger: `business_date >= sales.business_date`.
-
-### Wave 1 contracts (Phases 6, 7, 13) — migrations 009, 010, 011 (final detail; supersedes the Phase 6/7 sketch below where different)
-Common rules for every table below: money = integer cents, rates = basis points; `business_date TEXT` strict `YYYY-MM-DD` CHECK + immutable `BUSINESS_DATE_IMMUTABLE`; `posted_at TEXT NOT NULL` server default, immutable (`POSTED_AT_IMMUTABLE`); R-FD `BEFORE INSERT` trigger (`WHEN NEW.business_date > date('now','+330 minutes')` → `FUTURE_DATE_NOT_ALLOWED`); `status CHECK IN ('posted','void') DEFAULT 'posted'`, `voided_at`/`void_reason` (void ⇒ both set); business rows immutable except `posted → void` (`<TABLE>_IMMUTABLE` trigger); `BEFORE DELETE` guard (`RECORD_DELETE_FORBIDDEN`, as migration 007); `client_ref TEXT NOT NULL UNIQUE`; explicit `IS NOT NULL` in CHECKs that touch nullable columns. Each migration is one file and is never edited after release.
-
-**Migration `009_telecom.sql` (Phase 6)**
-- `reload_providers(id, name UNIQUE NOT NULL, commission_bp INTEGER NULL CHECK (commission_bp IS NULL OR commission_bp BETWEEN 0 AND 10000), active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)), sort_order)`. Seeded: Dialog, Mobitel, Hutch, Airtel. `commission_bp NULL` = "use the shop default rate" (`settings.rates.reloadCommissionBp`, default 600). Not a business document (editable: rate, active); rate changes never alter existing sales (snapshot).
-- `reload_sales(id, business_date, posted_at, provider_id FK NOT NULL, sales_cents > 0, commission_bp, extra_cents >= 0 DEFAULT 0, commission_cents >= 0, status, voided_at, void_reason, notes DEFAULT '', client_ref)` — `CHECK (commission_cents = base_commission + extra)` is enforced by the service (base = `mulDivRound(sales_cents, commission_bp, 10000)`); a DB trigger backstop recomputes: `commission_cents = (sales_cents*commission_bp + 5000)/10000 + extra_cents` (integers are non-negative so half-up equals half-away-from-zero) → abort `COMMISSION_MISMATCH`. One row per provider per entry (several rows per provider/day allowed; reports sum them).
-- `ezcash_sales(id, business_date, posted_at, provider_id FK NOT NULL, bill_total_cents > 0, commission_bp, commission_cents >= 0, status, …, client_ref)` — provider must be the provider named 'Dialog' (trigger `EZCASH_PROVIDER_NOT_DIALOG`); same recompute trigger without extra.
-- `telecom_topups(id, business_date, posted_at, kind CHECK IN ('provider_topup','wallet_topup'), provider_id FK NULL, amount_cents > 0, status, …, client_ref)` — `provider_topup` ⇒ provider required; `wallet_topup` ⇒ provider NULL (the EZCash wallet; explicit IS NOT NULL checks).
-- Cash ledger (existing `cash_entries`, book `telecom`, `fund NULL`): `reload_collection` +sales_cents (ref_table `reload_sales`), `ezcash_collection` +bill_total_cents (`ezcash_sales`), `provider_topup` −amount (`telecom_topups`), `wallet_topup` −amount (`telecom_topups`). A void writes the opposite-sign entry with `reverses_entry_id` (R1). Commission is **not** a cash entry (R14: no float tracking).
-- Indexes: `(business_date)`, `(provider_id, business_date)`.
-
-**Migration `010_printing.sql` (Phase 7)**
-- `print_service_types(id, code UNIQUE NOT NULL, name NOT NULL, price_cents >= 0, cost_cents >= 0, active DEFAULT 1, sort_order)`; seeded with the seven codes of `settings.printDefaults` DEFAULTS (BW_1S, BW_2S, CLR_1S, CLR_2S, PC_BW_1S, PC_BW_2S, CUSTOM) with the default prices/costs. Editable (price/cost/name/active); codes never change; never deleted (deactivate). The Settings → "Printing defaults" tab (Phase 1) keeps its own JSON; Phase 7's `print_service_types` is the operational source of truth (the settings JSON is only the initial seed — documented in the UI).
-- `print_sales(id, business_date, posted_at, service_type_id FK NOT NULL, description NOT NULL (snapshot of the type name), qty >= 1, unit_price_cents >= 0, unit_cost_cents >= 0, revenue_cents, cogs_cents, status, voided_at, void_reason, notes DEFAULT '', client_ref)` — `CHECK (revenue_cents = qty * unit_price_cents AND cogs_cents = qty * unit_cost_cents)`. **Standard cost is snapshotted** at sale time (R12). The unit price may be overridden per sale (e.g. CUSTOM); the cost snapshot is always the type's current standard cost (the C13 editable-cost rule applies to POS stock sales only). Cash: type `sale_service` +revenue (book **shop**), ref `print_sales`. Void → reversal entry.
-- `printing_supplies(id, business_date, posted_at, amount_cents > 0, description NOT NULL, status, …, client_ref)` — cash type `printing_supplies` −amount, book **shop**; **no P&L effect** (R12); reversal on void.
-- Printing variance (standard cost charged vs actual supplies spend) is a Phase 11 report; Phase 7 only exposes per-period totals via list endpoints.
-
-**Migration `011_opening_stock_import.sql` (Phase 13)**
-- `opening_stock_batches(id, business_date, posted_at, source CHECK IN ('manual','excel'), file_name NULL, row_count >= 0, total_value_cents >= 0, status, voided_at, void_reason, notes DEFAULT '', client_ref UNIQUE)` — one row per manual entry or per Excel import. Movements: existing `stock_movements.type = 'opening'` with `ref_table='opening_stock_batches'`, `ref_id` = batch id. **No cash entry, no purchase, no P&L** (§3). Void reverses the batch through the inventory engine's reversal path (R1); blocked with `OPENING_BATCH_IN_USE` (409) if any product from the batch no longer has the batch quantity on hand (stock already sold/used).
-- `import_runs(id, kind CHECK IN ('opening_stock'), file_name, file_sha256, business_date, mode CHECK IN ('preview','commit'), status CHECK IN ('previewed','committed','rejected'), rows_total, rows_ok, rows_failed, batch_id FK NULL, created_at)` and `import_issues(id, import_run_id FK, row_no, column_name, code, message)` — append-only audit of imports (UPDATE/DELETE blocked by trigger). Importing the same file bytes (same sha256) twice for committed runs is rejected `IMPORT_ALREADY_COMMITTED` (duplicate-submission guard) — in addition to `clientRef`.
-### Phase 6/7 — telecom & printing
-- `reload_providers(id, name UNIQUE, commission_bp, active)` — Dialog, Mobitel, Hutch, Airtel.
-- `reload_sales(id, business_date, provider_id FK, sales_cents, commission_bp, commission_cents, extra_cents, status, client_ref UNIQUE, notes, created_at)`.
-- `ezcash_sales(id, business_date, provider_id FK (Dialog), bill_total_cents, commission_bp, commission_cents, status, client_ref UNIQUE, notes, created_at)`.
-- `telecom_topups(id, business_date, kind provider_topup|wallet_topup, provider_id FK, amount_cents, status, client_ref UNIQUE, notes, created_at)`.
-- `print_service_types(id, code UNIQUE, name, price_cents, cost_cents, active)` — seeded from `settings.printDefaults`.
-- `printing_supplies(id, business_date, amount_cents, description, status, client_ref UNIQUE, created_at)`.
-
-### Wave 2 contract — Phase 8 (migration `012_cashbooks_expenses.sql`; final detail, supersedes the Phase 8/9 sketch below where different)
-Common rules as the Wave 1 contracts (business date + immutable `posted_at`, strict date CHECK written as `date(x) IS NOT NULL AND date(x) = x`, R-FD trigger, immutability except `posted → void`, delete guards, `client_ref UNIQUE`, explicit `IS NOT NULL`).
-- **`expenses`** (`id, business_date, posted_at, book CHECK IN ('shop','telecom'), category CHECK IN ('water','rent','internet','transport','repairs','cleaning_supplies','packaging','stationery','other'), amount_cents > 0, description NOT NULL, notes DEFAULT '', status, voided_at, void_reason, client_ref`). No `electricity` value can be stored (E2). Cash: type `expense` −amount in the expense's book; void → reversal entry (existing reversal convention).
-- **`capital_entries`** (`id, business_date, posted_at, book, fund NULL, kind CHECK IN ('opening_balance','capital'), amount_cents > 0, note, status, voided_at, void_reason, client_ref`) — `CHECK ((book = 'icecream') = (fund IS NOT NULL))`. Phase 8 writes only `kind = 'opening_balance'` (cash type `opening_balance` +amount); Phase 9 adds `capital`. Design guard: at most one **posted** opening balance per (book, fund) — partial unique index on `(book, COALESCE(fund,'')) WHERE kind='opening_balance' AND status='posted'` — corrected by voiding and re-entering. May be backdated (go-live date) and obeys R-FD.
-- **`cash_counts`** (`id, book, fund NULL, business_date, posted_at, expected_cents, counted_cents >= 0, difference_cents (= counted − expected, CHECK), note, status, voided_at, void_reason, cash_entry_id FK NULL, client_ref`). `expected_cents` = ledger balance of the book (Ice Cream: whole book) **as of the end of business_date** (Σ cash entries with business_date ≤ date). A non-zero difference requires a note (CHECK) and posts one `cash_adjustment` cash entry (signed difference, count's business date; Ice Cream: names the chosen `fund`, and writes a matching `icecream_fund_entries` row kind `cash_over_short`); zero difference posts no cash entry. `fund` required iff book = icecream **and** difference ≠ 0 (CHECK with explicit IS NOT NULL). Void → reversal of the adjustment.
-- **`daily_closings`** (`id, book, business_date, posted_at, closed_at, reopened_at NULL, reopen_reason NULL, expected_cents, counted_cents NULL, over_short_cents, cash_count_id FK NULL`, `UNIQUE(book, business_date)`). A day is **closed** iff `reopened_at IS NULL OR closed_at > reopened_at`. Allowed UPDATEs only: reopen (set `reopened_at`, `reopen_reason`) and re-close (set `closed_at` > `reopened_at`, `expected/counted/over_short/cash_count_id`); every other change aborts `DAILY_CLOSING_IMMUTABLE`; no DELETE. Closing a date later than today is blocked (R-FD).
-- **`icecream_fund_entries`** exactly as the Phase 10 sketch below (append-only, fund balance = Σ per fund) but **created here**, with kinds `daily_allocation|payment|fund_move|drawing|transfer_out|transfer_in|opening_balance|capital|cash_over_short|reversal`. Invariant: Σ fund entries = Σ Ice Cream `cash_entries` (Ice Cream cash entries written in Phase 8: opening balance, cash over/short; later phases add the rest). `fund_move` and `daily_allocation` rows are the only ones without a cash entry. A DB trigger on `cash_entries` insert for book icecream is **not** used (the service writes both rows in one transaction); the reconciliation is a tested invariant and an `reconcileIceCream` helper.
-- **DAY_CLOSED backstop:** `BEFORE INSERT ON cash_entries` trigger aborts `DAY_CLOSED` when a **closed** `daily_closings` row exists for (NEW.book, NEW.business_date). The close operation posts its own over/short adjustment **before** the closing row is marked closed, so it is unaffected. The service layer (see API) is the primary check with the friendly message; the trigger is the safety net.
-- **Date-check follow-up (Phase 7 finding):** migrations 003–006 compare `date(x) = x` without `IS NOT NULL`, so `2020-13-01` passes the CHECK. Migration 012 adds `BEFORE INSERT` triggers `INVALID_BUSINESS_DATE` (abort when `date(NEW.business_date) IS NULL`) on every business-date table created in migrations 003–011 that lacks the strict form (agent lists them by reading the migrations/`sqlite_master`).
-- Migration number 012; migrations 001–011 are not edited.
-
-### Wave 3 contracts — Phases 9 and 10 (migrations 013 and 014)
-Both phases reuse the Phase 8 infrastructure and must **not** modify it: `services/cash-posting.ts` (`postCash` / `reverseCash`: writes the cash entry plus, for Ice Cream, its `icecream_fund_entries` row, and their reversals), `services/day-closing.ts` (`assertDayOpen`), `services/cash-warnings.ts`, `repositories/icecream-funds.repo.ts`, `cashbook-ledger`. If either needs a change there, STOP and report. Common record rules as Wave 1/2 (business date + immutable `posted_at`, strict date CHECK `date(x) IS NOT NULL AND date(x) = x`, R-FD trigger, immutable except `posted → void`, delete guards, `client_ref UNIQUE`, void ⇒ `voided_at` + `void_reason`).
-**Migration `013_cash_transfers.sql` (Phase 9)** — only `cash_transfers` as in the Phase 8/9 sketch (`id, business_date, posted_at, from_book, to_book, from_fund NULL, to_fund NULL, amount_cents > 0, note, status, voided_at, void_reason, client_ref`; `CHECK (from_book <> to_book)`; `from_fund IS NOT NULL` iff `from_book = 'icecream'`, `to_fund IS NOT NULL` iff `to_book = 'icecream'`; explicit IS NOT NULL checks). Cash: `transfer_out` −amount (from book/fund) and `transfer_in` +amount (to book/fund) with a shared `cash_entries.transfer_id` = the transfer id, one transaction; Ice Cream sides also write `icecream_fund_entries` (kinds `transfer_out` / `transfer_in`). Void = reversal of both (R1). `owner_drawings` (kind `cash`, schema already exists since migration 005) and `capital_entries` (kind `capital`, created in 012) need **no** schema change: Phase 9 enables `kind = 'cash'` in the drawings service (cash type `drawing_cash` −amount; Ice Cream names a fund; fund entry kind `drawing`; `amount_cents > 0` enforced by the service and by a new trigger on cash drawings if feasible without editing 005) and writes capital entries (cash type `capital` +amount; Ice Cream fund entry kind `capital`; never profit-eligible).
-**Migration `014_icecream.sql` (Phase 10)** — `icecream_days`, `icecream_sales`, `icecream_payments`, `icecream_fund_moves` exactly as the "Phase 10 — ice cream" section below (columns, CHECKs including `cost_alloc + electricity_alloc + profit_share = sales`, `ux_icecream_days_posted` partial unique index, electricity-category CHECK, move sign/split CHECKs), plus the common rules and `INVALID`-proof date CHECKs. Cash entries written by Phase 10: `icecream_sale` (one per non-zero fund share of a daily entry), `icecream_materials_payment`, `icecream_electricity_payment`, `icecream_other_cost` (types already allowed since migration 004); fund ledger kinds `daily_allocation` (non-cash allocation rows; the cash is the `icecream_sale` entries — see below), `payment`, `fund_move` (two rows, no cash entry), `reversal`. **Fund-ledger consistency rule for daily entries:** a daily entry of S/C/E writes cash `icecream_sale` entries Cost +C, Electricity +E, Profit +(S−C−E) (each skipped when 0), and the matching fund-ledger rows are written by `postCash` (kind `daily_allocation`), so Σ fund entries = Σ Ice Cream cash entries always holds. Fund balances, Charged/Settled/Unspent per line, profit-eligible limits, D4 splits, D2 guards, excess cost are **derived** from posted rows and ordered by `posted_at`/id (never stored as running totals).
-
-### Phase 8/9 — money
-**Electricity rule (P-2, approved):** enforced in the schema, not only in the API.
-- `expenses(id, business_date, book, category, amount_cents, description, notes, status, client_ref UNIQUE, created_at)`
-  - `CHECK (book IN ('shop','telecom'))` — Ice Cream never uses `expenses`.
-  - `CHECK (category IN ('water','rent','internet','transport','repairs','cleaning_supplies','packaging','stationery','other'))` — **no `electricity` value exists** (E2).
-- `cash_entries(id, book, business_date, at, type, amount_cents (signed), fund NULL, ref_table, ref_id, transfer_id NULL, reverses_entry_id NULL, note)` — append-only ledger (UPDATE/DELETE blocked by trigger, like `audit_logs`); balance = SUM(amount_cents) per book.
-  - `fund` ∈ `cost|electricity|profit`, `CHECK ((book = 'icecream') = (fund IS NOT NULL))` — every Ice Cream cash movement names its fund; other books never do (BUSINESS_RULES §10.2).
-  - `CHECK (type NOT LIKE 'icecream_%' OR book = 'icecream')` — Ice Cream entry types only in the Ice Cream book.
-- `cash_entries` itself is **created early, in Phase 3 (migration 004)**, with the `fund` column and constraints below; Phase 8 adds the other entry types' writers, opening balances and screens. `icecream_fund_entries` (defined under Phase 10 below) is **created in the Phase 8 migration** before any Ice Cream cash entry can be written, because Ice Cream opening balances, capital, drawings, transfers and over/short (Phases 8–9) must write both ledgers in one transaction from day one. Invariant Σ fund entries = Σ Ice Cream cash entries holds from Phase 8.
-- `cash_transfers(id, business_date, from_book, to_book, from_fund NULL, to_fund NULL, amount_cents, status, client_ref UNIQUE, note, created_at, voided_at)` — `CHECK (from_book <> to_book)`; `from_fund` required iff `from_book='icecream'`, `to_fund` required iff `to_book='icecream'`.
-- `cash_counts(id, book, business_date, counted_cents, expected_cents, difference_cents, fund NULL, note, status, client_ref UNIQUE, created_at, voided_at)` — over/short in the Ice Cream book names a fund.
-- `daily_closings(id, book, business_date, expected_cents, counted_cents, over_short_cents, posted_at, closed_at, reopened_at, reopen_reason)` — `posted_at` = first closing time (server default, immutable); `closed_at` = the latest close after any reopen; `UNIQUE(book, business_date)`.
-- `owner_drawings(id, business_date, book, fund NULL, kind cash|goods, amount_cents, product_id FK NULL, qty NULL, status, client_ref UNIQUE, note, created_at)` — `fund` required iff `book='icecream'`; `CHECK (NOT (kind = 'goods' AND book = 'icecream'))` (Ice Cream has no stock).
-- `capital_entries(id, business_date, book, fund NULL, kind opening_balance|capital, amount_cents, status, client_ref UNIQUE, note, created_at)` — `fund` required iff `book='icecream'` (owner selects the destination fund each time; never profit-eligible).
-
-### Phase 10 — ice cream
-**Final design — BUSINESS_RULES §10 (P-1 approved 2026-11-10 with D1–D4).** Every write below happens in one transaction together with its `cash_entries` row (if cash moves), its `icecream_fund_entries` rows and an `audit_logs` row.
-- `icecream_days(id, business_date, sales_cents, cost_alloc_cents, electricity_alloc_cents, profit_share_cents, negative_confirmed, notes, status, client_ref UNIQUE, created_at, voided_at)`
-  - `CREATE UNIQUE INDEX ux_icecream_days_posted ON icecream_days(business_date) WHERE status = 'posted'` — one posted entry per date; voided rows are kept (void-and-replace).
-  - `CHECK (profit_share_cents >= 0 OR negative_confirmed = 1)`
-  - `CHECK (sales_cents >= 0 AND cost_alloc_cents >= 0 AND electricity_alloc_cents >= 0)`
-  - `CHECK (cost_alloc_cents + electricity_alloc_cents + profit_share_cents = sales_cents)` — profit share is server-computed; negative only when `negative_confirmed = 1`.
-- `icecream_sales(id, icecream_day_id FK, item_name, qty, unit_price_cents, line_total_cents)` — optional lines; must sum to `sales_cents`.
-- `icecream_payments(id, business_date, kind materials|electricity_bill|other_cost, fund cost|electricity|profit, amount_cents > 0, category NULL, description, status, client_ref UNIQUE, created_at, voided_at)`
-  - `CHECK (category IS NULL OR lower(trim(category)) <> 'electricity')` — the electricity bill is only ever `kind='electricity_bill'` (E4); the API applies the same case-insensitive check.
-  - P&L treatment is derived, never chosen: `kind='other_cost' AND fund='profit'` → expense; everything else → settlement.
-  - Settled attribution (BUSINESS_RULES §10.4): `materials` → Materials line; `electricity_bill` → Electricity line; `other_cost` from the Cost fund → Materials, from the Electricity fund → Electricity, from the Profit fund → none (expense).
-- `icecream_fund_moves(id, business_date, from_fund, to_fund, amount_cents > 0, profit_effect_cents, charge_relabel_cents, cash_only_cents, status, client_ref UNIQUE, note, created_at, voided_at)` — `charge_relabel_cents` = Cost↔Electricity line re-label (§10.4); `cash_only_cents` = part of a move into Profit beyond the profit-eligible limit, posted only after owner confirmation (D4)
-  - `CHECK (from_fund <> to_fund)`; `profit_effect_cents` = +profit-eligible amount (cost/electricity → profit, ≤ §10.4 limit), −amount (profit → cost/electricity), 0 (cost ↔ electricity) — server-computed; `CHECK`s enforce the sign rule and `profit_effect_cents + cash_only_cents = amount_cents` for moves into Profit.
-  - Line state (Charged_L / Settled_L / Unspent_L) is derived from `icecream_days`, `icecream_payments` and `icecream_fund_moves` (posted rows) — never stored as a running total.
-- `icecream_fund_entries(id, business_date, at, fund, amount_cents (signed), kind daily_allocation|payment|fund_move|drawing|transfer_out|transfer_in|opening_balance|capital|cash_over_short|reversal, ref_table, ref_id, reverses_entry_id NULL, note)` — append-only (trigger). Fund balance = SUM per fund.
-  - **Invariant (tested):** Σ `icecream_fund_entries.amount_cents` (all funds) = Σ `cash_entries.amount_cents` where `book='icecream'`.
-- `icecream_payments.kind` values map to cash-entry types: `materials` → `icecream_materials_payment`, `electricity_bill` → `icecream_electricity_payment`, `other_cost` → `icecream_other_cost`.
-- A daily entry writes one `icecream_sale` cash entry (and one matching fund entry) per non-zero fund share, each naming its fund.
-- Void guard (D2) and D3 excess cost are computed from posted rows at write/report time (no stored running totals).
-- Removed vs the earlier plan: `icecream_expenses` and the `cost_adjustment` kind (C2 superseded by fund moves).
-
-### Phase 13 — import
-- `import_runs(id, kind opening_stock, file_name, rows_read, rows_accepted, rows_rejected, total_qty, total_value_cents, status previewed|imported|failed, created_at, imported_at)`.
-- `import_issues(id, import_run_id FK, row_no, field, message)`.
+| Rule | Enforced by |
+|---|---|
+| Stock cache = Σ movements (per product) | `trg_stock_movements_cache` is the only writer; reconciliation endpoint and tests |
+| Cash book balance = Σ `cash_entries` | no stored balance |
+| Σ fund entries = Σ Ice Cream cash entries; Cost + Electricity + Profit = Ice Cream cash book | service writes both rows in one transaction; tested invariant |
+| No electricity expense in any segment | `expenses.category` CHECK, API `ELECTRICITY_NOT_ALLOWED`, `icecream_payments.category` CHECK |
+| No future dates | service + R-FD triggers |
+| Return not before the original | service + `RETURN_BEFORE_ORIGINAL_DATE` triggers on `sales_returns`, `purchase_returns` |
+| No return on a void document, no void of a document with returns | triggers `SALE_VOID`, `PURCHASE_VOID`; service `HAS_RETURNS` |
+| Closed days refuse cash entries and Ice Cream records | service `assertDayOpen` + `DAY_CLOSED` triggers |
+| Reversals copy the business date of the original | services (`reverseCash`, `reverseMovements`) |
+| Ledgers never edited or deleted | append-only triggers |

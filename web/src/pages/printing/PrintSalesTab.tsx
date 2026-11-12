@@ -22,6 +22,7 @@ import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
 import { PostedStatusBadge } from '../../components/StatusBadges';
 import { useToast } from '../../components/Toast';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { usePrintSales, usePrintServiceTypes, useVoidPrintSale } from '../../api/printing';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
@@ -168,7 +169,7 @@ export function PrintSalesTab() {
           intro={`This cancels the sale of ${voiding.qty} × ${voiding.description} and takes its revenue out of the Shop cash book. The record stays in the history as Void. It cannot be undone.`}
           submitLabel="Void sale"
           pending={voidMut.isPending}
-          run={(r, cb) => voidMut.mutate({ id: voiding.id, reason: r }, cb)}
+          run={(r, cb) => voidMut.mutate({ id: voiding.id, reason: r }, { onSuccess: (res) => { notifyCashWarnings(toast, res.warnings); cb.onSuccess(); }, onError: cb.onError })}
           onDone={() => { toast.success('Print sale voided.'); setVoiding(null); }}
           onClose={() => setVoiding(null)}
         />

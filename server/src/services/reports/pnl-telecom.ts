@@ -76,6 +76,7 @@ const COLUMNS: ReportColumn[] = [
   { key: 'cardProfit', label: 'Card gross profit', kind: 'money' },
   { key: 'expenses', label: 'Operating expenses', kind: 'money' },
   { key: 'adjustments', label: 'Stock adjustments (net)', kind: 'money' },
+  { key: 'purchaseRefundGain', label: 'Purchase refund above stock value removed (R4)', kind: 'money' },
   { key: 'overShort', label: 'Cash over / short', kind: 'money' },
   { key: 'netProfit', label: 'Net profit', kind: 'money' },
   { key: 'reloadSales', label: 'Memo: reload collections', kind: 'money' },
@@ -87,7 +88,7 @@ function flat(label: string, f: TelecomFigures): Record<string, ReportCell> {
   return {
     period: label, reloadBase: f.commissions.reloadBaseCommissionCents, reloadExtra: f.commissions.reloadExtraCents,
     ezcash: f.commissions.ezcashCommissionCents, cardRevenue: f.cards.revenueCents, cardCost: f.cards.costOfSalesCents,
-    cardProfit: f.cards.grossProfitCents, expenses: f.expenses.totalCents, adjustments: f.adjustments.netCents,
+    cardProfit: f.cards.grossProfitCents, expenses: f.expenses.totalCents, adjustments: f.adjustments.netCents, purchaseRefundGain: f.adjustments.purchaseRefundGainCents,
     overShort: f.cashOverShortCents, netProfit: f.netProfitCents, reloadSales: f.commissions.reloadSalesCents,
     ezcashBills: f.commissions.ezcashBillCents, topups: f.memo.providerTopupsCents + f.memo.walletTopupsCents,
   };
@@ -98,6 +99,7 @@ export const TELECOM_NOTES: string[] = [
   'Telecom income is commission only: reload commission (with any rounding extra) and EZCash commission.',
   'Full reload collections, EZCash bill collections and provider/wallet top-ups are cash movements, not income or cost (memo columns).',
   'The Telecom cash book does not reconcile to Telecom profit because reload float is not tracked (owner decision, R14).',
+  'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain (R4: cash refunded above the stock value removed, shown on its own line).',
   'Scratch cards are stock products: sales minus automatic and extra cost, net of returns.',
   'There is no electricity expense in Telecom: the whole shop electricity bill is carried by the Ice Cream book.',
 ];

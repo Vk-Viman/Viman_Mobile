@@ -125,9 +125,10 @@ export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void 
     item: getSale(ctx, parseId(request.params)),
   }));
 
-  app.post('/sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
-    item: voidSale(ctx, parseId(request.params), request.body as { reason: string }),
-  }));
+  app.post('/sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => {
+    const { item, warnings } = voidSale(ctx, parseId(request.params), request.body as { reason: string });
+    return { item, warnings };
+  });
 
   app.post('/sales/:id/returns', { schema: { params: idParamsSchema, body: returnBody } }, async (request, reply) => {
     const { item, sale, warnings, created } = createSaleReturn(ctx, parseId(request.params), request.body as SaleReturnCreate);
