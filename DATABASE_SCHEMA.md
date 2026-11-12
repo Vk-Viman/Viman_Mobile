@@ -38,6 +38,7 @@ SQLite (`node:sqlite`), WAL mode, `foreign_keys=ON`, `busy_timeout=5000`, `synch
 | `012_cashbooks_expenses.sql` | 8 | `expenses`, `capital_entries`, `cash_counts`, `daily_closings`, `icecream_fund_entries`; `DAY_CLOSED` trigger on `cash_entries`; `INVALID_BUSINESS_DATE` triggers on 14 older tables |
 | `013_cash_transfers.sql` | 9 | `cash_transfers`; transfer-leg trigger on `cash_entries`; cash-drawing amount trigger |
 | `014_icecream.sql` | 10 | `icecream_days`, `icecream_sales`, `icecream_payments`, `icecream_fund_moves` + day-closed triggers |
+| `015_category_per_book.sql` | categories | `categories` rebuilt: name unique **per book** (`ux_categories_book_name`), delete guard `trg_categories_no_delete` (`CATEGORY_DELETE_FORBIDDEN`), ids/links preserved |
 
 Migrations are applied in order, each in its own transaction together with its `schema_migrations` row. The checksum is SHA-256 of the file text with CRLF normalised to LF. A changed applied file stops startup (`MIGRATION_CHECKSUM_MISMATCH`); a database newer than the program stops startup (`MIGRATION_DB_TOO_NEW`). The restore check requires only the Phase 1 tables (`schema_migrations`, `settings`, `audit_logs`); an older backup is upgraded by `migrate()` after the swap.
 
@@ -63,7 +64,7 @@ Entities and actions written today: `settings` update; `backup` restore; `catego
 
 ### Catalogue (not financial: no `client_ref`, no business date)
 
-**`categories`** `name TEXT UNIQUE COLLATE NOCASE`, `book IN ('shop','telecom')`, `is_default`, `active`, `created_at`, `updated_at`. Seeded (all `is_default = 1`): shop — Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other; telecom — Scratch Cards (12 rows). Triggers: `DEFAULT_CATEGORY_LOCKED` (name/book of a default row cannot change), `CATEGORY_HAS_PRODUCTS` (book cannot change while products exist).
+**`categories`** (as rebuilt by migration 015) `name TEXT COLLATE NOCASE` with `UNIQUE INDEX ux_categories_book_name (book, name COLLATE NOCASE)` — unique per book, case-insensitive (so "Perfumes" may exist in both books); `BEFORE DELETE` guard `CATEGORY_DELETE_FORBIDDEN` (categories are deactivated, never deleted); the migration-003 triggers (default categories locked, book fixed once products exist) are kept; `book IN ('shop','telecom')`, `is_default`, `active`, `created_at`, `updated_at`. Seeded (all `is_default = 1`): shop — Phone Accessories, Tempered Glass, Phone Covers, Electronics, Stationery, Snacks and Drinks, Party Items, Perfume, Pooja Items, SIM, Other; telecom — Scratch Cards (12 rows). Triggers: `DEFAULT_CATEGORY_LOCKED` (name/book of a default row cannot change), `CATEGORY_HAS_PRODUCTS` (book cannot change while products exist).
 
 **`suppliers`** `name UNIQUE COLLATE NOCASE`, `phone`, `notes`, `active`, timestamps.
 
