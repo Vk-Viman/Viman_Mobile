@@ -27,7 +27,7 @@ export interface SalesLines {
 }
 export interface ExpenseLines { totalCents: number; byCategory: Record<string, number> }
 export interface AdjustmentLines {
-  lossesCents: number; damagedReturnLossesCents: number; stocktakeLossesCents: number; stocktakeGainsCents: number; residualSweepsCents: number; netCents: number;
+  lossesCents: number; damagedReturnLossesCents: number; stocktakeLossesCents: number; stocktakeGainsCents: number; residualSweepsCents: number; purchaseRefundGainCents: number; netCents: number;
 }
 
 export interface ShopFigures {

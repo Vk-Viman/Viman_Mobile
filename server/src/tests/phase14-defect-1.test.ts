@@ -1,4 +1,4 @@
-// PHASE 14 DEFECT 1 - EXPECTED RED until the orchestrator fixes it.
+// PHASE 14 DEFECT 1 - FIXED (purchase refund gain is now a negative Stock adjustment in the Shop/Telecom P&L).
 //
 // Rule: BUSINESS_RULES section 3 (R4) "Purchase return / void: remove min(purchase-cost value, pool value); ... residual -> Stock adjustments line" and
 // API_CONTRACTS Phase 3: "The difference refundCents - sum(value removed from stock) is not stored: it is derivable ... and is reported as a *Stock

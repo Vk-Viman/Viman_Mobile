@@ -274,7 +274,7 @@ describe('Shop P&L', () => {
       goods: { salesCents: 2614999, returnsCents: 639999, revenueCents: 1975000, costAutomaticCents: 902515, costExtraCents: 4000, costOfSalesCents: 906515, grossProfitCents: 1068485 },
       services: { revenueCents: 230000, costCents: 91000, grossProfitCents: 139000 }, grossProfitCents: 1207485,
       expenses: { totalCents: 1220000, byCategory: { rent: 1000000, water: 80000, packaging: 25000, cleaning_supplies: 45000, other: 70000, internet: 0, transport: 0, repairs: 0, stationery: 0 } },
-      adjustments: { lossesCents: 66260, damagedReturnLossesCents: 30000, stocktakeLossesCents: 50000, stocktakeGainsCents: 20020, residualSweepsCents: 0, netCents: 126240 },
+      adjustments: { lossesCents: 66260, damagedReturnLossesCents: 30000, stocktakeLossesCents: 50000, stocktakeGainsCents: 20020, residualSweepsCents: 0, purchaseRefundGainCents: 0, netCents: 126240 },
       cashOverShortCents: -5000, netProfitCents: -143755,
     });
     expect(m['2025-09']).toMatchObject({

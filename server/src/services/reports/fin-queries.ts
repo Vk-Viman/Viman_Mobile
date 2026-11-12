@@ -17,6 +17,7 @@
  *        POSTED `stock_losses` rows (source 'manual' and 'damaged_return'; voided rows excluded) -> losses, one source per loss
  *        'stocktake_loss'  (value_delta < 0)  -> stocktake losses;  'stocktake_gain' (value_delta > 0) -> stocktake gains
  *        'adjustment'      (value-only)       -> residual sweeps of purchase returns/voids (R4)
+ *        purchase refund gain (R4) = refunds + voided purchase totals - value removed by 'purchase_return'/'purchase_void' movements
  *      (a damaged sales return writes NO stock movement, only its loss row at the original AUTOMATIC cost - the C13 extra cost is
  *      reversed with the revenue, not lost - so it is counted exactly once, section 4; a manual loss also writes a 'loss' movement,
  *      which is deliberately NOT read here, so it is never counted twice).
@@ -104,7 +105,10 @@ export function expensesByPeriod(conn: DatabaseSync, periods: readonly Period[],
 /** Stock adjustments (net) of one book, BUSINESS_RULES 11: losses + stocktake losses + residual sweeps - stocktake gains. */
 export interface AdjustmentFigures {
   lossesCents: number; damagedReturnLossesCents: number; stocktakeLossesCents: number; stocktakeGainsCents: number;
-  residualSweepsCents: number; netCents: number;
+  residualSweepsCents: number;
+  /** R4: cash refunded by the supplier above the stock value removed (a GAIN, shown positive; it REDUCES the net adjustment cost). */
+  purchaseRefundGainCents: number;
+  netCents: number;
 }
 
 /**
@@ -126,6 +130,20 @@ export function adjustmentsByPeriod(conn: DatabaseSync, periods: readonly Period
     `SELECT business_date AS d, source AS g, SUM(cost_cents) AS c FROM stock_losses
       WHERE book = ? AND status = 'posted' AND business_date BETWEEN ? AND ? GROUP BY business_date, source`,
     [book, from, to], ['c'] as const);
+  // R4 refund gain: cash refunded for returned purchases (by RETURN date) + the total of voided purchases (by the ORIGINAL date, R1/C6)
+  // minus the value the purchase_return / purchase_void movements actually removed. The residual sweep ('adjustment' movement) is NOT part
+  // of `removed`: it is already a cost in `sweeps`, so gain + sweeps = refund - (everything that left stock) without double counting.
+  const refunds = sumByPeriod(conn, periods,
+    `SELECT r.business_date AS d, SUM(r.refund_cents) AS c FROM purchase_returns r JOIN purchases pu ON pu.id = r.purchase_id
+      WHERE pu.book = ? AND r.business_date BETWEEN ? AND ? GROUP BY r.business_date`, [book, from, to], ['c'] as const);
+  const voided = sumByPeriod(conn, periods,
+    `SELECT business_date AS d, SUM(total_cents) AS c FROM purchases
+      WHERE book = ? AND status = 'void' AND business_date BETWEEN ? AND ? GROUP BY business_date`, [book, from, to], ['c'] as const);
+  const removed = sumByPeriod(conn, periods,
+    `SELECT m.business_date AS d, SUM(m.value_delta_cents) AS v
+       FROM stock_movements m JOIN products p ON p.id = m.product_id
+      WHERE p.book = ? AND m.type IN ('purchase_return','purchase_void') AND m.business_date BETWEEN ? AND ?
+      GROUP BY m.business_date`, [book, from, to], ['v'] as const);
   const v = (type: string, i: number): number => moves.get(type)?.[i]?.v ?? 0;
   return periods.map((_, i) => {
     // A loss removes value (negative delta) = a cost; a gain adds value (positive delta) = a credit.
@@ -134,10 +152,11 @@ export function adjustmentsByPeriod(conn: DatabaseSync, periods: readonly Period
     const gains = v('stocktake_gain', i);
     const sweeps = neg(v('adjustment', i));
     const damagedReturn = lossRows.get('damaged_return')?.[i]?.c ?? 0;
+    const refundGain = refunds[i]!.c + voided[i]!.c + removed[i]!.v;
     return {
       lossesCents: losses, damagedReturnLossesCents: damagedReturn, stocktakeLossesCents: stocktakeLosses,
-      stocktakeGainsCents: gains, residualSweepsCents: sweeps,
-      netCents: losses + damagedReturn + stocktakeLosses + sweeps - gains,
+      stocktakeGainsCents: gains, residualSweepsCents: sweeps, purchaseRefundGainCents: refundGain,
+      netCents: losses + damagedReturn + stocktakeLosses + sweeps - gains - refundGain,
     };
   });
 }
