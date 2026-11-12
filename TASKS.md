@@ -1,80 +1,48 @@
 # Tasks
 
-Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent role (all subagents run on Claude Sonnet 5.5; orchestrator Opus 5.5).
+Status: ☑ done · ◐ in progress · ☐ not done. Phases 1 to 13 are built, tested and merged into `main` (last merge: pull request #10, Phase 12). Phase 14, the final validation and documentation review, is in progress. Details of how each phase was built and verified are in `IMPLEMENTATION_STATUS.md` and `AGENT_WORK_LOG.md`.
 
-## Phase 1 — Foundation (complete — awaiting owner approval for Phase 2)
-| # | Task | Owner | Wave | Status |
+## Phase checklist
+
+| # | Phase | Migration | Main screens | Status |
 |---|---|---|---|---|
-| 1.1 | Root/server/web package.json, tsconfigs, vitest config, dependency install | Orchestrator | A | ☑ |
-| 1.2 | ARCHITECTURE, BUSINESS_RULES, API_CONTRACTS, DATABASE_SCHEMA, TASKS, AGENT_WORK_LOG, IMPLEMENTATION_STATUS | Orchestrator | A | ☑ |
-| 1.3 | `db/db.ts` (AppDatabase, PRAGMAs, tx), `db/migrate.ts`, `001_foundation.sql`, settings & audit repositories | DB Architect | B | ☑ |
-| 1.4 | Web shell: Vite/Tailwind/Router/Query, sidebar (13 sections), placeholders, Settings (general/rates/printing), Backups, Audit log, shared components | Frontend | B | ☑ |
-| 1.5 | `Start-Viman-Shop.bat`, `scripts/*`, README, .gitignore | DevOps/Docs | B | ☑ |
-| 1.6 | Independent money/rounding test vectors (`tests/finance/money.test.ts`) | Financial Logic | B | ☑ |
-| 1.7 | `lib/` (money, dates, errors), `app.ts`, `index.ts`, settings/audit/backup services, health/settings/audit/backup routes | Backend | C | ☑ |
-| 1.8 | Tests: migrations, db, settings API, audit, backups (create/rotate/restore/corrupt/too-new/persistence), health, SPA/static | QA | D | ☑ |
-| 1.9 | Review & integrate, `npm test`, `npm run build`, launcher cold start, browser verification, status report | Orchestrator | — | ☑ |
+| 1 | Foundation: database and migrations, settings, audit log, backup and restore, web shell, launcher | 001, 002 | Settings, Backups, Audit log | ☑ |
+| 2 | Catalog: categories (12 built-in), products, suppliers | 003 | Products | ☑ |
+| 3 | Purchases, stock movements, inventory engine, cash ledger table | 004 | Purchases, stock history | ☑ |
+| 4 | Stocktake, stock losses, personal use (goods drawings), valuation | 005 | Stock | ☑ |
+| 5 | POS, sales, returns, voids; delete guards (007); editable sale cost / extra cost (008, rule C13) | 006, 007, 008 | Sales | ☑ |
+| 6 | Telecom: reloads, EZCash, top-ups, provider rates | 009 | Telecom | ☑ |
+| 7 | Printing: service types, print sales, supplies | 010 | Printing | ☑ |
+| 8 | Expenses (no electricity), cash books, opening balances, cash counts, daily closings, `DAY_CLOSED`, Ice Cream fund ledger table | 012 | Expenses, Cash Books | ☑ |
+| 9 | Cash transfers, cash drawings, capital | 013 | Drawings | ☑ |
+| 10 | Ice Cream three-fund accounting (BUSINESS_RULES §10) | 014 | Ice Cream | ☑ |
+| 11 | Financial and operational reports, Excel export | none | Reports | ☑ |
+| 12 | Dashboard, charts, Excel export pack | none | Dashboard | ☑ |
+| 13 | Opening stock: manual entry and Excel import | 011 | Opening Stock | ☑ |
+| 14 | Integration, validation, documentation review, final report | none | — | ◐ |
 
-## Phase 2 — Catalog (complete — awaiting owner approval for Phase 3)
-| Task | Owner | Status |
-|---|---|---|
-| Contract detail (endpoints, repos) | Orchestrator | ☑ |
-| Migration 003 + repositories | DB Architect | ☑ |
-| Services + routes | Backend | ☑ |
-| Products/Categories/Suppliers screens | Frontend | ☑ |
-| Tests (86 new; startup test fixed) | QA | ☑ |
+## Phase 14 — validation checklist
 
-## Phase 3 — Purchases, stock movements, inventory (complete — awaiting owner approval for Phase 4)
-| Task | Owner | Status |
-|---|---|---|
-| Contract + design (engine, cash ledger early) | Orchestrator | ☑ |
-| Migration 004 + repositories | DB Architect | ☑ |
-| Inventory engine, purchases service/routes | Backend | ☑ |
-| Purchases screens, stock history | Frontend | ☑ |
-| 172 new tests incl. weighted-average demo | QA | ☑ |
+- [x] Full server suite on the merged tree: 81 test files, 1,681 tests, all passing (re-run during the documentation review).
+- [x] Documentation brought in line with the code: `README.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `API_CONTRACTS.md`, `server/src/db/migrations/README.md`; findings in `DOC_REVIEW_FINDINGS.md`.
+- [ ] Owner decisions on the items in `DOC_REVIEW_FINDINGS.md` (proposed wording for `BUSINESS_RULES.md`).
+- [ ] Combined browser pass through `Start-Viman-Shop.bat` on a clean database covering every screen (Waves 1 to 4 had agent-level browser checks only).
+- [ ] Final report to the owner.
 
-## Phase 4 — Stocktake, losses, personal use, valuation (complete — awaiting owner approval for Phase 5)
-| Task | Owner | Status |
-|---|---|---|
-| Contract + schema detail | Orchestrator | ☑ |
-| Migration 005 + repositories | DB Architect | ☑ |
-| Stocktake / losses / drawings / valuation services + routes | Backend | ☑ |
-| Stock section screens | Frontend | ☑ |
-| 136 new tests incl. model check | QA | ☑ |
+## Known limitations and future work
 
-## Phase 5 — POS, sales, returns, voids (complete — awaiting owner approval for Phase 6)
-| Task | Owner | Status |
-|---|---|---|
-| Contract + schema detail | Orchestrator | ☑ |
-| Migration 006 + sales repository | DB Architect | ☑ |
-| Sales / returns / void services + routes | Backend | ☑ |
-| POS and History screens | Frontend | ☑ |
-| 144 new tests incl. model check | QA | ☑ |
-| Migration 007 delete guards (QA finding) | Orchestrator | ☑ |
+Each item below was checked in the code.
 
-## Later phases (not started — require owner approval)
-2 Catalog · 3 Purchases & movements · 4 Costing/stocktake/valuation · 5 POS/returns/voids · 6 Telecom · 7 Printing · 8 Expenses (electricity blocked, §7) + 3 cash books (Ice Cream entries carry a fund) · 9 Transfers/drawings/capital/losses · 10 Ice cream three-fund system (BUSINESS_RULES §10) · 11 Reports · 12 Dashboard + exports · 13 Opening-stock Excel · 14 Full QA + docs.
-
-## Wave 1 — Phases 6, 7, 13 (built and integrated 2026-11-11)
-- [x] Phase 6 Telecom reloads, EZCash, top-ups (migration 009)
-- [x] Phase 7 Printing service types, print sales, supplies (migration 010)
-- [x] Phase 13 Opening stock + Excel template/preview/import (migration 011)
-- [x] Integrate, full tests (1,127 pass)
-- [ ] PR/merge; launcher browser verification in Phase 14
-
-## Wave 2 — Phase 8 (built and integrated 2026-11-11)
-- [x] Phase 8 expenses, cash books, closings, DAY_CLOSED, fund ledger table (migration 012)
-- [ ] PR/merge
-
-## Wave 3 — Phases 9, 10 (built and integrated 2026-11-12)
-- [x] Phase 9 transfers, cash drawings, capital (013)
-- [x] Phase 10 Ice Cream three-fund accounting (014)
-- [ ] PR/merge
-
-## Wave 4 — Phase 11 reports (built and integrated 2026-11-12)
-- [x] Phase 11 financial + operational reports, Excel export, Reports screens
-- [ ] Phase 12 dashboard, charts, export polish
-
-## Phase 12 — Dashboard, charts, export pack (built and integrated 2026-11-12)
-- [x] Phase 12
-- [ ] Phase 14 integration, validation, documentation, final report
+- **Printing defaults in Settings do nothing.** Settings → Printing defaults edits `settings.printDefaults`, which no service reads. Print prices and standard costs live in `print_service_types` (Printing → Service types), seeded once by migration 010. Decision needed: remove the Settings tab, or make it seed or edit the types.
+- **Service products cannot be sold in the POS.** A product with kind `service` is refused on a sale line (`PRODUCT_NOT_SELLABLE_YET`, message "Service products cannot be sold yet."). Printing and photocopying use their own tables; there is no other way to sell an "other service". Services can still be created in Products.
+- **Negative-cash warning is missing on some voids.** Voiding a sale, a print sale, a reload sale or an EZCash sale removes cash from its book but returns no `NEGATIVE_CASH_BALANCE` warning (creates, returns, top-ups, supplies, expenses, drawings, transfers, counts and Ice Cream writes do).
+- **Two allowed values are never written:** cash entry type `expense_refund` and stock movement type `sale_void` (an expense void reverses the `expense` entry; a sale void reverses with type `sale`).
+- **A database trigger abort that no service maps becomes `500 INTERNAL_ERROR`.** Services map the aborts they expect (future date, closed day, invalid date, return dates, stock limits, ...); an unexpected one such as `PRODUCT_BOOK_MISMATCH` is not translated.
+- **No automated tests for the web app.** It is covered by typecheck, the production build and manual browser passes.
+- **Single user, no login.** The server listens on `127.0.0.1` by default; `VIMAN_HOST` can expose it, but there is no authentication.
+- **Launcher port.** `Start-Viman-Shop.bat` opens `http://localhost:4300` in its "already running" branch even if `VIMAN_PORT` differs, and the Vite dev proxy is fixed to port 4300.
+- **Stock valuation for a past date can show negative quantity** when a loss was backdated before the stock existed (the report warns `NEGATIVE_STOCK_AS_OF`).
+- **Restore of an upload over 200 MB and a true concurrent restore (`409`) are not exercised by tests** (the 503 guard during a restore is). Launcher repair of an incomplete `node_modules` is not automatic (run `npm ci`); stale-build detection looks at file times under `web/src`, `web/index.html` and `web/vite.config.ts` only.
+- **Telecom cash book does not reconcile to Telecom profit** by owner decision (R14: no reload float or wallet tracking).
+- **Sidebar descriptions in `web/src/layout/navItems.ts` are only used by the unused "Coming soon" page**; some wording is out of date (for example Sales says "cash sales of goods and services").
+- **Not built (never promised by an approved rule):** editing a saved record in place (the model is void and re-enter), importing historical data, multi-user access, card or credit payments, a go-live checklist endpoint.
