@@ -138,9 +138,10 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
     item: getReloadSale(ctx, parseId(request.params)),
   }));
 
-  app.post('/reload-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
-    item: voidReloadSale(ctx, parseId(request.params), request.body as { reason: string }),
-  }));
+  app.post('/reload-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => {
+    const { item, warnings } = voidReloadSale(ctx, parseId(request.params), request.body as { reason: string });
+    return { item, warnings };
+  });
 
   // ---------- EZCash ----------
   app.post('/ezcash-sales', { schema: { body: ezcashBody } }, async (request, reply) => {
@@ -163,9 +164,10 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
     item: getEzCashSale(ctx, parseId(request.params)),
   }));
 
-  app.post('/ezcash-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
-    item: voidEzCashSale(ctx, parseId(request.params), request.body as { reason: string }),
-  }));
+  app.post('/ezcash-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => {
+    const { item, warnings } = voidEzCashSale(ctx, parseId(request.params), request.body as { reason: string });
+    return { item, warnings };
+  });
 
   // ---------- top-ups ----------
   app.post('/telecom/topups', { schema: { body: topupBody } }, async (request, reply) => {

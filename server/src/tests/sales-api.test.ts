@@ -239,6 +239,7 @@ describe('POST /sales - product rules', () => {
     const r = await sellNew(s, [cl(P.id, 1, 1000), cl(svc.id, 1, 1000)]);
     expect(r.status).toBe(400);
     expect(err(r).code).toBe('PRODUCT_NOT_SELLABLE_YET');
+    expect(err(r).message).toBe('Service products are not sold in the POS. Use Printing for print and photocopy jobs.');
     expect(Object.keys(err(r).fields)).toEqual(['items.1.productId']);
     expect(snap5(s)).toEqual(before);
   });

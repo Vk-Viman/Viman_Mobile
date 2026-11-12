@@ -239,7 +239,7 @@ export function createPrintSale(ctx: AppContext, body: PrintSaleCreate): { item:
  *
  * @throws AppError 400 VALIDATION_ERROR (reason), 404 NOT_FOUND, 409 ALREADY_VOID.
  */
-export function voidPrintSale(ctx: AppContext, id: number, body: { reason: string }): PrintSale {
+export function voidPrintSale(ctx: AppContext, id: number, body: { reason: string }): { item: PrintSale; warnings: CashWarning[] } {
   const fields: Fields = {};
   const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, REASON_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -256,7 +256,8 @@ export function voidPrintSale(ctx: AppContext, id: number, body: { reason: strin
     const after = loadPrintSale(conn, id);
     logAudit(conn, 'print_sale', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return after;
+    // R13: the reversal removed cash from the shop book; warn (never block) if it is now below zero.
+    return { item: after, warnings: row.revenueCents > 0 ? negativeCashWarnings(conn, ['shop']) : [] };
   });
 }
 

@@ -130,9 +130,10 @@ export function registerPrintingRoutes(app: FastifyInstance, ctx: AppContext): v
     item: getPrintSale(ctx, parseId(request.params)),
   }));
 
-  app.post('/print-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
-    item: voidPrintSale(ctx, parseId(request.params), request.body as { reason: string }),
-  }));
+  app.post('/print-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => {
+    const { item, warnings } = voidPrintSale(ctx, parseId(request.params), request.body as { reason: string });
+    return { item, warnings };
+  });
 
   // ---- printing supplies ----
   app.post('/printing-supplies', { schema: { body: supplyCreateBody } }, async (request, reply) => {

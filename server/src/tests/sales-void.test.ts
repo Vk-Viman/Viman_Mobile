@@ -44,7 +44,7 @@ describe('POST /sales/:id/void - effects', () => {
 
     const r = await voidSaleNew(s, sale.id, '  customer cancelled  ');
     expect(r.status).toBe(200);
-    expect(Object.keys(r.body)).toEqual(['item']);
+    expect(Object.keys(r.body)).toEqual(['item', 'warnings']);
     expect(r.body.item).toMatchObject({ id: sale.id, status: 'void', voidReason: 'customer cancelled', totalCents: 400000, cogsCents: 140000 });
     expect(r.body.item.voidedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(r.body.item.items).toEqual(sale.items);                               // lines never change

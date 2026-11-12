@@ -266,7 +266,7 @@ export function createReloadSale(ctx: AppContext, body: ReloadSaleCreate): { ite
  *
  * @throws AppError 400 VALIDATION_ERROR (reason), 404 NOT_FOUND, 409 ALREADY_VOID.
  */
-export function voidReloadSale(ctx: AppContext, id: number, body: { reason: string }): ReloadSale {
+export function voidReloadSale(ctx: AppContext, id: number, body: { reason: string }): { item: ReloadSale; warnings: CashWarning[] } {
   const fields: Fields = {};
   const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, REASON_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -281,7 +281,7 @@ export function voidReloadSale(ctx: AppContext, id: number, body: { reason: stri
     const after = loadReload(conn, id);
     logAudit(conn, 'reload_sale', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return after;
+    return { item: after, warnings: negativeCashWarnings(conn, ['telecom']) }; // R13: warn, never block
   });
 }
 
@@ -350,7 +350,7 @@ export function createEzCashSale(ctx: AppContext, body: EzCashSaleCreate): { ite
 }
 
 /** Voids an EZCash entry (R1): status `void` plus a reversal cash entry. @throws AppError 400, 404, 409 ALREADY_VOID. */
-export function voidEzCashSale(ctx: AppContext, id: number, body: { reason: string }): EzCashSale {
+export function voidEzCashSale(ctx: AppContext, id: number, body: { reason: string }): { item: EzCashSale; warnings: CashWarning[] } {
   const fields: Fields = {};
   const reason = trimmed(fields, 'reason', 'Reason', body.reason, 1, REASON_MAX_LENGTH);
   assertNoFieldErrors(fields);
@@ -365,7 +365,7 @@ export function voidEzCashSale(ctx: AppContext, id: number, body: { reason: stri
     const after = loadEz(conn, id);
     logAudit(conn, 'ezcash_sale', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return after;
+    return { item: after, warnings: negativeCashWarnings(conn, ['telecom']) }; // R13: warn, never block
   });
 }
 
