@@ -484,6 +484,37 @@ export function diffSnapshots(a: Record<string, string>, b: Record<string, strin
   return Object.keys(b).filter((t) => a[t] !== b[t]);
 }
 
+/**
+ * Independent RECONCILIATION of the Shop P&L with the ledgers (an accounting identity that needs no report code). Shop has no float (unlike Telecom, R14), so
+ *   equity change = cash + stock value
+ *   net profit    = equity change - inflows (opening balance, capital, transfers net, opening stock) + drawings (cash + goods at cost)
+ *                   + printing supplies bought (cash out, never P&L) - standard print cost charged - extra cost on sales (net of returns)
+ * where every figure is summed straight from the ledger tables. `refundGain` is the part of purchase refunds/voids that exceeds the stock value removed
+ * (R4): the contract says it is reported as a Stock adjustment, so it is shown separately and included in `ledgerProfit`.
+ * @returns the report figure and the ledger figure (equal when the books reconcile)
+ */
+export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext }): Promise<{ reportProfit: number; ledgerProfit: number; refundGain: number }> {
+  const ctx = s.ctx; const shopP = "(SELECT id FROM products WHERE book = 'shop')";
+  const cash = (types: string[]) => n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='shop' AND type IN (${types.map((t) => `'${t}'`).join(',')})`);
+  const mv = (types: string[]) => n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE product_id IN ${shopP} AND type IN (${types.map((t) => `'${t}'`).join(',')})`);
+  const equity = n1(ctx, "SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='shop'") + n1(ctx, "SELECT COALESCE(SUM(stock_value_cents),0) FROM products WHERE book='shop'");
+  const inflows = cash(['opening_balance', 'capital', 'transfer_in', 'transfer_out']) + mv(['opening']);
+  const drawings = -cash(['drawing_cash']) - mv(['personal_use']);
+  const supplies = -cash(['printing_supplies']);
+  const svcCost = n1(ctx, "SELECT COALESCE(SUM(cogs_cents),0) FROM print_sales WHERE status='posted'");
+  const extra = n1(ctx, "SELECT COALESCE(SUM(si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id = si.sale_id WHERE x.status='posted' AND x.book='shop'")
+    - n1(ctx, "SELECT COALESCE(SUM(r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id = r.sale_id WHERE x.book='shop'");
+  const noRefund = equity - inflows + drawings + supplies - svcCost - extra;
+  // refund gain: cash taken back for purchases (refunds, void reversals) minus the stock value removed for them (negative movement values)
+  const refunds = cash(['purchase_refund']) + n1(ctx, "SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='shop' AND type='purchase_payment' AND reverses_entry_id IS NOT NULL");
+  const removed = -mv(['purchase_return', 'purchase_void']);
+  // equity already contains refunds and the stock removal; P&L (as documented) also has the swept residuals as adjustments, so the gain is refunds - removed - (residual sweeps)
+  const refundGain = refunds - removed;
+  const first = rows(ctx, 'SELECT MIN(d) d FROM (SELECT MIN(business_date) d FROM cash_entries UNION ALL SELECT MIN(business_date) FROM stock_movements)')[0]!.d as string | null;
+  const rep = first ? (await get(s.app, `/reports/pnl/shop?from=${first}&to=${todayColombo()}&granularity=month`)).body.totals.netProfitCents as number : 0;
+  return { reportProfit: rep, ledgerProfit: noRefund, refundGain };
+}
+
 /** Row count of every table: a cheap "did anything get written?" fingerprint. */
 export function countsAll(ctx: AppContext): Record<string, number> {
   const out: Record<string, number> = {};
@@ -626,9 +657,59 @@ export class Simulation {
       .toEqual([this.ice.ChM, this.ice.SeM, this.ice.ChE, this.ice.SeE]);
     expect([f.unspentAllocationCents, f.outstandingExcessCostCents, f.recognizedProfitToDateCents], `${label}: Unspent / excess / recognized profit vs oracle`)
       .toEqual([u.U, Math.max(0, -u.U), this.ice.RP]);
+    await this.crossChecks(label);
+    // Shop P&L reconciles with the ledgers (cash + stock identity). The ONLY tolerated difference is the known purchase-refund gain (DEFECT 1, see
+    // phase14-defect-1.test.ts): any other unexplained difference fails here.
+    const id = await shopIdentity(this.s);
+    expect(id.ledgerProfit - id.reportProfit, `${label}: Shop P&L vs ledger identity (unexplained difference; refund gain ${id.refundGain})`).toBe(id.refundGain);
     const pnl = (await get(this.s.app, `/reports/pnl/icecream?from=${daysAgo(40)}&to=${daysAgo(0)}&granularity=month`)).body;
     expect(pnl.totals.recognizedProfitCents, `${label}: Ice Cream P&L total vs oracle`).toBe(this.ice.RP);
     await assertGlobalInvariants(this.s, { skipReports: this.skipReports });
+  }
+
+  stepNo = 0;
+  /**
+   * Cross-surface checks at a rotating "as of" date (backdated data makes past dates interesting): every figure that two endpoints or a ledger
+   * sum must agree on is compared - valuation as-of vs movement sums, cash book opening/closing, Ice Cream funds as-of, dashboard cash/stock/profit
+   * (today and month) vs the P&L reports, and additivity of the daily and monthly P&L rows.
+   */
+  async crossChecks(label: string): Promise<void> {
+    const ctx = this.s.ctx; const app = this.s.app;
+    const d = daysAgo(this.stepNo++ % 15);
+    const first = d.slice(0, 8) + '01';
+    // valuation as of d (from movements) = independent movement sums
+    const val = (await get(app, `/reports/inventory/valuation?asOf=${d}&includeZero=true`)).body;
+    expect([val.totals.qty, val.totals.valueCents], `${label}: valuation as of ${d}`).toEqual([
+      n1(ctx, 'SELECT COALESCE(SUM(qty_delta),0) FROM stock_movements WHERE business_date <= ?', d), n1(ctx, 'SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE business_date <= ?', d)]);
+    // cash book as of d
+    for (const book of ['shop', 'telecom', 'icecream']) {
+      const led = (await get(app, `/cashbooks/${book}?from=${d}&to=${d}`)).body;
+      expect([led.openingCents, led.closingCents], `${label}: ${book} cash book opening/closing on ${d}`).toEqual([
+        n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = ? AND business_date < ?', book, d), n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = ? AND business_date <= ?', book, d)]);
+    }
+    // Ice Cream funds as of d
+    const fd = (await get(app, `/icecream/funds?asOf=${d}`)).body;
+    const fAt = (f: string) => n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM icecream_fund_entries WHERE fund = ? AND business_date <= ?', f);
+    expect([fd.funds.cost.balanceCents, fd.funds.electricity.balanceCents, fd.funds.profit.balanceCents], `${label}: Ice Cream funds as of ${d}`).toEqual([fAt('cost'), fAt('electricity'), fAt('profit')]);
+    expect(fd.reconciled, `${label}: funds reconcile with the book as of ${d}`).toBe(true);
+    // dashboard vs reports
+    const dash = (await get(app, `/dashboard?asOf=${d}`)).body;
+    const seg = async (x: string, a: string, b: string, key: string, g = 'month') => (await get(app, `/reports/pnl/${x}?from=${a}&to=${b}&granularity=${g}`)).body.totals[key] as number;
+    for (const [tile, a] of [['today', d], ['month', first]] as const) {
+      const exp = [await seg('shop', a, d, 'netProfitCents'), await seg('telecom', a, d, 'netProfitCents'), await seg('icecream', a, d, 'recognizedProfitCents')];
+      const got = [dash[tile].bySegment.shop.profitCents, dash[tile].bySegment.telecom.profitCents, dash[tile].bySegment.icecream.profitCents];
+      expect(got, `${label}: dashboard ${tile} profit per segment as of ${d}`).toEqual(exp);
+      expect(dash[tile].profitCents, `${label}: dashboard ${tile} combined profit`).toBe(exp[0]! + exp[1]! + exp[2]!);
+    }
+    expect(dash.cash.books.map((b: any) => b.balanceCents), `${label}: dashboard cash as of ${d}`).toEqual(['shop', 'telecom', 'icecream'].map((b) => n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = ? AND business_date <= ?', b, d)));
+    expect(dash.stock.valueCents, `${label}: dashboard stock value as of ${d}`).toBe(val.totals.valueCents);
+    // additivity: the day rows add up to the month rows and to the total
+    for (const [x, key] of [['shop', 'netProfitCents'], ['telecom', 'netProfitCents'], ['icecream', 'recognizedProfitCents']] as const) {
+      const days = (await get(app, `/reports/pnl/${x}?from=${daysAgo(14)}&to=${daysAgo(0)}&granularity=day`)).body;
+      const mon = (await get(app, `/reports/pnl/${x}?from=${daysAgo(14)}&to=${daysAgo(0)}&granularity=month`)).body;
+      expect(days.rows.reduce((a: number, r: any) => a + r[key], 0), `${label}: ${x} day rows add up to the total`).toBe(days.totals[key]);
+      expect(mon.rows.reduce((a: number, r: any) => a + r[key], 0), `${label}: ${x} month rows add up to the total`).toBe(days.totals[key]);
+    }
   }
 
   // ---------- setup ----------
