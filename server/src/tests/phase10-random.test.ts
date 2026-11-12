@@ -334,8 +334,8 @@ describe('randomized Ice Cream sequences keep every invariant and match the inde
   it.each([20261111, 7, 424242])('seed %i: 320 operations', async (seed) => {
     const { counts } = await run(seed, 320);
     // the sequence must actually have exercised the interesting paths, or the proof would be hollow
-    expect(counts.day, 'daily entries').toBeGreaterThan(20);
-    expect(counts['pay:materials'] + counts['pay:electricity_bill'] + counts['pay:other_cost'], 'payments').toBeGreaterThan(30);
+    expect(counts.day ?? 0, 'daily entries').toBeGreaterThan(20);
+    expect((counts['pay:materials'] ?? 0) + (counts['pay:electricity_bill'] ?? 0) + (counts['pay:other_cost'] ?? 0), 'payments').toBeGreaterThan(30);
     const moves = Object.entries(counts).filter(([k]) => k.startsWith('move:')).reduce((t, [, v]) => t + v, 0);
     expect(moves, 'moves').toBeGreaterThan(30);
   }, 240_000);

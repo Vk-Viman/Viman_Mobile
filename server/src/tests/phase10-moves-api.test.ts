@@ -42,7 +42,7 @@ describe('POST /icecream/fund-moves/preview', () => {
     await openNew(s, 'icecream', { fund: 'cost', amountCents: rs(5000) });
     const r = (await movePreview(s, 'cost', 'profit', rs(5000))).body;
     expect(r).toMatchObject({ profitEligibleCents: 0, cashOnlyCents: rs(5000), profitEffectCents: 0, needsConfirmation: true });
-    expect(r.explanation).toBe('Rs. 5,000.00 of this is opening balance, capital or money already spent (or more than is left of the materials allocation), so it will not count as profit. Rs. 0.00 will be counted as profit. The cash moves either way.');
+    expect(r.explanation).toBe('Rs. 5,000.00 of this is opening balance, capital or money already spent (or more than is left of the materials allocation), so it will not count as profit. The cash moves either way.');
   });
 
   it('re-allocation and re-label previews; negative-fund warning when the source would go below zero', async () => {

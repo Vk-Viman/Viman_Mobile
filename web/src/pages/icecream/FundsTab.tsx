@@ -185,7 +185,7 @@ function LedgerCard() {
         <span className="inline-flex flex-wrap items-center gap-2">
           {FUND_ENTRY_LABEL[e.kind]}
           {e.kind === 'reversal' && <Badge tone="red">Cancels #{e.reversesEntryId}</Badge>}
-          {e.note && <span className="text-xs text-slate-500">{e.note}</span>}
+          {e.note && e.kind !== 'daily_allocation' && <span className="text-xs text-slate-500">{e.note}</span>}
         </span>
       ),
     },

@@ -78,8 +78,12 @@ export function explainMove(plan: MovePlan, from: IceFund, to: IceFund): string 
     if (plan.cashOnlyCents === 0) {
       return `All of ${amount} is unspent ${line} allocation, so it will be counted as profit.`;
     }
-    return `${formatLKR(plan.cashOnlyCents)} of this is opening balance, capital or money already spent (or more than is left of the ${line} allocation), `
-      + `so it will not count as profit. ${formatLKR(plan.profitEligibleCents)} will be counted as profit. The cash moves either way.`;
+    const why = `opening balance, capital or money already spent (or more than is left of the ${line} allocation)`;
+    if (plan.profitEligibleCents === 0) {
+      return `${formatLKR(plan.cashOnlyCents)} of this is ${why}, so it will not count as profit. The cash moves either way.`;
+    }
+    return `${formatLKR(plan.cashOnlyCents)} of this is ${why}, so it will not count as profit. `
+      + `${formatLKR(plan.profitEligibleCents)} will be counted as profit. The cash moves either way.`;
   }
   if (plan.kind === 'reallocation') {
     return `Moving ${amount} from Profit back to ${FUND_LABEL[to]} lowers the recognized profit by the full ${amount}: `

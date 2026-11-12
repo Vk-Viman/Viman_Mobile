@@ -68,7 +68,7 @@ describe('icecream_days', () => {
   it('10.2 sum CHECK: cost + electricity + profit share must equal sales, in every combination', () => {
     const c = memDb(conns);
     expect(() => day(c, { business_date: daysAgo(1) })).not.toThrow();
-    for (const bad of [{ profit_share_cents: 301 }, { profit_share_cents: 299 }, { cost_alloc_cents: 601 }, { electricity_alloc_cents: 99 }, { sales_cents: 1001 }]) {
+    for (const bad of [{ profit_share_cents: 301 }, { profit_share_cents: 299 }, { cost_alloc_cents: 601 }, { electricity_alloc_cents: 99 }, { sales_cents: 1001 }] as Row[]) {
       expect(msgOf(() => day(c, { business_date: daysAgo(2), ...bad })), JSON.stringify(bad)).toMatch(/CHECK/);
     }
     expect(() => day(c, { business_date: daysAgo(3), sales_cents: 0, cost_alloc_cents: 0, electricity_alloc_cents: 0, profit_share_cents: 0 })).not.toThrow();
@@ -226,7 +226,7 @@ describe('icecream_fund_moves - sign and split CHECKs (10.3, 10.4, D1, D4)', () 
     const c = memDb(conns);
     for (const to of ['cost', 'electricity']) {
       expect(() => move(c, { from_fund: 'profit', to_fund: to, amount_cents: 500, profit_effect_cents: -500, cash_only_cents: 0 })).not.toThrow();
-      for (const b of [{ profit_effect_cents: 0 }, { profit_effect_cents: 500 }, { profit_effect_cents: -400 }, { profit_effect_cents: -500, cash_only_cents: 100 }, { profit_effect_cents: -500, charge_relabel_cents: 100 }]) {
+      for (const b of [{ profit_effect_cents: 0 }, { profit_effect_cents: 500 }, { profit_effect_cents: -400 }, { profit_effect_cents: -500, cash_only_cents: 100 }, { profit_effect_cents: -500, charge_relabel_cents: 100 }] as Row[]) {
         expect(msgOf(() => move(c, { from_fund: 'profit', to_fund: to, amount_cents: 500, cash_only_cents: 0, ...b })), JSON.stringify(b)).toMatch(/CHECK/);
       }
     }
@@ -234,9 +234,9 @@ describe('icecream_fund_moves - sign and split CHECKs (10.3, 10.4, D1, D4)', () 
 
   it('Cost <-> Electricity: profit effect 0, cash-only 0, re-label between 0 and the amount', () => {
     const c = memDb(conns);
-    for (const [from, to] of [['cost', 'electricity'], ['electricity', 'cost']]) {
+    for (const [from, to] of [['cost', 'electricity'], ['electricity', 'cost']] as Array<[string, string]>) {
       for (const relabel of [0, 200, 500]) expect(() => move(c, { from_fund: from, to_fund: to, amount_cents: 500, profit_effect_cents: 0, cash_only_cents: 0, charge_relabel_cents: relabel })).not.toThrow();
-      for (const b of [{ charge_relabel_cents: 501 }, { charge_relabel_cents: -1 }, { profit_effect_cents: 100 }, { profit_effect_cents: -100 }, { cash_only_cents: 100 }]) {
+      for (const b of [{ charge_relabel_cents: 501 }, { charge_relabel_cents: -1 }, { profit_effect_cents: 100 }, { profit_effect_cents: -100 }, { cash_only_cents: 100 }] as Row[]) {
         expect(msgOf(() => move(c, { from_fund: from, to_fund: to, amount_cents: 500, profit_effect_cents: 0, cash_only_cents: 0, charge_relabel_cents: 0, ...b })), JSON.stringify(b)).toMatch(/CHECK/);
       }
     }
