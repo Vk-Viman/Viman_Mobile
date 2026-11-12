@@ -339,7 +339,9 @@ function importDate(date: string | undefined): string {
 function skuLookup(conn: DatabaseSync): (sku: string) => ProductRef | undefined {
   return (sku) => {
     const p = findProductByCode(conn, sku);
-    return p ? { id: p.id, name: p.name, active: p.active, kind: p.kind } : undefined;
+    return p ? {
+      id: p.id, name: p.name, active: p.active, kind: p.kind, categoryName: p.categoryName, book: p.book,
+    } : undefined;
   };
 }
 

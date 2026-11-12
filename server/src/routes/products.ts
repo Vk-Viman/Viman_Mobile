@@ -1,7 +1,7 @@
 /**
  * routes/products.ts - HTTP endpoints for products.
  *
- *   GET /products?q=&book=&categoryId=&lowStock=&active=&limit=&offset=   list (default 100, max 500)
+ *   GET /products?q=&book=&categoryId=&kind=&lowStock=&active=&limit=&offset=   list (default 100, max 500)
  *   GET /products/:id    one product        POST /products   create (201)        PUT /products/:id   edit
  *
  * Layer: route (thin) -> `catalog.service.ts`. Rules (book comes from the category, kind/book never change,
@@ -12,7 +12,7 @@ import type { AppContext } from '../app.ts';
 import {
   createProduct, getProductItem, listProductItems, updateProductItem,
 } from '../services/catalog.service.ts';
-import type { Book, ProductCreate, ProductListQuery, ProductUpdate } from '../services/catalog.service.ts';
+import type { Book, Kind, ProductCreate, ProductListQuery, ProductUpdate } from '../services/catalog.service.ts';
 import {
   bookQuery, boolQuery, idParamsSchema, intQuery, parseBool, parseId, parsePaging,
 } from './catalog-query.ts';
@@ -28,6 +28,7 @@ const listQuery = {
     q: { type: 'string', maxLength: 200 },
     book: bookQuery,
     categoryId: intQuery,
+    kind: { type: 'string', enum: ['stock', 'service'] },
     lowStock: boolQuery,
     active: boolQuery,
     limit: intQuery,
@@ -39,12 +40,19 @@ const listQuery = {
 const createBody = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'categoryId', 'kind', 'sellPriceCents', 'minPriceCents'],
+  required: ['name', 'kind', 'sellPriceCents', 'minPriceCents'],
   properties: {
     code: { type: 'string' },
     name: { type: 'string' },
     description: { type: 'string' },
     categoryId: { type: 'integer', minimum: 1 },
+    // Exactly one of categoryId / newCategory (checked by the service: neither or both -> 400 on categoryId).
+    newCategory: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'book'],
+      properties: { name: { type: 'string' }, book: bookQuery },
+    },
     kind: { type: 'string', enum: ['stock', 'service'] },
     sellPriceCents: { type: 'integer' },
     minPriceCents: { type: 'integer' },
@@ -73,7 +81,7 @@ const updateBody = {
 export function registerProductRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/products', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      q?: string; book?: Book; categoryId?: string; lowStock?: string; active?: string; limit?: string; offset?: string;
+      q?: string; book?: Book; categoryId?: string; kind?: Kind; lowStock?: string; active?: string; limit?: string; offset?: string;
     };
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: ProductListQuery = { limit, offset };
@@ -81,6 +89,7 @@ export function registerProductRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (text) q.q = text;
     if (raw.book !== undefined) q.book = raw.book;
     if (raw.categoryId !== undefined) q.categoryId = Number(raw.categoryId);
+    if (raw.kind !== undefined) q.kind = raw.kind;
     const lowStock = parseBool(raw.lowStock);
     if (lowStock !== undefined) q.lowStock = lowStock;
     const active = parseBool(raw.active);

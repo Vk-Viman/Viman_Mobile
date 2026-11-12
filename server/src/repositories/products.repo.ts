@@ -23,7 +23,7 @@ export interface ProductRow {
 
 /** Filters and paging for `listProducts`. `q` searches name and code. */
 export interface ProductQuery {
-  q?: string; book?: Book; categoryId?: number; lowStock?: boolean; active?: boolean;
+  q?: string; book?: Book; categoryId?: number; kind?: Kind; lowStock?: boolean; active?: boolean;
   limit: number; offset: number;
 }
 
@@ -62,6 +62,7 @@ export function listProducts(conn: DatabaseSync, q: ProductQuery): { items: Prod
   }
   if (q.book !== undefined) { where.push('p.book = ?'); params.push(q.book); }
   if (q.categoryId !== undefined) { where.push('p.category_id = ?'); params.push(q.categoryId); }
+  if (q.kind !== undefined) { where.push('p.kind = ?'); params.push(q.kind); }
   if (q.active !== undefined) { where.push('p.active = ?'); params.push(q.active ? 1 : 0); }
   if (q.lowStock === true) {
     // Low stock = an active stock product with a reorder level set and quantity at or below it.
