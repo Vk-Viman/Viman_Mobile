@@ -32,4 +32,16 @@ describe('randomized simulations vs independent model', () => {
       expect(sim.recs.filter((r) => r.voided).length, 'some records were voided').toBeGreaterThan(5);
     }, 900000);
   }
+
+  // A fourth, Ice Cream heavy run: many daily entries, payments, fund moves (D4 splits, releases, re-allocations, re-labels) and voids, so the section 10.4
+  // limits and the D2 void guard are exercised hard. The oracle of section 10.4 (Charged / Settled / Unspent, recognized profit, net releases) is compared
+  // with GET /icecream/funds and the Ice Cream P&L after every step.
+  it(`seed 99991 (ice cream heavy): ${OPS} operations; split/guard decisions of the server equal the oracle`, async () => {
+    const sim = new Simulation(await apiBase(await env.build()), 99991, false, 'ice');
+    await sim.setup();
+    const stats = await sim.run(OPS);
+    console.log('seed 99991 ice', JSON.stringify(stats.byKind), JSON.stringify(stats.rejected));
+    expect(stats.rejected.SPLIT_CONFIRMATION_REQUIRED ?? 0, 'D4 splits were exercised').toBeGreaterThan(2);
+    expect(stats.rejected.VOID_BREAKS_RELEASE ?? 0, 'the D2 guard was exercised').toBeGreaterThan(0);
+  }, 900000);
 });

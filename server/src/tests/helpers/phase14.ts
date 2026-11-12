@@ -523,7 +523,7 @@ interface PurLine { pid: number; units: number; total: number; returned: number;
 interface SaleLine { itemId: number; pid: number; qty: number; rev: number; cogs: number; retQty: number; retRev: number; retCogs: number }
 interface Rec {
   kind: string; date: string; books: Book[]; delta: Delta; voidUrl: string | null; voided: boolean; id: number; hasReturns?: boolean;
-  pur?: { book: Book; lines: PurLine[] }; sale?: { book: Book; lines: SaleLine[] }; dayDate?: string; fundOnlyKind?: boolean;
+  pur?: { book: Book; lines: PurLine[] }; sale?: { book: Book; lines: SaleLine[] }; dayDate?: string; fundOnlyKind?: boolean; ice?: unknown;
 }
 
 /** Outcome of one simulated operation. */
@@ -548,13 +548,36 @@ export class Simulation {
   telP: number[] = [];
   prov: number[] = [];
   iceDays = new Map<string, Rec>();
+  /**
+   * Independent oracle of BUSINESS_RULES section 10.4 (written from the rules, not from the service): Charged / Settled per line, recognized profit (all time,
+   * posting order), net releases. `ChM`/`ChE` = Charged Materials/Electricity, `SeM`/`SeE` = Settled, `RP` = recognized profit, `rel` = profit-eligible releases - re-allocations.
+   */
+  ice = { ChM: 0, ChE: 0, SeM: 0, SeE: 0, RP: 0, rel: 0 };
+  iceU(s = this.ice): { M: number; E: number; U: number } { const M = s.ChM - s.SeM; const E = s.ChE - s.SeE; return { M, E, U: M + E }; }
+  /** D2: would moving from the current oracle state to `next` be refused (a void that lowers a Charged line or the combined Unspent AND leaves released profit unbacked)? */
+  iceBlocked(next: { ChM: number; ChE: number; SeM: number; SeE: number; rel: number }): boolean {
+    const cur = this.iceU(); const nx = this.iceU({ ...this.ice, ...next });
+    const lowered = next.ChM < this.ice.ChM || next.ChE < this.ice.ChE || nx.U < cur.U;
+    const bad = next.ChM < 0 || next.ChE < 0 || (next.rel > 0 && nx.U < 0);
+    return lowered && bad;
+  }
+  /** Oracle effect of a fund move at the current state: charge changes, profit change and the profit-eligible limit. */
+  iceMoveEffect(from: Fund, to: Fund, x: number): { dChM: number; dChE: number; dRP: number; dRel: number; limit: number | null; eligible: number } {
+    const u = this.iceU(); const lim = (un: number) => Math.min(Math.max(0, un), Math.max(0, u.U));
+    if (from === 'cost' && to === 'electricity') { const r = Math.min(x, Math.max(0, u.M)); return { dChM: -r, dChE: r, dRP: 0, dRel: 0, limit: null, eligible: 0 }; }
+    if (from === 'electricity' && to === 'cost') { const r = Math.min(x, Math.max(0, u.E)); return { dChM: r, dChE: -r, dRP: 0, dRel: 0, limit: null, eligible: 0 }; }
+    if (to === 'profit') { const limit = lim(from === 'cost' ? u.M : u.E); const e = Math.min(x, limit); return { dChM: from === 'cost' ? -e : 0, dChE: from === 'electricity' ? -e : 0, dRP: e, dRel: e, limit, eligible: e }; }
+    return { dChM: to === 'cost' ? x : 0, dChE: to === 'electricity' ? x : 0, dRP: -x, dRel: -x, limit: null, eligible: 0 };
+  }
   stats: SimStats = { ops: 0, byKind: {}, rejected: {} };
   log: string[] = [];
   lastExpense: Record<string, unknown> | null = null;
   skipReports: boolean;
 
-  constructor(s: ApiBase, seed: number, skipReports = false) {
-    this.s = s; this.seed = seed; this.rnd = rng14(seed); this.skipReports = skipReports;
+  /** 'mixed' = every module; 'ice' = mostly Ice Cream days, payments, moves, voids and re-allocations (stresses the section 10.4 limits and the D2 guard). */
+  profile: 'mixed' | 'ice';
+  constructor(s: ApiBase, seed: number, skipReports = false, profile: 'mixed' | 'ice' = 'mixed') {
+    this.s = s; this.seed = seed; this.rnd = rng14(seed); this.skipReports = skipReports; this.profile = profile;
   }
 
   // ---------- random helpers ----------
@@ -596,6 +619,15 @@ export class Simulation {
       const r = rows(ctx, 'SELECT qty_on_hand q, stock_value_cents v FROM products WHERE id = ?', pid)[0]!;
       expect([Number(r.q), Number(r.v)], `${label}: model vs product ${pid} stock`).toEqual([p.qty, p.value]);
     }
+    // Ice Cream oracle (section 10.4): Charged / Settled / Unspent per line, recognized profit, outstanding excess, the P&L total
+    const f = (await get(this.s.app, '/icecream/funds')).body;
+    const u = this.iceU();
+    expect([f.lines.materials.chargedCents, f.lines.materials.settledCents, f.lines.electricity.chargedCents, f.lines.electricity.settledCents], `${label}: Charged/Settled vs oracle`)
+      .toEqual([this.ice.ChM, this.ice.SeM, this.ice.ChE, this.ice.SeE]);
+    expect([f.unspentAllocationCents, f.outstandingExcessCostCents, f.recognizedProfitToDateCents], `${label}: Unspent / excess / recognized profit vs oracle`)
+      .toEqual([u.U, Math.max(0, -u.U), this.ice.RP]);
+    const pnl = (await get(this.s.app, `/reports/pnl/icecream?from=${daysAgo(40)}&to=${daysAgo(0)}&granularity=month`)).body;
+    expect(pnl.totals.recognizedProfitCents, `${label}: Ice Cream P&L total vs oracle`).toBe(this.ice.RP);
     await assertGlobalInvariants(this.s, { skipReports: this.skipReports });
   }
 
@@ -772,8 +804,16 @@ export class Simulation {
       this.cash[pur.book] += pur.lines.reduce((a, l) => a + l.total, 0);
       rec.voided = true; return;
     }
-    if (rec.kind === 'iceday' || rec.kind === 'icemove') {
-      if ([409, 422].includes(r.status) && r.body.error.code === 'VOID_BREAKS_RELEASE') { this.stats.rejected.VOID_BREAKS_RELEASE = (this.stats.rejected.VOID_BREAKS_RELEASE ?? 0) + 1; expect(countsAll(this.s.ctx)).toEqual(before); return; }
+    if (rec.kind === 'iceday' || rec.kind === 'icemove' || rec.kind === 'icepay') {
+      // D2 oracle: the state after the void, compared with the current one
+      const ic = rec.ice as any; const n = { ChM: this.ice.ChM, ChE: this.ice.ChE, SeM: this.ice.SeM, SeE: this.ice.SeE, rel: this.ice.rel };
+      let dRP = 0;
+      if (ic.type === 'day') { n.ChM -= ic.C; n.ChE -= ic.E; dRP = -ic.share; }
+      else if (ic.type === 'pay') { const save = { ...this.ice }; this.icePay(ic.kind, ic.fund, ic.amt, -1); n.SeM = this.ice.SeM; n.SeE = this.ice.SeE; dRP = this.ice.RP - save.RP; this.ice.SeM = save.SeM; this.ice.SeE = save.SeE; this.ice.RP = save.RP; }
+      else { n.ChM -= ic.eff.dChM; n.ChE -= ic.eff.dChE; n.rel -= ic.eff.dRel; dRP = -ic.eff.dRP; }
+      if (this.iceBlocked(n)) return this.refuse(`void ${rec.kind} (D2 oracle says blocked)`, r, 422, 'VOID_BREAKS_RELEASE', before);
+      expect(r.status, `void ${rec.kind} #${rec.id} is allowed by the oracle: ${JSON.stringify(r.body)}`).toBe(200);
+      this.ice.ChM = n.ChM; this.ice.ChE = n.ChE; this.ice.SeM = n.SeM; this.ice.SeE = n.SeE; this.ice.rel = n.rel; this.ice.RP += dRP;
     }
     if (rec.kind === 'stocktake' || rec.kind === 'loss' || rec.kind === 'goods') {
       // a negated stocktake GAIN needs the quantity to still be on hand; the server may refuse (422 INSUFFICIENT_STOCK / 409) - then nothing changes
@@ -889,12 +929,13 @@ export class Simulation {
     const out = await this.expectCreated('count', r);
     expect([out.item.expectedCents, out.item.differenceCents], 'count expected/difference vs model').toEqual([expected, diff]);
     if (diff !== 0) this.addRec({ kind: 'count', id: out.item.id, date: today, books: [book], delta: { cash: [{ book, amt: diff, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: null });
+    if (diff !== 0 && book === 'icecream') this.ice.RP += diff; // cash over/short is a recognition event whatever fund is chosen (C4)
   }
 
   async opIceDay(): Promise<void> {
     const date = this.date(['icecream']); if (!date) return;
     const exists = this.iceDays.has(date);
-    const S = this.int(0, 300000); const C = this.int(0, Math.min(S, 200000)); let E = this.int(0, Math.max(0, S - C));
+    const S = this.int(0, 80000); const C = this.int(0, Math.min(S, 60000)); let E = this.int(0, Math.max(0, S - C));
     if (this.chance(0.15)) E = E + this.int(1, 5000); // profit share may become negative
     const share = S - C - E;
     if (S === 0 && C === 0 && E === 0) return;
@@ -904,46 +945,66 @@ export class Simulation {
     if (exists) return this.refuse('ice day', r, 409, 'DAY_EXISTS', before);
     if (share < 0 && !confirm) return this.refuse('ice day', r, 422, 'NEGATIVE_PROFIT_UNCONFIRMED', before);
     const out = await this.expectCreated('ice day', r);
-    const rec = this.addRec({ kind: 'iceday', id: out.day.id, date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: C, fund: 'cost' }, { book: 'icecream', amt: E, fund: 'electricity' }, { book: 'icecream', amt: share, fund: 'profit' }].filter((c) => c.amt !== 0) as Delta['cash'], fund: [], stock: [] }, voidUrl: `/icecream/days/${date}/void`, dayDate: date });
+    const rec = this.addRec({ kind: 'iceday', id: out.day.id, date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: C, fund: 'cost' }, { book: 'icecream', amt: E, fund: 'electricity' }, { book: 'icecream', amt: share, fund: 'profit' }].filter((c) => c.amt !== 0) as Delta['cash'], fund: [], stock: [] }, voidUrl: `/icecream/days/${date}/void`, dayDate: date, ice: { type: 'day', C, E, share } });
     this.iceDays.set(date, rec);
+    this.ice.ChM += C; this.ice.ChE += E; this.ice.RP += share;
   }
 
   async opIceDayReplace(): Promise<void> {
     const cands = [...this.iceDays.values()].filter((r) => !r.voided); if (!cands.length) return;
     const rec = this.pick(cands);
-    const S = this.int(1, 300000); const C = this.int(0, S); const E = this.int(0, S - C); const share = S - C - E;
+    const S = this.int(1, 80000); const C = this.int(0, S); const E = this.int(0, S - C); const share = S - C - E;
     const before = countsAll(this.s.ctx);
     const r = await put(this.s.app, `/icecream/days/${rec.dayDate}`, { salesCents: S, costAllocCents: C, electricityAllocCents: E, clientRef: ref() });
     if (this.isClosed(['icecream'], rec.date)) return this.refuse('ice day replace', r, 409, 'DAY_CLOSED', before);
-    if ([409, 422].includes(r.status) && r.body.error.code === 'VOID_BREAKS_RELEASE') { this.stats.rejected.VOID_BREAKS_RELEASE = (this.stats.rejected.VOID_BREAKS_RELEASE ?? 0) + 1; expect(countsAll(this.s.ctx)).toEqual(before); return; }
-    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    // D2 judged on the FINAL state (old entry removed, new one in)
+    const old = rec.ice as { C: number; E: number; share: number };
+    const next = { ChM: this.ice.ChM - old.C + C, ChE: this.ice.ChE - old.E + E, SeM: this.ice.SeM, SeE: this.ice.SeE, rel: this.ice.rel };
+    if (this.iceBlocked(next)) return this.refuse('ice day replace (D2)', r, 422, 'VOID_BREAKS_RELEASE', before);
+    expect(r.status, `replace should be allowed by the oracle: ${JSON.stringify(r.body)}`).toBe(200);
     this.apply(rec.delta, -1); rec.voided = true; this.iceDays.delete(rec.dayDate!);
-    const nr = this.addRec({ kind: 'iceday', id: r.body.day.id, date: rec.date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: C, fund: 'cost' }, { book: 'icecream', amt: E, fund: 'electricity' }, { book: 'icecream', amt: share, fund: 'profit' }].filter((c) => c.amt !== 0) as Delta['cash'], fund: [], stock: [] }, voidUrl: `/icecream/days/${rec.dayDate}/void`, dayDate: rec.dayDate });
+    const nr = this.addRec({ kind: 'iceday', id: r.body.day.id, date: rec.date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: C, fund: 'cost' }, { book: 'icecream', amt: E, fund: 'electricity' }, { book: 'icecream', amt: share, fund: 'profit' }].filter((c) => c.amt !== 0) as Delta['cash'], fund: [], stock: [] }, voidUrl: `/icecream/days/${rec.dayDate}/void`, dayDate: rec.dayDate, ice: { type: 'day', C, E, share } });
     this.iceDays.set(rec.dayDate!, nr);
+    this.ice.ChM = next.ChM; this.ice.ChE = next.ChE; this.ice.RP += share - old.share;
   }
 
   async opIcePay(): Promise<void> {
     const date = this.date(['icecream']); if (!date) return;
     const kind = this.pick(['materials', 'electricity_bill', 'other_cost'] as const); const fund = this.pick(FUNDS); const amt = this.int(100, 60000);
     const out = await this.expectCreated('ice payment', await post(this.s.app, '/icecream/payments', { businessDate: date, kind, fund, amountCents: amt, description: `sim ${kind}`, clientRef: ref() }));
-    const type = kind === 'materials' ? 'materials' : kind;
-    this.addRec({ kind: 'icepay', id: out.payment.id, date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: -amt, fund }], fund: [], stock: [] }, voidUrl: `/icecream/payments/${out.payment.id}/void` });
-    void type;
+    // settlement lines (10.4): materials -> Materials; electricity bill -> Electricity; other cost from Cost -> Materials, from Electricity -> Electricity, from Profit -> an expense
+    const line: 'M' | 'E' | 'P' = kind === 'materials' ? 'M' : kind === 'electricity_bill' ? 'E' : fund === 'cost' ? 'M' : fund === 'electricity' ? 'E' : 'P';
+    this.addRec({ kind: 'icepay', id: out.payment.id, date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: -amt, fund }], fund: [], stock: [] }, voidUrl: `/icecream/payments/${out.payment.id}/void`, ice: { type: 'pay', kind, fund, amt, line } });
+    this.icePay(kind, fund, amt, 1);
+  }
+  /** Oracle effect of a payment (sign -1 = its void). Materials/electricity payments are settlements; other cost from the Profit fund is an expense; from Cost/Electricity a settlement of that line. */
+  icePay(kind: string, fund: Fund, amt: number, sign: 1 | -1): void {
+    if (kind === 'materials') this.ice.SeM += sign * amt;
+    else if (kind === 'electricity_bill') this.ice.SeE += sign * amt;
+    else if (fund === 'cost') this.ice.SeM += sign * amt;
+    else if (fund === 'electricity') this.ice.SeE += sign * amt;
+    else this.ice.RP -= sign * amt;
   }
 
   async opIceMove(): Promise<void> {
     const date = this.date(['icecream']); if (!date) return;
-    const from = this.pick(FUNDS); const to = this.pick(FUNDS.filter((f) => f !== from)); const amt = this.int(100, 40000);
+    let from = this.pick(FUNDS); let to = this.pick(FUNDS.filter((f) => f !== from)); const amt = this.int(100, 40000);
+    if (this.profile === 'ice' && this.chance(0.5)) { from = this.pick(['cost', 'electricity'] as Fund[]); to = 'profit'; } // releases: the profit-eligible limit and the D2 guard need them
     const body = { businessDate: date, fromFund: from, toFund: to, amountCents: amt, clientRef: ref() };
+    const eff = this.iceMoveEffect(from, to, amt);
     let r = await post(this.s.app, '/icecream/fund-moves', body);
+    const needsSplit = eff.limit !== null && amt > eff.limit;
     if (r.status === 409 && r.body.error.code === 'SPLIT_CONFIRMATION_REQUIRED') {
       const e = r.body.error;
-      expect(e.profitEligibleCents + e.cashOnlyCents, 'D4 split adds up to the move').toBe(amt);
+      expect(needsSplit, `the oracle expected NO split for ${from}->${to} ${amt} (limit ${eff.limit}) but the server asked for one: ${JSON.stringify(e)}`).toBe(true);
+      expect([e.profitEligibleCents, e.cashOnlyCents], `D4 split of ${from}->${to} ${amt} (oracle limit ${eff.limit})`).toEqual([eff.limit, amt - eff.limit!]);
       this.stats.rejected.SPLIT_CONFIRMATION_REQUIRED = (this.stats.rejected.SPLIT_CONFIRMATION_REQUIRED ?? 0) + 1;
       r = await post(this.s.app, '/icecream/fund-moves', { ...body, confirmSplit: true, confirmedProfitEligibleCents: e.profitEligibleCents });
-    }
+    } else expect(needsSplit, `the oracle expected a D4 split for ${from}->${to} ${amt} (limit ${eff.limit}) but the move was ${r.status}`).toBe(false);
     const out = await this.expectCreated('ice move', r);
-    this.addRec({ kind: 'icemove', id: out.move.id, date, books: ['icecream'], delta: { cash: [], fund: [{ fund: from, amt: -amt }, { fund: to, amt }], stock: [] }, voidUrl: `/icecream/fund-moves/${out.move.id}/void` });
+    this.addRec({ kind: 'icemove', id: out.move.id, date, books: ['icecream'], delta: { cash: [], fund: [{ fund: from, amt: -amt }, { fund: to, amt }], stock: [] }, voidUrl: `/icecream/fund-moves/${out.move.id}/void`, ice: { type: 'move', eff } });
+    this.ice.ChM += eff.dChM; this.ice.ChE += eff.dChE; this.ice.RP += eff.dRP; this.ice.rel += eff.dRel;
+    if (to === 'profit') expect(out.move.cashOnlyCents, 'cash-only part of the release').toBe(amt - eff.eligible);
   }
 
   async opClose(): Promise<void> {
@@ -1025,6 +1086,12 @@ export class Simulation {
       ['closedAttempt', 3, () => this.opClosedAttempt()], ['invalid', 4, () => this.opInvalid()], ['duplicate', 2, () => this.opDuplicate()],
       ['doubleVoid', 2, () => this.opDoubleVoid()],
     ];
+    if (this.profile === 'ice') {
+      const w: Record<string, number> = { iceDay: 14, iceDayReplace: 5, icePay: 16, iceMove: 22, void: 0, count: 4, cashOnly: 6, close: 1, reopen: 1, sale: 3, purchase: 2, saleReturn: 0, purchaseReturn: 0,
+        voidSale: 0, voidPurchase: 0, loss: 0, goods: 0, stocktake: 0, closedAttempt: 1, invalid: 2, duplicate: 1, doubleVoid: 1 };
+      for (const t of table) t[1] = w[t[0]] ?? t[1];
+      table.push(['voidIce', 14, () => this.opVoid(['iceday', 'icemove', 'icepay'])]);
+    }
     const total = table.reduce((a, t) => a + t[1], 0);
     let x = this.rnd() * total; let chosen = table[0]!;
     for (const t of table) { x -= t[1]; if (x < 0) { chosen = t; break; } }
