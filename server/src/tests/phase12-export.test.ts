@@ -33,6 +33,16 @@ const sheet = (name: string): ExcelJS.Worksheet => {
   return ws;
 };
 
+/** The valuation's Total row has an empty first column (its label sits in "Product"), so it is found by any cell reading "Total". */
+function stockTotal(ws: ExcelJS.Worksheet): ExcelJS.CellValue {
+  const col = (ws.getRow(1).values as ExcelJS.CellValue[]).findIndex((h) => h === 'Stock value');
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const vals = ws.getRow(r).values as ExcelJS.CellValue[];
+    if (vals.includes('Total')) return ws.getRow(r).getCell(col).value;
+  }
+  throw new Error('no Total row');
+}
+
 describe('GET /reports/export-pack', () => {
   it('has every sheet of the contract, in order', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
@@ -70,7 +80,7 @@ describe('GET /reports/export-pack', () => {
   });
 
   it('inventory valuation is as of the end date (stock 285,000 cents); sales, low stock and the other sheets are present and headed', () => {
-    expect(cellBy(sheet('Inventory valuation'), 'Total', 'Stock value')).toBe(2850);
+    expect(stockTotal(sheet('Inventory valuation'))).toBe(2850);
     // Sales net revenue = Shop goods 192,000 + scratch cards 18,000 = 210,000 cents
     expect(cellBy(sheet('Sales'), 'Total', 'Revenue (net)')).toBe(2100);
     expect(sheet('Low stock').getRow(1).values).toContain('Product');
@@ -96,7 +106,7 @@ describe('GET /reports/export-pack', () => {
     const json = (await rep(s, 'pnl/combined', q('2025-03-01', '2025-04-30', 'month'))).body;
     expect(cellBy(sheet('Combined P&L (by month)'), 'Total', 'Combined recognized profit (official)')).toBe(json.totals.recognizedProfitCents / 100);
     const val = (await get(s.app, '/reports/inventory/valuation?asOf=2025-04-30')).body;
-    expect(cellBy(sheet('Inventory valuation'), 'Total', 'Stock value')).toBe(val.totals.valueCents / 100);
+    expect(stockTotal(sheet('Inventory valuation'))).toBe(val.totals.valueCents / 100);
   });
 
   it('a single-day range and a range with no records both work; the workbook still has every sheet', async () => {
@@ -109,7 +119,7 @@ describe('GET /reports/export-pack', () => {
     expect(cellBy(empty.wb!.getWorksheet('Combined P&L (by month)')!, 'Total', 'Combined recognized profit (official)')).toBe(0);
     const future = await pack(s, 'from=2031-01-01&to=2031-03-31');
     expect(future.status).toBe(200); // R-FD is for writes only
-    expect(cellBy(future.wb!.getWorksheet('Inventory valuation')!, 'Total', 'Stock value')).toBe(2850);
+    expect(stockTotal(future.wb!.getWorksheet('Inventory valuation')!)).toBe(2850);
   });
 
   it('validation: missing, impossible, reversed and over-long ranges are 400 with the field named', async () => {
