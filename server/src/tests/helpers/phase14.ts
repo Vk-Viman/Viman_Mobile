@@ -7,8 +7,8 @@
 import { expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../../app.ts';
-import { get, post } from './catalog.ts';
-import { buy, mkProduct, mkTelecom, ref } from './inventory.ts';
+import { get, post, put } from './catalog.ts';
+import { buy, daysAgo, mkProduct, mkTelecom, ref } from './inventory.ts';
 import type { ApiBase } from './inventory.ts';
 import { drawNew, lossNew, lossVoid, stComplete, stDraft } from './phase4.ts';
 import { clc, cl, returnOk, rl, sellOk, voidSaleNew } from './phase5.ts';
@@ -398,7 +398,8 @@ export async function assertGlobalInvariants(s: { app: FastifyInstance; ctx: App
       expect(r.rd, `${ledger} reversal ${r.rid} keeps the business date`).toBe(r.od);
       expect([r.rt, r.ri], `${ledger} reversal ${r.rid} same record`).toEqual([r.ot, r.oi]);
       expect(r.rf, 'same fund').toBe(r.ofund);
-      expect(r.rk, 'same kind').toBe(r.ok);
+      // a reversal carries the original's type, or the neutral type 'reversal' (some modules use that spelling)
+      if (r.rk !== 'reversal') expect(r.rk, 'same kind').toBe(r.ok);
       if (ledger === 'cash_entries') expect(r.rb, 'same book').toBe(r.ob);
       expect(seen.has(Number(r.oid)), `${ledger} entry ${r.oid} reversed twice`).toBe(false);
       seen.add(Number(r.oid));
@@ -481,4 +482,563 @@ export function snapshotAll(ctx: AppContext): Record<string, string> {
 /** Names of the tables whose content differs between two snapshots (empty = identical). */
 export function diffSnapshots(a: Record<string, string>, b: Record<string, string>): string[] {
   return Object.keys(b).filter((t) => a[t] !== b[t]);
+}
+
+/** Row count of every table: a cheap "did anything get written?" fingerprint. */
+export function countsAll(ctx: AppContext): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of tableNames(ctx)) out[t] = n1(ctx, `SELECT COUNT(*) FROM "${t}"`);
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// (3) Randomized multi-module simulation with an INDEPENDENT in-test model of cash books, Ice Cream funds and stock
+// ---------------------------------------------------------------------------------------------------------------------------------------
+
+type Book = 'shop' | 'telecom' | 'icecream';
+type Fund = 'cost' | 'electricity' | 'profit';
+const FUNDS: Fund[] = ['cost', 'electricity', 'profit'];
+const CATS = ['water', 'rent', 'internet', 'transport', 'repairs', 'cleaning_supplies', 'packaging', 'stationery', 'other'];
+
+/** round(a x b / c), half away from zero, for non-negative a, b and positive c (plain integer arithmetic; values stay far below 2^53). */
+const mdr = (a: number, b: number, c: number): number => Math.floor((2 * a * b + c) / (2 * c));
+/** mulberry32 seeded generator (replayable runs). */
+export function rng14(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+interface Delta {
+  cash: Array<{ book: Book; amt: number; fund?: Fund }>;
+  fund: Array<{ fund: Fund; amt: number }>;
+  stock: Array<{ pid: number; qty: number; value: number }>;
+}
+interface PurLine { pid: number; units: number; total: number; returned: number; retValue: number; itemId: number }
+interface SaleLine { itemId: number; pid: number; qty: number; rev: number; cogs: number; retQty: number; retRev: number; retCogs: number }
+interface Rec {
+  kind: string; date: string; books: Book[]; delta: Delta; voidUrl: string | null; voided: boolean; id: number; hasReturns?: boolean;
+  pur?: { book: Book; lines: PurLine[] }; sale?: { book: Book; lines: SaleLine[] }; dayDate?: string; fundOnlyKind?: boolean;
+}
+
+/** Outcome of one simulated operation. */
+export interface SimStats { ops: number; byKind: Record<string, number>; rejected: Record<string, number> }
+
+/**
+ * The simulation: builds a small shop through the API, then runs `n` seeded random operations from every module. After every operation
+ * it (1) compares the API/database with its own independent model of the cash books, the three Ice Cream funds and the stock pools,
+ * (2) checks the outcome (status and error code) the model predicted, (3) runs assertGlobalInvariants.
+ */
+export class Simulation {
+  s: ApiBase;
+  rnd: () => number;
+  seed: number;
+  cash: Record<Book, number> = { shop: 0, telecom: 0, icecream: 0 };
+  fund: Record<Fund, number> = { cost: 0, electricity: 0, profit: 0 };
+  stock = new Map<number, { qty: number; value: number }>();
+  closed = new Set<string>();
+  closingIds = new Map<string, number>();
+  recs: Rec[] = [];
+  shopP: number[] = [];
+  telP: number[] = [];
+  prov: number[] = [];
+  iceDays = new Map<string, Rec>();
+  stats: SimStats = { ops: 0, byKind: {}, rejected: {} };
+  log: string[] = [];
+  lastExpense: Record<string, unknown> | null = null;
+  skipReports: boolean;
+
+  constructor(s: ApiBase, seed: number, skipReports = false) {
+    this.s = s; this.seed = seed; this.rnd = rng14(seed); this.skipReports = skipReports;
+  }
+
+  // ---------- random helpers ----------
+  int(lo: number, hi: number): number { return lo + Math.floor(this.rnd() * (hi - lo + 1)); }
+  pick<T>(a: readonly T[]): T { return a[Math.floor(this.rnd() * a.length)]!; }
+  chance(p: number): boolean { return this.rnd() < p; }
+  /** Random business date in the last 14 days (0 = today) that is open for all given books; null if none found. */
+  date(books: Book[], minDate?: string): string | null {
+    for (let i = 0; i < 12; i++) {
+      const d = daysAgo(this.int(0, 14));
+      if (minDate && d < minDate) continue;
+      if (!this.isClosed(books, d)) return d;
+    }
+    return null;
+  }
+  isClosed(books: Book[], d: string): boolean { return books.some((b) => this.closed.has(`${b}|${d}`)); }
+  bookOf(pid: number): Book { return this.telP.includes(pid) ? 'telecom' : 'shop'; }
+
+  // ---------- model ----------
+  apply(d: Delta, sign: 1 | -1): void {
+    for (const c of d.cash) { this.cash[c.book] += sign * c.amt; if (c.book === 'icecream') this.fund[c.fund!] += sign * c.amt; }
+    for (const f of d.fund) this.fund[f.fund] += sign * f.amt;
+    for (const st of d.stock) { const p = this.stock.get(st.pid)!; p.qty += sign * st.qty; p.value += sign * st.value; }
+  }
+  pool(pid: number): { qty: number; value: number } { return this.stock.get(pid)!; }
+  /** value removed for q units from a pool (whole remaining value when q = qty). */
+  take(pid: number, q: number): number { const p = this.pool(pid); return q === p.qty ? p.value : mdr(p.value, q, p.qty); }
+
+  // ---------- verification after every step ----------
+  async verify(label: string): Promise<void> {
+    const ctx = this.s.ctx;
+    for (const b of ['shop', 'telecom', 'icecream'] as Book[]) {
+      expect(n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = ?', b), `${label}: model vs ledger, ${b} cash`).toBe(this.cash[b]);
+    }
+    for (const f of FUNDS) {
+      expect(n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM icecream_fund_entries WHERE fund = ?', f), `${label}: model vs ledger, ${f} fund`).toBe(this.fund[f]);
+    }
+    for (const [pid, p] of this.stock) {
+      const r = rows(ctx, 'SELECT qty_on_hand q, stock_value_cents v FROM products WHERE id = ?', pid)[0]!;
+      expect([Number(r.q), Number(r.v)], `${label}: model vs product ${pid} stock`).toEqual([p.qty, p.value]);
+    }
+    await assertGlobalInvariants(this.s, { skipReports: this.skipReports });
+  }
+
+  // ---------- setup ----------
+  async setup(): Promise<void> {
+    const s = this.s;
+    const names = ['A', 'B', 'C', 'D'];
+    for (const n of names) this.shopP.push((await mkProduct(s, { name: `Sim ${n} ${this.seed}`, sellPriceCents: 50000, minPriceCents: 100 })).id);
+    for (const n of ['K', 'L']) this.telP.push((await mkTelecom(s, { name: `Sim ${n} ${this.seed}`, sellPriceCents: 10000, minPriceCents: 100 })).id);
+    for (const pid of [...this.shopP, ...this.telP]) this.stock.set(pid, { qty: 0, value: 0 });
+    this.prov = Object.values(await providerIds(s));
+    const d = daysAgo(14);
+    await must(await openNew(s, 'shop', { businessDate: d, amountCents: 5000000 }), 'open shop'); this.cash.shop += 5000000;
+    await must(await openNew(s, 'telecom', { businessDate: d, amountCents: 3000000 }), 'open telecom'); this.cash.telecom += 3000000;
+    await must(await openNew(s, 'icecream', { businessDate: d, amountCents: 400000, fund: 'cost' }), 'open ice cost'); this.cash.icecream += 400000; this.fund.cost += 400000;
+    await must(await openNew(s, 'icecream', { businessDate: d, amountCents: 100000, fund: 'profit' }), 'open ice profit'); this.cash.icecream += 100000; this.fund.profit += 100000;
+    const o1 = this.shopP[0]!; const o2 = this.telP[0]!;
+    await must(await post(s.app, '/opening-stock', { businessDate: d, items: [{ productId: o1, qty: 7, totalValueCents: 70001 }, { productId: o2, qty: 30, unitCostCents: 7000 }], clientRef: ref() }), 'opening stock');
+    this.apply({ cash: [], fund: [], stock: [{ pid: o1, qty: 7, value: 70001 }, { pid: o2, qty: 30, value: 210000 }] }, 1);
+    await this.verify('setup');
+  }
+
+  // ---------- generic request helpers ----------
+  /** Sends a request that the model predicts will be refused; checks status/code and that nothing was written. */
+  async refuse(kind: string, r: { status: number; body: any }, status: number, code: string, before: Record<string, number>, ctxMsg = ''): Promise<void> {
+    expect([r.status, r.body?.error?.code], `${kind} ${ctxMsg} -> ${JSON.stringify(r.body).slice(0, 300)}`).toEqual([status, code]);
+    expect(countsAll(this.s.ctx), `${kind}: a refused request wrote something`).toEqual(before);
+    this.stats.rejected[code] = (this.stats.rejected[code] ?? 0) + 1;
+  }
+  async expectCreated(kind: string, r: { status: number; body: any }): Promise<any> {
+    expect(r.status, `${kind} -> ${JSON.stringify(r.body).slice(0, 400)}`).toBe(201);
+    return r.body;
+  }
+  addRec(rec: Omit<Rec, 'voided'>): Rec {
+    const full: Rec = { ...rec, voided: false };
+    this.recs.push(full);
+    this.apply(rec.delta, 1);
+    return full;
+  }
+  cashRec(kind: string, id: number, date: string, book: Book, amt: number, fund?: Fund, url: string | null = null): Rec {
+    return this.addRec({ kind, id, date, books: [book], delta: { cash: [{ book, amt, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: url });
+  }
+
+  // ---------- operations ----------
+  async opPurchase(): Promise<void> {
+    const book: Book = this.chance(0.7) ? 'shop' : 'telecom';
+    const date = this.date([book]); if (!date) return;
+    const pool = book === 'shop' ? this.shopP : this.telP;
+    const n = this.int(1, 2); const lines: Array<{ productId: number; packs: number; packSize: number; lineTotalCents: number }> = [];
+    for (let i = 0; i < n; i++) lines.push({ productId: this.pick(pool), packs: this.int(1, 3), packSize: this.int(1, 12), lineTotalCents: this.int(0, 400000) });
+    const r = await post(this.s.app, '/purchases', { businessDate: date, items: lines, clientRef: ref() });
+    const body = await this.expectCreated('purchase', r);
+    const total = lines.reduce((a, l) => a + l.lineTotalCents, 0);
+    const stock = lines.map((l) => ({ pid: l.productId, qty: l.packs * l.packSize, value: l.lineTotalCents }));
+    const pur = { book, lines: lines.map((l, i) => ({ pid: l.productId, units: l.packs * l.packSize, total: l.lineTotalCents, returned: 0, retValue: 0, itemId: body.item.items[i].id })) };
+    this.addRec({ kind: 'purchase', id: body.item.id, date, books: [book], delta: { cash: total > 0 ? [{ book, amt: -total }] : [], fund: [], stock }, voidUrl: `/purchases/${body.item.id}/void`, pur });
+  }
+
+  async opPurchaseReturn(): Promise<void> {
+    const cands = this.recs.filter((r) => r.kind === 'purchase' && !r.voided && r.pur!.lines.some((l) => l.returned < l.units));
+    if (!cands.length) return;
+    const rec = this.pick(cands); const pur = rec.pur!;
+    const date = this.date([pur.book], rec.date); if (!date) return;
+    const picks: Array<{ line: PurLine; units: number }> = [];
+    for (const l of pur.lines) if (l.returned < l.units && this.chance(0.7)) picks.push({ line: l, units: this.int(1, l.units - l.returned) });
+    if (!picks.length) return;
+    // model: per item value, pool removal (R4), cash refund; refusal if the pool cannot cover the units (cumulative per product)
+    const need = new Map<number, number>();
+    for (const p of picks) need.set(p.line.pid, (need.get(p.line.pid) ?? 0) + p.units);
+    const short = [...need].some(([pid, u]) => this.pool(pid).qty < u);
+    const before = countsAll(this.s.ctx);
+    const r = await post(this.s.app, `/purchases/${rec.id}/returns`, { businessDate: date, items: picks.map((p) => ({ purchaseItemId: p.line.itemId, units: p.units })), clientRef: ref() });
+    if (short) return this.refuse('purchase return', r, 422, 'INSUFFICIENT_STOCK', before);
+    await this.expectCreated('purchase return', r);
+    let refund = 0; const stock: Delta['stock'] = [];
+    for (const p of picks) {
+      const l = p.line; const lastBatch = l.returned + p.units === l.units;
+      const value = lastBatch ? l.total - l.retValue : mdr(l.total, p.units, l.units);
+      refund += value; l.returned += p.units; l.retValue += value;
+      const pool = this.pool(l.pid) as { qty: number; value: number };
+      const removed = Math.min(value, pool.value);
+      // apply to the model pool directly (the return is not voidable)
+      pool.qty -= p.units; pool.value -= removed;
+      stock.push({ pid: l.pid, qty: -p.units, value: -removed });
+      if (pool.qty === 0 && pool.value > 0) pool.value = 0; // residual sweep (value-only adjustment movement)
+    }
+    if (refund > 0) this.cash[pur.book] += refund;
+    this.log.push(`purchase return ${rec.id} refund ${refund}`);
+  }
+
+  async opSale(): Promise<void> {
+    const nLines = this.int(1, 3);
+    const items: Array<{ productId: number; qty: number; unitPriceCents: number; unitCostCents?: number }> = [];
+    const all = [...this.shopP, ...this.telP];
+    for (let i = 0; i < nLines; i++) items.push({ productId: this.chance(0.8) ? this.pick(this.shopP) : this.pick(this.telP), qty: this.int(1, 5), unitPriceCents: this.int(100, 200000) });
+    void all;
+    const books = [...new Set(items.map((i) => this.bookOf(i.productId)))];
+    const date = this.date(books); if (!date) return;
+    // model the cart line by line against a scratch copy of the pools
+    const scratch = new Map<number, { qty: number; value: number }>();
+    for (const [k, v] of this.stock) scratch.set(k, { ...v });
+    const lineModel: Array<{ pid: number; qty: number; rev: number; cogs: number }> = [];
+    let short = false;
+    for (const it of items) {
+      const p = scratch.get(it.productId)!;
+      if (p.qty < it.qty) { short = true; break; }
+      const cogs = it.qty === p.qty ? p.value : mdr(p.value, it.qty, p.qty);
+      p.qty -= it.qty; p.value -= cogs;
+      lineModel.push({ pid: it.productId, qty: it.qty, rev: it.qty * it.unitPriceCents, cogs });
+    }
+    if (!short) for (let i = 0; i < items.length; i++) if (this.chance(0.3)) items[i]!.unitCostCents = Math.ceil(lineModel[i]!.cogs / items[i]!.qty) + this.int(0, 50);
+    const before = countsAll(this.s.ctx);
+    const r = await post(this.s.app, '/sales', { businessDate: date, items, clientRef: ref() });
+    if (short) return this.refuse('sale', r, 422, 'INSUFFICIENT_STOCK', before);
+    const body = await this.expectCreated('sale', r);
+    for (const sale of body.sales as any[]) {
+      const sb = sale.book as Book;
+      const mine = lineModel.filter((l) => this.bookOf(l.pid) === sb);
+      expect(sale.items.length, 'sale lines').toBe(mine.length);
+      const lines: SaleLine[] = mine.map((l, i) => ({ itemId: sale.items[i].id, pid: l.pid, qty: l.qty, rev: l.rev, cogs: l.cogs, retQty: 0, retRev: 0, retCogs: 0 }));
+      const total = lines.reduce((a, l) => a + l.rev, 0);
+      expect(sale.totalCents, 'sale total').toBe(total);
+      this.addRec({ kind: 'sale', id: sale.id, date, books: [sb], delta: { cash: total > 0 ? [{ book: sb, amt: total }] : [], fund: [], stock: lines.map((l) => ({ pid: l.pid, qty: -l.qty, value: -l.cogs })) },
+        voidUrl: `/sales/${sale.id}/void`, sale: { book: sb, lines } });
+    }
+  }
+
+  async opSaleReturn(): Promise<void> {
+    const cands = this.recs.filter((r) => r.kind === 'sale' && !r.voided && r.sale!.lines.some((l) => l.retQty < l.qty));
+    if (!cands.length) return;
+    const rec = this.pick(cands); const sale = rec.sale!;
+    const date = this.date([sale.book], rec.date); if (!date) return;
+    const picks: Array<{ line: SaleLine; q: number; resalable: boolean }> = [];
+    for (const l of sale.lines) if (l.retQty < l.qty && this.chance(0.7)) picks.push({ line: l, q: this.int(1, l.qty - l.retQty), resalable: this.chance(0.7) });
+    if (!picks.length) return;
+    const r = await post(this.s.app, `/sales/${rec.id}/returns`, { businessDate: date, items: picks.map((p) => ({ saleItemId: p.line.itemId, qty: p.q, resalable: p.resalable })), clientRef: ref() });
+    await this.expectCreated('sale return', r);
+    let refund = 0;
+    for (const p of picks) {
+      const l = p.line; const last = l.retQty + p.q === l.qty;
+      const rev = last ? l.rev - l.retRev : Math.min(mdr(l.rev, p.q, l.qty), l.rev - l.retRev);
+      const cogs = last ? l.cogs - l.retCogs : Math.min(mdr(l.cogs, p.q, l.qty), l.cogs - l.retCogs);
+      l.retQty += p.q; l.retRev += rev; l.retCogs += cogs; refund += rev;
+      if (p.resalable) { const pool = this.pool(l.pid); pool.qty += p.q; pool.value += cogs; }
+    }
+    if (refund > 0) this.cash[sale.book] -= refund;
+    rec.hasReturns = true;
+  }
+
+  /** Voids a random not-yet-voided record, predicting the outcome. */
+  async opVoid(kinds?: string[]): Promise<void> {
+    const cands = this.recs.filter((r) => !r.voided && r.voidUrl && (!kinds || kinds.includes(r.kind)));
+    if (!cands.length) return;
+    const rec = this.pick(cands);
+    const before = countsAll(this.s.ctx);
+    const closed = this.isClosed(rec.books, rec.date);
+    const r = await post(this.s.app, rec.voidUrl!, { reason: 'sim void' });
+    this.stats.byKind[`void:${rec.kind}`] = (this.stats.byKind[`void:${rec.kind}`] ?? 0) + 1;
+    if (closed) return this.refuse(`void ${rec.kind}`, r, 409, 'DAY_CLOSED', before);
+    if (rec.kind === 'sale' && rec.hasReturns) return this.refuse('void sale', r, 409, 'HAS_RETURNS', before);
+    if (rec.kind === 'purchase') {
+      const pur = rec.pur!;
+      if (pur.lines.some((l) => l.returned > 0)) return this.refuse('void purchase', r, 409, 'HAS_RETURNS', before);
+      const need = new Map<number, number>();
+      for (const l of pur.lines) need.set(l.pid, (need.get(l.pid) ?? 0) + l.units);
+      if ([...need].some(([pid, u]) => this.pool(pid).qty < u)) return this.refuse('void purchase', r, 422, 'INSUFFICIENT_STOCK', before);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      for (const l of pur.lines) {
+        const pool = this.pool(l.pid);
+        const removed = Math.min(l.total, pool.value);
+        pool.qty -= l.units; pool.value -= removed;
+        if (pool.qty === 0 && pool.value > 0) pool.value = 0;
+      }
+      this.cash[pur.book] += pur.lines.reduce((a, l) => a + l.total, 0);
+      rec.voided = true; return;
+    }
+    if (rec.kind === 'iceday' || rec.kind === 'icemove') {
+      if ([409, 422].includes(r.status) && r.body.error.code === 'VOID_BREAKS_RELEASE') { this.stats.rejected.VOID_BREAKS_RELEASE = (this.stats.rejected.VOID_BREAKS_RELEASE ?? 0) + 1; expect(countsAll(this.s.ctx)).toEqual(before); return; }
+    }
+    if (rec.kind === 'stocktake' || rec.kind === 'loss' || rec.kind === 'goods') {
+      // a negated stocktake GAIN needs the quantity to still be on hand; the server may refuse (422 INSUFFICIENT_STOCK / 409) - then nothing changes
+      const neg = rec.delta.stock.some((st) => st.qty > 0 && this.pool(st.pid).qty < st.qty);
+      if (neg && r.status !== 200) { expect([422, 409]).toContain(r.status); expect(countsAll(this.s.ctx), 'refused void wrote something').toEqual(before); this.stats.rejected[`${r.body.error.code}`] = (this.stats.rejected[`${r.body.error.code}`] ?? 0) + 1; return; }
+    }
+    expect(r.status, `void ${rec.kind} #${rec.id}: ${JSON.stringify(r.body).slice(0, 300)}`).toBe(200);
+    this.apply(rec.delta, -1);
+    rec.voided = true;
+    if (rec.kind === 'iceday' && rec.dayDate) this.iceDays.delete(rec.dayDate);
+  }
+
+  async opStockOut(kind: 'loss' | 'goods'): Promise<void> {
+    const pid = this.pick([...this.shopP, ...this.telP]); const book = this.bookOf(pid);
+    const date = this.date([book]); if (!date) return;
+    const p = this.pool(pid); const q = this.int(1, 4);
+    const before = countsAll(this.s.ctx);
+    const body = kind === 'loss'
+      ? { businessDate: date, productId: pid, qty: q, reason: this.pick(['damaged', 'lost', 'expired', 'other']), clientRef: ref() }
+      : { kind: 'goods', businessDate: date, productId: pid, qty: q, clientRef: ref() };
+    const r = await post(this.s.app, kind === 'loss' ? '/stock-losses' : '/drawings', body);
+    if (p.qty < q) return this.refuse(kind, r, 422, 'INSUFFICIENT_STOCK', before);
+    const out = await this.expectCreated(kind, r);
+    const value = this.take(pid, q);
+    this.addRec({ kind, id: out.item.id, date, books: [book], delta: { cash: [], fund: [], stock: [{ pid, qty: -q, value: -value }] }, voidUrl: kind === 'loss' ? `/stock-losses/${out.item.id}/void` : `/drawings/${out.item.id}/void` });
+  }
+
+  async opStocktake(): Promise<void> {
+    const book: Book = this.chance(0.7) ? 'shop' : 'telecom';
+    const date = this.date([book]); if (!date) return;
+    const pool = book === 'shop' ? this.shopP : this.telP;
+    const pid = this.pick(pool); const p = this.pool(pid);
+    const counted = Math.max(0, p.qty + this.int(-3, 3));
+    if (counted === p.qty) return;
+    const item: Record<string, number> = { productId: pid, countedQty: counted };
+    const diff = counted - p.qty;
+    let unit = 0;
+    if (diff > 0 && (p.qty === 0 || p.value === 0)) { unit = this.int(100, 5000); item.gainUnitCostCents = unit; }
+    const d = await post(this.s.app, '/stocktakes', { businessDate: date, book, items: [item], clientRef: ref() });
+    const draft = await this.expectCreated('stocktake draft', d);
+    const r = await post(this.s.app, `/stocktakes/${draft.item.id}/complete`, {});
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    let value: number;
+    if (diff < 0) value = -this.take(pid, -diff);
+    else value = unit > 0 ? unit * diff : mdr(p.value, diff, p.qty);
+    this.addRec({ kind: 'stocktake', id: draft.item.id, date, books: [book], delta: { cash: [], fund: [], stock: [{ pid, qty: diff, value }] }, voidUrl: `/stocktakes/${draft.item.id}/void` });
+  }
+
+  async opCashOnly(): Promise<void> {
+    const t = this.int(0, 9);
+    const amt = this.int(100, 90000);
+    if (t === 0 || t === 1) { // expense
+      const book: Book = this.chance(0.6) ? 'shop' : 'telecom'; const date = this.date([book]); if (!date) return;
+      const body = { businessDate: date, book, category: this.pick(CATS), amountCents: amt, description: 'sim', clientRef: ref() };
+      const out = await this.expectCreated('expense', await post(this.s.app, '/expenses', body));
+      this.lastExpense = body;
+      this.cashRec('expense', out.item.id, date, book, -amt, undefined, `/expenses/${out.item.id}/void`);
+    } else if (t === 2) { // reload
+      const date = this.date(['telecom']); if (!date) return;
+      const extra = this.chance(0.3) ? this.int(0, 500) : undefined;
+      const out = await this.expectCreated('reload', await post(this.s.app, '/reload-sales', { businessDate: date, providerId: this.pick(this.prov), salesCents: amt, ...(extra !== undefined ? { extraCents: extra } : {}), clientRef: ref() }));
+      this.cashRec('reload', out.item.id, date, 'telecom', amt, undefined, `/reload-sales/${out.item.id}/void`);
+    } else if (t === 3) { // ezcash
+      const date = this.date(['telecom']); if (!date) return;
+      const out = await this.expectCreated('ezcash', await post(this.s.app, '/ezcash-sales', { businessDate: date, billTotalCents: amt, clientRef: ref() }));
+      this.cashRec('ezcash', out.item.id, date, 'telecom', amt, undefined, `/ezcash-sales/${out.item.id}/void`);
+    } else if (t === 4) { // top-up
+      const date = this.date(['telecom']); if (!date) return;
+      const provider = this.chance(0.5);
+      const out = await this.expectCreated('topup', await post(this.s.app, '/telecom/topups', { businessDate: date, kind: provider ? 'provider_topup' : 'wallet_topup', ...(provider ? { providerId: this.pick(this.prov) } : {}), amountCents: amt, clientRef: ref() }));
+      this.cashRec('topup', out.item.id, date, 'telecom', -amt, undefined, `/telecom/topups/${out.item.id}/void`);
+    } else if (t === 5) { // print sale or supplies
+      const date = this.date(['shop']); if (!date) return;
+      if (this.chance(0.6)) {
+        const types = (await get(this.s.app, '/print-service-types')).body.items as any[];
+        const ty = this.pick(types); const qty = this.int(1, 40);
+        const out = await this.expectCreated('print sale', await post(this.s.app, '/print-sales', { businessDate: date, serviceTypeId: ty.id, qty, clientRef: ref() }));
+        this.cashRec('print', out.item.id, date, 'shop', qty * ty.priceCents, undefined, `/print-sales/${out.item.id}/void`);
+      } else {
+        const out = await this.expectCreated('supplies', await post(this.s.app, '/printing-supplies', { businessDate: date, amountCents: amt, description: 'paper', clientRef: ref() }));
+        this.cashRec('supplies', out.item.id, date, 'shop', -amt, undefined, `/printing-supplies/${out.item.id}/void`);
+      }
+    } else if (t === 6 || t === 7) { // cash drawing / capital
+      const book: Book = this.pick(['shop', 'telecom', 'icecream']); const date = this.date([book]); if (!date) return;
+      const fund: Fund | undefined = book === 'icecream' ? this.pick(FUNDS) : undefined;
+      if (t === 6) {
+        const out = await this.expectCreated('cash drawing', await post(this.s.app, '/drawings', { kind: 'cash', businessDate: date, book, ...(fund ? { fund } : {}), amountCents: amt, clientRef: ref() }));
+        this.cashRec('cashdraw', out.item.id, date, book, -amt, fund, `/drawings/${out.item.id}/void`);
+      } else {
+        const out = await this.expectCreated('capital', await post(this.s.app, '/capital', { businessDate: date, book, ...(fund ? { fund } : {}), amountCents: amt, clientRef: ref() }));
+        this.cashRec('capital', out.item.id, date, book, amt, fund, `/capital-entries/${out.item.id}/void`);
+      }
+    } else { // transfer
+      const from: Book = this.pick(['shop', 'telecom', 'icecream']); let to: Book = this.pick(['shop', 'telecom', 'icecream']);
+      if (to === from) to = from === 'shop' ? 'telecom' : 'shop';
+      const date = this.date([from, to]); if (!date) return;
+      const ff: Fund | undefined = from === 'icecream' ? this.pick(FUNDS) : undefined; const tf: Fund | undefined = to === 'icecream' ? this.pick(FUNDS) : undefined;
+      const out = await this.expectCreated('transfer', await post(this.s.app, '/cash-transfers', { businessDate: date, fromBook: from, toBook: to, ...(ff ? { fromFund: ff } : {}), ...(tf ? { toFund: tf } : {}), amountCents: amt, clientRef: ref() }));
+      this.addRec({ kind: 'transfer', id: out.item.id, date, books: [from, to], delta: { cash: [{ book: from, amt: -amt, ...(ff ? { fund: ff } : {}) }, { book: to, amt, ...(tf ? { fund: tf } : {}) }], fund: [], stock: [] }, voidUrl: `/cash-transfers/${out.item.id}/void` });
+    }
+  }
+
+  async opCount(): Promise<void> {
+    const book: Book = this.pick(['shop', 'telecom', 'icecream']);
+    const today = daysAgo(0);
+    const before = countsAll(this.s.ctx);
+    const expected = this.cash[book];
+    const delta = this.chance(0.2) ? 0 : this.int(-4000, 4000);
+    const counted = Math.max(0, expected + delta); const diff = counted - expected;
+    const fund: Fund | undefined = book === 'icecream' ? this.pick(FUNDS) : undefined;
+    const r = await post(this.s.app, '/cash-counts', { businessDate: today, book, countedCents: counted, ...(fund && diff !== 0 ? { fund } : {}), ...(diff !== 0 ? { note: 'sim count' } : {}), clientRef: ref() });
+    if (this.isClosed([book], today)) return this.refuse('count', r, 409, 'DAY_CLOSED', before);
+    const out = await this.expectCreated('count', r);
+    expect([out.item.expectedCents, out.item.differenceCents], 'count expected/difference vs model').toEqual([expected, diff]);
+    if (diff !== 0) this.addRec({ kind: 'count', id: out.item.id, date: today, books: [book], delta: { cash: [{ book, amt: diff, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: null });
+  }
+
+  async opIceDay(): Promise<void> {
+    const date = this.date(['icecream']); if (!date) return;
+    const exists = this.iceDays.has(date);
+    const S = this.int(0, 300000); const C = this.int(0, Math.min(S, 200000)); let E = this.int(0, Math.max(0, S - C));
+    if (this.chance(0.15)) E = E + this.int(1, 5000); // profit share may become negative
+    const share = S - C - E;
+    if (S === 0 && C === 0 && E === 0) return;
+    const confirm = share < 0 ? this.chance(0.8) : false;
+    const before = countsAll(this.s.ctx);
+    const r = await post(this.s.app, '/icecream/days', { businessDate: date, salesCents: S, costAllocCents: C, electricityAllocCents: E, ...(confirm ? { confirmNegativeProfit: true } : {}), clientRef: ref() });
+    if (exists) return this.refuse('ice day', r, 409, 'DAY_EXISTS', before);
+    if (share < 0 && !confirm) return this.refuse('ice day', r, 422, 'NEGATIVE_PROFIT_UNCONFIRMED', before);
+    const out = await this.expectCreated('ice day', r);
+    const rec = this.addRec({ kind: 'iceday', id: out.day.id, date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: C, fund: 'cost' }, { book: 'icecream', amt: E, fund: 'electricity' }, { book: 'icecream', amt: share, fund: 'profit' }].filter((c) => c.amt !== 0) as Delta['cash'], fund: [], stock: [] }, voidUrl: `/icecream/days/${date}/void`, dayDate: date });
+    this.iceDays.set(date, rec);
+  }
+
+  async opIceDayReplace(): Promise<void> {
+    const cands = [...this.iceDays.values()].filter((r) => !r.voided); if (!cands.length) return;
+    const rec = this.pick(cands);
+    const S = this.int(1, 300000); const C = this.int(0, S); const E = this.int(0, S - C); const share = S - C - E;
+    const before = countsAll(this.s.ctx);
+    const r = await put(this.s.app, `/icecream/days/${rec.dayDate}`, { salesCents: S, costAllocCents: C, electricityAllocCents: E, clientRef: ref() });
+    if (this.isClosed(['icecream'], rec.date)) return this.refuse('ice day replace', r, 409, 'DAY_CLOSED', before);
+    if ([409, 422].includes(r.status) && r.body.error.code === 'VOID_BREAKS_RELEASE') { this.stats.rejected.VOID_BREAKS_RELEASE = (this.stats.rejected.VOID_BREAKS_RELEASE ?? 0) + 1; expect(countsAll(this.s.ctx)).toEqual(before); return; }
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    this.apply(rec.delta, -1); rec.voided = true; this.iceDays.delete(rec.dayDate!);
+    const nr = this.addRec({ kind: 'iceday', id: r.body.day.id, date: rec.date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: C, fund: 'cost' }, { book: 'icecream', amt: E, fund: 'electricity' }, { book: 'icecream', amt: share, fund: 'profit' }].filter((c) => c.amt !== 0) as Delta['cash'], fund: [], stock: [] }, voidUrl: `/icecream/days/${rec.dayDate}/void`, dayDate: rec.dayDate });
+    this.iceDays.set(rec.dayDate!, nr);
+  }
+
+  async opIcePay(): Promise<void> {
+    const date = this.date(['icecream']); if (!date) return;
+    const kind = this.pick(['materials', 'electricity_bill', 'other_cost'] as const); const fund = this.pick(FUNDS); const amt = this.int(100, 60000);
+    const out = await this.expectCreated('ice payment', await post(this.s.app, '/icecream/payments', { businessDate: date, kind, fund, amountCents: amt, description: `sim ${kind}`, clientRef: ref() }));
+    const type = kind === 'materials' ? 'materials' : kind;
+    this.addRec({ kind: 'icepay', id: out.payment.id, date, books: ['icecream'], delta: { cash: [{ book: 'icecream', amt: -amt, fund }], fund: [], stock: [] }, voidUrl: `/icecream/payments/${out.payment.id}/void` });
+    void type;
+  }
+
+  async opIceMove(): Promise<void> {
+    const date = this.date(['icecream']); if (!date) return;
+    const from = this.pick(FUNDS); const to = this.pick(FUNDS.filter((f) => f !== from)); const amt = this.int(100, 40000);
+    const body = { businessDate: date, fromFund: from, toFund: to, amountCents: amt, clientRef: ref() };
+    let r = await post(this.s.app, '/icecream/fund-moves', body);
+    if (r.status === 409 && r.body.error.code === 'SPLIT_CONFIRMATION_REQUIRED') {
+      const e = r.body.error;
+      expect(e.profitEligibleCents + e.cashOnlyCents, 'D4 split adds up to the move').toBe(amt);
+      this.stats.rejected.SPLIT_CONFIRMATION_REQUIRED = (this.stats.rejected.SPLIT_CONFIRMATION_REQUIRED ?? 0) + 1;
+      r = await post(this.s.app, '/icecream/fund-moves', { ...body, confirmSplit: true, confirmedProfitEligibleCents: e.profitEligibleCents });
+    }
+    const out = await this.expectCreated('ice move', r);
+    this.addRec({ kind: 'icemove', id: out.move.id, date, books: ['icecream'], delta: { cash: [], fund: [{ fund: from, amt: -amt }, { fund: to, amt }], stock: [] }, voidUrl: `/icecream/fund-moves/${out.move.id}/void` });
+  }
+
+  async opClose(): Promise<void> {
+    const book: Book = this.pick(['shop', 'telecom', 'icecream']); const date = daysAgo(this.int(0, 14));
+    const key = `${book}|${date}`; const before = countsAll(this.s.ctx);
+    const r = await post(this.s.app, '/daily-closings', { book, businessDate: date, clientRef: ref() });
+    if (this.closed.has(key)) return this.refuse('close', r, 409, 'DAY_ALREADY_CLOSED', before);
+    const out = await this.expectCreated('close', r);
+    this.closed.add(key); this.closingIds.set(key, out.item.id);
+  }
+  async opReopen(): Promise<void> {
+    const keys = [...this.closed]; if (!keys.length) return;
+    const key = this.pick(keys);
+    const r = await post(this.s.app, `/daily-closings/${this.closingIds.get(key)}/reopen`, { reason: 'sim reopen' });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    this.closed.delete(key);
+  }
+
+  /** An attempt on a closed day must be refused with DAY_CLOSED and write nothing. */
+  async opClosedAttempt(): Promise<void> {
+    const keys = [...this.closed]; if (!keys.length) return;
+    const [book, date] = this.pick(keys).split('|') as [Book, string];
+    const before = countsAll(this.s.ctx);
+    let r: { status: number; body: any };
+    if (book === 'icecream') r = await post(this.s.app, '/icecream/payments', { businessDate: date, kind: 'materials', fund: 'cost', amountCents: 500, description: 'closed', clientRef: ref() });
+    else if (this.chance(0.5)) r = await post(this.s.app, '/expenses', { businessDate: date, book, category: 'other', amountCents: 500, description: 'closed', clientRef: ref() });
+    else r = await post(this.s.app, '/cash-transfers', { businessDate: date, fromBook: book, toBook: book === 'shop' ? 'telecom' : 'shop', amountCents: 500, clientRef: ref() });
+    await this.refuse('closed-day attempt', r, 409, 'DAY_CLOSED', before);
+  }
+
+  /** Requests that must be rejected with a documented code and write nothing. */
+  async opInvalid(): Promise<void> {
+    const before = countsAll(this.s.ctx);
+    const t = this.int(0, 8);
+    const today = daysAgo(0); const fut = daysAgo(-3);
+    let r: { status: number; body: any }; let status = 400; let code = 'VALIDATION_ERROR';
+    if (t === 0) { r = await post(this.s.app, '/expenses', { businessDate: fut, book: 'shop', category: 'rent', amountCents: 100, description: 'x', clientRef: ref() }); code = 'FUTURE_DATE_NOT_ALLOWED'; }
+    else if (t === 1) r = await post(this.s.app, '/expenses', { businessDate: today, book: 'shop', category: 'rent', amountCents: -5, description: 'x', clientRef: ref() });
+    else if (t === 2) r = await post(this.s.app, '/expenses', { businessDate: today, book: 'shop', category: 'rent', amountCents: '100', description: 'x', clientRef: ref() });
+    else if (t === 3) r = await post(this.s.app, '/expenses', { businessDate: today, book: 'shop', category: 'electricity', amountCents: 100, description: 'x', clientRef: ref() }), code = 'ELECTRICITY_NOT_ALLOWED';
+    else if (t === 4) r = await post(this.s.app, '/capital', { businessDate: today, book: 'shop', amountCents: 100, bogus: 1, clientRef: ref() });
+    else if (t === 5) { r = await post(this.s.app, '/cash-transfers', { businessDate: today, fromBook: 'shop', toBook: 'shop', amountCents: 100, clientRef: ref() }); code = 'SAME_BOOK'; }
+    else if (t === 6) r = await post(this.s.app, '/sales', { businessDate: today, items: [{ productId: this.shopP[0], qty: 1, unitPriceCents: -1 }], clientRef: ref() });
+    else if (t === 7) { r = await post(this.s.app, '/icecream/days', { businessDate: fut, salesCents: 1000, costAllocCents: 100, electricityAllocCents: 100, clientRef: ref() }); code = 'FUTURE_DATE_NOT_ALLOWED'; }
+    else { r = await post(this.s.app, '/opening-stock', { businessDate: today, items: [{ productId: this.shopP[0], qty: 1.5, totalValueCents: 100 }], clientRef: ref() }); }
+    await this.refuse(`invalid#${t}`, r, status, code, before);
+  }
+
+  /** The same clientRef twice returns the original with 200 and writes nothing the second time. */
+  async opDuplicate(): Promise<void> {
+    if (!this.lastExpense) return;
+    const book = this.lastExpense.book as Book; const date = this.lastExpense.businessDate as string;
+    if (this.isClosed([book], date)) return;
+    const before = countsAll(this.s.ctx);
+    const r = await post(this.s.app, '/expenses', this.lastExpense);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(countsAll(this.s.ctx), 'duplicate clientRef wrote something').toEqual(before);
+    this.stats.rejected.DUPLICATE_OK = (this.stats.rejected.DUPLICATE_OK ?? 0) + 1;
+  }
+
+  /** Voiding something twice: 409 ALREADY_VOID, nothing written. */
+  async opDoubleVoid(): Promise<void> {
+    const cands = this.recs.filter((r) => r.voided && r.voidUrl && r.kind !== 'iceday'); if (!cands.length) return;
+    const rec = this.pick(cands); const before = countsAll(this.s.ctx);
+    const r = await post(this.s.app, rec.voidUrl!, { reason: 'again' });
+    if (this.isClosed(rec.books, rec.date)) return this.refuse('double void', r, 409, 'DAY_CLOSED', before);
+    await this.refuse(`double void ${rec.kind}`, r, 409, 'ALREADY_VOID', before);
+  }
+
+  /** Executes one random operation (weighted) and returns its label. */
+  async step(): Promise<string> {
+    const table: Array<[string, number, () => Promise<void>]> = [
+      ['purchase', 9, () => this.opPurchase()], ['purchaseReturn', 3, () => this.opPurchaseReturn()], ['sale', 18, () => this.opSale()],
+      ['saleReturn', 7, () => this.opSaleReturn()], ['void', 9, () => this.opVoid()], ['voidSale', 3, () => this.opVoid(['sale'])],
+      ['voidPurchase', 2, () => this.opVoid(['purchase'])], ['loss', 3, () => this.opStockOut('loss')], ['goods', 3, () => this.opStockOut('goods')],
+      ['stocktake', 4, () => this.opStocktake()], ['cashOnly', 22, () => this.opCashOnly()], ['count', 4, () => this.opCount()],
+      ['iceDay', 6, () => this.opIceDay()], ['iceDayReplace', 1, () => this.opIceDayReplace()], ['icePay', 6, () => this.opIcePay()],
+      ['iceMove', 7, () => this.opIceMove()], ['close', 3, () => this.opClose()], ['reopen', 2, () => this.opReopen()],
+      ['closedAttempt', 3, () => this.opClosedAttempt()], ['invalid', 4, () => this.opInvalid()], ['duplicate', 2, () => this.opDuplicate()],
+      ['doubleVoid', 2, () => this.opDoubleVoid()],
+    ];
+    const total = table.reduce((a, t) => a + t[1], 0);
+    let x = this.rnd() * total; let chosen = table[0]!;
+    for (const t of table) { x -= t[1]; if (x < 0) { chosen = t; break; } }
+    this.stats.ops++; this.stats.byKind[chosen[0]] = (this.stats.byKind[chosen[0]] ?? 0) + 1;
+    await chosen[2]();
+    return chosen[0];
+  }
+
+  /** Runs n operations, verifying the model and every invariant after EACH one. */
+  async run(n: number): Promise<SimStats> {
+    for (let i = 0; i < n; i++) {
+      const label = await this.step();
+      await this.verify(`seed ${this.seed} op ${i} (${label})`);
+    }
+    return this.stats;
+  }
 }
