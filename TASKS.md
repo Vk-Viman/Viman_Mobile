@@ -70,3 +70,7 @@ Status: ☐ todo · ◐ in progress · ☑ done · ✖ blocked. Owner = agent ro
 - [x] Phase 9 transfers, cash drawings, capital (013)
 - [x] Phase 10 Ice Cream three-fund accounting (014)
 - [ ] PR/merge
+
+## Wave 4 — Phase 11 reports (built and integrated 2026-11-12)
+- [x] Phase 11 financial + operational reports, Excel export, Reports screens
+- [ ] Phase 12 dashboard, charts, export polish
