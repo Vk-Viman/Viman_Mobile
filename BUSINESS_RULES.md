@@ -187,7 +187,8 @@ Sales 100,000 split Cost 60,000 / Electricity 10,000 / Profit 30,000 · opening 
 
 ## 11. Stock losses & adjustments (R2, R3)
 - Losses (damaged / lost / expired / other) remove at average cost; book = product's book.
-- P&L line per segment: **Stock adjustments (net) = losses + stocktake losses + residual sweeps − stocktake gains**.
+- P&L line per segment: **Stock adjustments (net) = losses + stocktake losses + residual sweeps − stocktake gains − purchase refund gain**.
+- **Purchase refund gain (R4, made explicit in Phase 14 — it was the documented intent, found missing from the reports by the independent QA pass):** when a purchase is returned or voided, the supplier refunds the full purchase value in cash but only min(purchase-cost value, pool value) leaves stock. When the pool value is lower than the purchase cost (the average cost fell after a cheaper purchase) the difference `refund − value removed from stock` is a real gain; it is shown as its own line ("Purchase refund above stock value removed") and reduces Stock adjustments (net), so segment profit reconciles with cash + stock. A return puts the gain in the return's period; a void puts it in the original purchase's period (R1). The residual sweep (pool value above cost) and this gain cannot both arise on one line.
 
 ## 12. Audit & integrity
 - Audit log for every edit, void, reopen, restore, settings change (before/after JSON).
