@@ -1,8 +1,9 @@
 /**
  * ManualTab: manual opening stock entry (route "/opening-stock").
- * The owner picks products, types a quantity and EITHER the cost of one unit OR the total value of the line, chooses
+ * Category-first selection per line: book, then category, then an existing product of that category.
+ * The owner types a quantity and EITHER the cost of one unit OR the total value of the line, chooses
  * the date and saves one batch after a confirmation. History of batches (with void) is listed underneath.
- * API: GET /health (today), GET /products, POST /opening-stock (api/openingStock.ts).
+ * API: GET /health (today), GET /categories, GET /products, POST /opening-stock (api/openingStock.ts).
  *
  * Rules reflected here (the server enforces all of them and is authoritative):
  *  - Section 3: line value = the exact total typed, or quantity x unit cost; the server stores exactly that. No
@@ -11,27 +12,26 @@
  *  - One line per product (the picker hides products already chosen on another line).
  *  - Money is typed in rupees and converted to integer cents without floating point.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { CategoryProductPicker } from '../../components/CategoryProductPicker';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Money } from '../../components/Money';
 import { SelectField } from '../../components/SelectField';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
-import { useProducts } from '../../api/catalog';
 import { ApiError } from '../../api/client';
 import { useCreateOpeningStock } from '../../api/openingStock';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
-import { useDebounced } from '../../hooks/useDebounced';
 import { errorBanner } from '../../lib/errors';
 import { formatLKR } from '../../lib/format';
 import { BOOK_LABEL } from '../../lib/constants';
 import { rupeesToCents } from '../../lib/units';
 import { parseIntStrict } from '../purchases/helpers';
-import type { Product } from '../../types/api';
+import type { Book, Product } from '../../types/api';
 import type { OpeningStockCreate } from '../../types/openingStock';
 import { BatchHistory } from './BatchHistory';
 import { OpeningNotice } from './OpeningNotice';
@@ -39,16 +39,14 @@ import { OpeningNotice } from './OpeningNotice';
 /** What the owner types for the cost of a line: one unit's cost, or the total of the whole line. */
 type Mode = 'unit' | 'total';
 /** One editable line, kept as typed text; `key` is a local React key, never sent to the server. */
-interface Line { key: number; productId: string; qty: string; mode: Mode; amount: string }
+interface Line { key: number; book: Book | ''; categoryId: number | null; product: Product | null; qty: string; mode: Mode; amount: string }
 
 /** Limits matching the server's validation. */
 const MAX_QTY = 1_000_000_000;
 const MAX_CENTS = 99_999_999_999;
 const MAX_LINES = 1000;
 const MAX_NOTES = 500;
-/** How many products the picker loads at once (the filter box narrows the list further). */
-const PRODUCT_PICKER_LIMIT = 200;
-const newLine = (key: number): Line => ({ key, productId: '', qty: '', mode: 'unit', amount: '' });
+const newLine = (key: number): Line => ({ key, book: '', categoryId: null, product: null, qty: '', mode: 'unit', amount: '' });
 
 /**
  * The checked numbers of one line: quantity, the typed amount in cents, and the exact line value in cents
@@ -75,34 +73,20 @@ function ManualForm({ onSaved }: { onSaved: () => void }) {
   // Generated once per form so a retried Save is recognised by the server and cannot post the batch twice.
   const clientRef = useClientRef();
   const nextKey = useRef(2);
-  // Every product seen so far, by id, so a chosen product stays selectable after the filter narrows the list.
-  const known = useRef(new Map<number, Product>());
 
   const { today, date: effDate, setDate } = useBusinessDate();
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<Line[]>([newLine(1)]);
-  const [search, setSearch] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [err, setErr] = useState<ApiError | Error | null>(null);
 
-  const q = useDebounced(search.trim());
-  const products = useProducts({ active: true, q: q || undefined, limit: PRODUCT_PICKER_LIMIT });
-  for (const p of products.data?.items ?? []) known.current.set(p.id, p);
-  // Services hold no stock, so only stock products are offered.
-  const stockProducts = useMemo(() => (products.data?.items ?? []).filter((p) => p.kind === 'stock'), [products.data]);
-
-  /** Products offered on one line: not chosen on another line, plus the line's own selection even if filtered out. */
-  const optionsFor = (l: Line): Product[] => {
-    const taken = new Set(lines.filter((x) => x.key !== l.key && x.productId).map((x) => x.productId));
-    const list = stockProducts.filter((p) => !taken.has(String(p.id)));
-    const sel = l.productId ? known.current.get(Number(l.productId)) : undefined;
-    return sel && !list.some((p) => p.id === sel.id) ? [sel, ...list] : list;
-  };
+  /** Products already chosen on the OTHER lines (one line per product): hidden from this line's list. */
+  const takenBy = (key: number) => lines.filter((x) => x.key !== key && x.product).map((x) => (x.product as Product).id);
   const update = (key: number, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
 
   // ---- Validation (quick feedback only; the server re-validates) ----
   const parsed = lines.map(lineNumbers);
-  const lineValid = lines.map((l, i) => l.productId !== '' && (parsed[i] as ReturnType<typeof lineNumbers>).valueCents !== null);
+  const lineValid = lines.map((l, i) => l.product !== null && (parsed[i] as ReturnType<typeof lineNumbers>).valueCents !== null);
   // Total = sum of the exact line values; integer addition, display only (the server recomputes it).
   const grand = parsed.reduce((s, n) => s + (n.valueCents ?? 0), 0);
   const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(effDate) && (!today || effDate <= today);
@@ -124,8 +108,8 @@ function ManualForm({ onSaved }: { onSaved: () => void }) {
       items: lines.map((l, i) => {
         const n = parsed[i] as ReturnType<typeof lineNumbers>;
         return l.mode === 'unit'
-          ? { productId: Number(l.productId), qty: n.qty as number, unitCostCents: n.cents as number }
-          : { productId: Number(l.productId), qty: n.qty as number, totalValueCents: n.cents as number };
+          ? { productId: (l.product as Product).id, qty: n.qty as number, unitCostCents: n.cents as number }
+          : { productId: (l.product as Product).id, qty: n.qty as number, totalValueCents: n.cents as number };
       }),
       clientRef,
     };
@@ -149,74 +133,71 @@ function ManualForm({ onSaved }: { onSaved: () => void }) {
             hint="Usually the day you start using the system. Not later than today." />
           <TextField label="Notes (optional)" value={notes} maxLength={MAX_NOTES} onChange={(e) => setNotes(e.target.value)} error={fe.notes} autoComplete="off" />
         </div>
-        <div>
-          <TextField label="Filter products" placeholder="Type to narrow the product lists below" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
-          <p className="mt-1 text-xs text-slate-500">
-            For each product enter the quantity and either the cost of ONE unit or the TOTAL cost of all the units. A total is stored exactly as typed.
-          </p>
-        </div>
+        <p className="text-xs text-slate-500">
+          For each product choose the book, the category and the product, then enter the quantity and either the cost of ONE unit or the TOTAL cost of all the units. A total is stored exactly as typed.
+        </p>
 
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[46rem] border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <th scope="col" className="px-2 py-2 text-left">Product</th>
-                <th scope="col" className="px-2 py-2 text-right">Quantity</th>
-                <th scope="col" className="px-2 py-2 text-left">Cost entered as</th>
-                <th scope="col" className="px-2 py-2 text-right">Amount (Rs.)</th>
-                <th scope="col" className="px-2 py-2 text-right">Line value</th>
-                <th scope="col" className="px-2 py-2"><span className="sr-only">Remove</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l, i) => {
-                const n = parsed[i] as ReturnType<typeof lineNumbers>;
-                const n1 = i + 1;
-                const amountField = l.mode === 'unit' ? 'unitCostCents' : 'totalValueCents';
-                return (
-                  <tr key={l.key} className="border-b border-slate-100 align-top">
-                    <td className="min-w-48 px-2 py-2">
-                      <SelectField hideLabel label={`Line ${n1} product`} value={l.productId} onChange={(e) => update(l.key, { productId: e.target.value })} error={fe[`items.${i}.productId`]}>
-                        <option value="">Select product…</option>
-                        {optionsFor(l).map((p) => <option key={p.id} value={String(p.id)}>{p.name}{p.code ? ` [${p.code}]` : ''} ({BOOK_LABEL[p.book]})</option>)}
-                      </SelectField>
-                    </td>
-                    <td className="w-28 px-2 py-2">
-                      <TextField hideLabel label={`Line ${n1} quantity`} inputMode="numeric" className="[&_input]:text-right" value={l.qty} onChange={(e) => update(l.key, { qty: e.target.value })}
-                        error={fe[`items.${i}.qty`] ?? (l.qty !== '' && !n.qtyOk ? 'Whole number ≥ 1' : undefined)} autoComplete="off" />
-                    </td>
-                    <td className="w-40 px-2 py-2">
-                      <SelectField hideLabel label={`Line ${n1} cost entered as`} value={l.mode} onChange={(e) => update(l.key, { mode: e.target.value as Mode })}>
-                        <option value="unit">Cost of one unit</option>
-                        <option value="total">Total of the line</option>
-                      </SelectField>
-                    </td>
-                    <td className="w-40 px-2 py-2">
-                      <TextField hideLabel label={`Line ${n1} amount in rupees`} inputMode="decimal" placeholder="0.00" className="[&_input]:text-right" value={l.amount} onChange={(e) => update(l.key, { amount: e.target.value })}
-                        error={fe[`items.${i}.${amountField}`] ?? (l.amount !== '' && !n.amountOk ? 'Invalid amount' : undefined)} autoComplete="off" />
-                    </td>
-                    <td className="num whitespace-nowrap px-2 py-4 text-right">{n.valueCents !== null ? formatLKR(n.valueCents) : '—'}</td>
-                    <td className="px-2 py-2">
-                      <Button variant="ghost" className="!min-h-8 !px-2" aria-label={`Remove line ${n1}`} disabled={lines.length === 1}
-                        onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>
-                        <Trash2 size={16} aria-hidden="true" />
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={3} className="px-2 py-3">
-                  <Button variant="secondary" disabled={lines.length >= MAX_LINES} onClick={() => setLines((ls) => [...ls, newLine(nextKey.current++)])}>
-                    <Plus size={16} aria-hidden="true" /> Add line
-                  </Button>
-                </td>
-                <td colSpan={3} className="px-2 py-3 text-right font-semibold">Total stock value: <Money cents={grand} /></td>
-              </tr>
-            </tfoot>
-          </table>
+        <div className="space-y-3">
+          {lines.map((l, i) => {
+            const n = parsed[i] as ReturnType<typeof lineNumbers>;
+            const n1 = i + 1;
+            const amountField = l.mode === 'unit' ? 'unitCostCents' : 'totalValueCents';
+            return (
+              <div key={l.key} className="rounded-lg border border-slate-200 p-3" role="group" aria-label={`Line ${n1}`}>
+                <div className="grid gap-3 sm:grid-cols-[11rem_1fr]">
+                  <SelectField
+                    label="Book"
+                    value={l.book}
+                    onChange={(e) => update(l.key, { book: e.target.value as Book | '', categoryId: null, product: null })}
+                  >
+                    <option value="">Choose Shop or Telecom…</option>
+                    <option value="shop">{BOOK_LABEL.shop}</option>
+                    <option value="telecom">{BOOK_LABEL.telecom}</option>
+                  </SelectField>
+                  {l.book === '' ? (
+                    <p className="self-end pb-2 text-sm text-slate-600">Choose the book first, then a category and a product.</p>
+                  ) : (
+                    <CategoryProductPicker
+                      book={l.book}
+                      requireCategory
+                      value={l.product}
+                      onChange={(p) => update(l.key, { product: p })}
+                      categoryId={l.categoryId}
+                      onCategoryChange={(id) => update(l.key, { categoryId: id })}
+                      excludeProductIds={takenBy(l.key)}
+                    />
+                  )}
+                </div>
+                {fe[`items.${i}.productId`] && <p className="mt-1 text-sm text-red-600">{fe[`items.${i}.productId`]}</p>}
+                <div className="mt-3 grid grid-cols-2 items-start gap-3 sm:grid-cols-[7rem_11rem_9rem_1fr_auto]">
+                  <TextField label="Quantity" inputMode="numeric" className="[&_input]:text-right" value={l.qty} onChange={(e) => update(l.key, { qty: e.target.value })}
+                    error={fe[`items.${i}.qty`] ?? (l.qty !== '' && !n.qtyOk ? 'Whole number ≥ 1' : undefined)} autoComplete="off" />
+                  <SelectField label="Cost entered as" value={l.mode} onChange={(e) => update(l.key, { mode: e.target.value as Mode })}>
+                    <option value="unit">Cost of one unit</option>
+                    <option value="total">Total of the line</option>
+                  </SelectField>
+                  <TextField label="Amount (Rs.)" inputMode="decimal" placeholder="0.00" className="[&_input]:text-right" value={l.amount} onChange={(e) => update(l.key, { amount: e.target.value })}
+                    error={fe[`items.${i}.${amountField}`] ?? (l.amount !== '' && !n.amountOk ? 'Invalid amount' : undefined)} autoComplete="off" />
+                  <div className="text-right text-sm">
+                    <div className="mb-1 font-medium text-slate-700">Line value</div>
+                    <div className="num whitespace-nowrap py-2">{n.valueCents !== null ? formatLKR(n.valueCents) : '—'}</div>
+                  </div>
+                  <div className="pt-6">
+                    <Button variant="ghost" className="!min-h-8 !px-2" aria-label={`Remove line ${n1}`} disabled={lines.length === 1}
+                      onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>
+                      <Trash2 size={16} aria-hidden="true" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Button variant="secondary" disabled={lines.length >= MAX_LINES} onClick={() => setLines((ls) => [...ls, newLine(nextKey.current++)])}>
+              <Plus size={16} aria-hidden="true" /> Add line
+            </Button>
+            <p className="font-semibold">Total stock value: <Money cents={grand} /></p>
+          </div>
         </div>
         <p className="text-xs text-slate-500">Line values shown are for information; the server calculates and stores the final figures.</p>
 
