@@ -126,13 +126,13 @@ describe('POST /categories', () => {
   });
 
   // "Perfume", " perfume " and "PERFUME" are all the same name, even if the other book is chosen; nothing is saved.
-  it('DUPLICATE_NAME: case-insensitive, after trimming, across books; no audit/partial row', async () => {
+  it('DUPLICATE_NAME: case-insensitive, after trimming, within the book; no audit/partial row', async () => {
     const { app, ctx } = await env.build();
-    for (const name of ['Electronics', 'electronics', '  ELECTRONICS  ', 'scratch cards']) {
+    for (const name of ['Electronics', 'electronics', '  ELECTRONICS  ']) {
       const r = await post(app, '/categories', { name, book: 'shop' });
       expect(r.status, name).toBe(409);
       expect(r.body.error.code).toBe('DUPLICATE_NAME');
-      expect(r.body.error.fields.name).toBe('Another category already uses this name.');
+      expect(r.body.error.fields.name).toBe('A Shop category with this name already exists.');
     }
     expect(count(ctx, 'categories')).toBe(12);
     expect(auditRows(ctx)).toEqual([]);
@@ -192,7 +192,7 @@ describe('PUT /categories/:id', () => {
     const r = await put(app, `/categories/${c.id}`, { name: ' electronics ' });
     expect(r.status).toBe(409);
     expect(r.body.error.code).toBe('DUPLICATE_NAME');
-    expect(r.body.error.fields.name).toBe('Another category already uses this name.');
+    expect(r.body.error.fields.name).toBe('A Shop category with this name already exists.');
     expect(auditRows(ctx)).toHaveLength(before);
     expect((await get(app, '/categories')).body.items.find((i: any) => i.id === c.id).name).toBe('Mine');
   });

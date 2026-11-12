@@ -32,7 +32,7 @@ describe('first launch', () => {
     const ctx = b.ctx;
     const files = loadMigrations();
     expect(rows(ctx, 'SELECT version, name FROM schema_migrations ORDER BY version').map((r) => [Number(r.version), r.name])).toEqual(files.map((f) => [f.version, f.name]));
-    expect(files.length).toBe(14);
+    expect(files.length).toBe(15);
     expect(rows(ctx, 'SELECT name, book, is_default, active FROM categories ORDER BY id').map((r) => [r.name, r.book])).toEqual(SEEDED_CATEGORIES);
     expect(rows(ctx, 'SELECT is_default, active FROM categories').every((r) => Number(r.is_default) === 1 && Number(r.active) === 1)).toBe(true);
     expect(rows(ctx, 'SELECT name, commission_bp, active FROM reload_providers ORDER BY sort_order').map((r) => [r.name, r.commission_bp, Number(r.active)])).toEqual([
@@ -113,7 +113,7 @@ describe('migration runner', () => {
     db.close();
   });
 
-  it('a one-character change in ANY of the 14 applied migrations is detected', () => {
+  it('a one-character change in ANY of the 15 applied migrations is detected', () => {
     for (const m of loadMigrations()) {
       const dir = copyDir(env);
       const db = new DatabaseSync(':memory:');
@@ -137,13 +137,13 @@ describe('migration runner', () => {
     expect(err?.code).toBe('MIGRATION_DB_TOO_NEW');
     db.close();
     const dir2 = copyDir(env);
-    writeFileSync(join(dir2, '015_broken.sql'), 'CREATE TABLE half_built (id INTEGER); CREATE TABLE half_built (id INTEGER);');
+    writeFileSync(join(dir2, '016_broken.sql'), 'CREATE TABLE half_built (id INTEGER); CREATE TABLE half_built (id INTEGER);');
     const db2 = new DatabaseSync(':memory:');
     let e2: any;
     try { migrate(db2, dir2); } catch (e) { e2 = e; }
-    expect(String(e2?.message)).toContain('015_broken.sql');
+    expect(String(e2?.message)).toContain('016_broken.sql');
     expect(rows({ database: { conn: db2 } } as any, "SELECT name FROM sqlite_master WHERE name = 'half_built'")).toEqual([]);
-    expect(Number(rows({ database: { conn: db2 } } as any, 'SELECT MAX(version) v FROM schema_migrations')[0]!.v)).toBe(14);
+    expect(Number(rows({ database: { conn: db2 } } as any, 'SELECT MAX(version) v FROM schema_migrations')[0]!.v)).toBe(15);
     db2.close();
   });
 });
@@ -174,12 +174,12 @@ describe('schema sanity (from sqlite_master)', () => {
     expect(missing.sort()).toEqual(['audit_logs', 'import_runs']);
   });
 
-  it('every business record table has a delete guard; only master data (catalog, settings, migrations) can be deleted', async () => {
+  it('every business record table has a delete guard; only master data (products, suppliers, settings, migrations) can be deleted; categories are guarded since 015', async () => {
     const ctx = (await env.build()).ctx;
     const guarded = new Set(rows(ctx, "SELECT tbl_name FROM sqlite_master WHERE type='trigger' AND sql LIKE '%BEFORE DELETE%'").map((r) => r.tbl_name as string));
     const unguarded = tableNames(ctx).filter((t) => !guarded.has(t));
     // (stocktake_items is guarded too: a trigger refuses deleting lines of a completed stocktake)
-    expect(unguarded.sort()).toEqual(['categories', 'products', 'schema_migrations', 'settings', 'suppliers'].sort());
+    expect(unguarded.sort()).toEqual(['products', 'schema_migrations', 'settings', 'suppliers'].sort());
   });
 
   it('on a real world: dates and posting timestamps of every record cannot be edited, no record row can be deleted, a product with history cannot be deleted', async () => {

@@ -2,10 +2,25 @@
 -- Category management: a category name is unique PER BOOK (case-insensitive) instead of globally, and a category
 -- can never be deleted (it is retired with active = 0). Ids, is_default, active, timestamps and every
 -- products.category_id link are preserved exactly. Forward-only. See migrations/README.md.
+--
+-- The runner executes this file inside a transaction with foreign_keys ON, where that setting cannot be
+-- switched off. So the table is NOT renamed: the rows are parked in a TEMP table, `categories` is dropped and
+-- re-created under its own name, and the rows are re-inserted with their ids. Dropping the parent counts the
+-- products that point at it as deferred violations; re-inserting the same ids clears them again, and the
+-- migration aborts (rolls back) if anything is left over.
 
 PRAGMA defer_foreign_keys = ON;
 
-CREATE TABLE categories_new (
+CREATE TEMP TABLE _mig015_categories AS
+SELECT id, name, book, is_default, active, created_at, updated_at FROM categories;
+
+-- Keep the AUTOINCREMENT counter where it was, so an id is never reused.
+CREATE TEMP TABLE _mig015_seq AS
+SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'categories'), 0) AS seq;
+
+DROP TABLE categories;
+
+CREATE TABLE categories (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT    NOT NULL COLLATE NOCASE,
   book        TEXT    NOT NULL CHECK (book IN ('shop','telecom')),
@@ -16,24 +31,10 @@ CREATE TABLE categories_new (
   CHECK (length(trim(name)) > 0)
 );
 
-INSERT INTO categories_new (id, name, book, is_default, active, created_at, updated_at)
-SELECT id, name, book, is_default, active, created_at, updated_at FROM categories ORDER BY id;
+INSERT INTO categories (id, name, book, is_default, active, created_at, updated_at)
+SELECT id, name, book, is_default, active, created_at, updated_at FROM _mig015_categories ORDER BY id;
 
--- Keep the AUTOINCREMENT counter where it was, so an id is never reused.
-UPDATE sqlite_sequence SET seq = max(seq, COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'categories'), 0))
-WHERE name = 'categories_new';
-
--- Abort (and roll the whole migration back) if the copy lost or changed any row.
-CREATE TEMP TABLE _mig015_guard (ok INTEGER NOT NULL CHECK (ok = 1));
-INSERT INTO _mig015_guard SELECT CASE
-  WHEN (SELECT COUNT(*) FROM categories) = (SELECT COUNT(*) FROM categories_new)
-   AND NOT EXISTS (SELECT 1 FROM categories o LEFT JOIN categories_new n ON n.id = o.id
-                   WHERE n.id IS NULL OR n.name IS NOT o.name OR n.book IS NOT o.book OR n.is_default IS NOT o.is_default
-                      OR n.active IS NOT o.active OR n.created_at IS NOT o.created_at OR n.updated_at IS NOT o.updated_at)
-  THEN 1 ELSE 0 END;
-
-DROP TABLE categories;
-ALTER TABLE categories_new RENAME TO categories;
+UPDATE sqlite_sequence SET seq = max(seq, (SELECT seq FROM _mig015_seq)) WHERE name = 'categories';
 
 CREATE UNIQUE INDEX ux_categories_book_name ON categories(book, name COLLATE NOCASE);
 
@@ -57,6 +58,16 @@ BEGIN
   SELECT RAISE(ABORT, 'CATEGORY_DELETE_FORBIDDEN');
 END;
 
--- Every product must still point at an existing category: abort the migration otherwise.
-INSERT INTO _mig015_guard SELECT CASE WHEN EXISTS (SELECT 1 FROM pragma_foreign_key_check) THEN 0 ELSE 1 END;
+-- Abort (roll the whole migration back) if the copy lost or changed any row, or any product lost its category.
+CREATE TEMP TABLE _mig015_guard (ok INTEGER NOT NULL CHECK (ok = 1));
+INSERT INTO _mig015_guard SELECT CASE
+  WHEN (SELECT COUNT(*) FROM categories) = (SELECT COUNT(*) FROM _mig015_categories)
+   AND NOT EXISTS (SELECT 1 FROM _mig015_categories o LEFT JOIN categories n ON n.id = o.id
+                   WHERE n.id IS NULL OR n.name IS NOT o.name OR n.book IS NOT o.book OR n.is_default IS NOT o.is_default
+                      OR n.active IS NOT o.active OR n.created_at IS NOT o.created_at OR n.updated_at IS NOT o.updated_at)
+   AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check)
+  THEN 1 ELSE 0 END;
+
 DROP TABLE _mig015_guard;
+DROP TABLE _mig015_seq;
+DROP TABLE _mig015_categories;
