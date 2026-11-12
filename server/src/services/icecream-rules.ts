@@ -320,8 +320,8 @@ export interface PeriodReport {
 /** Recognized profit of raw sums: daily shares + releases - re-allocations - other expenses +/- over/short (10.3). */
 function recognitionOf(s: Sums): Recognition {
   return {
-    dailyProfitShareCents: s.dailyProfitShare, profitEligibleReleasesCents: s.releases, reallocationsCents: -s.reallocations,
-    otherExpensesCents: -s.otherFromProfit, cashOverShortCents: s.overShort,
+    dailyProfitShareCents: s.dailyProfitShare, profitEligibleReleasesCents: s.releases, reallocationsCents: 0 - s.reallocations, // `0 - x`, never `-x`: a unary minus of 0 would give -0
+    otherExpensesCents: 0 - s.otherFromProfit, cashOverShortCents: s.overShort,
   };
 }
 
