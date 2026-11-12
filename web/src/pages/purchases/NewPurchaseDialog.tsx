@@ -251,7 +251,12 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
           // The new (or already existing) product is selected for the line it was started from, in its own category.
           onCreated={(p) => update(creating.key, { product: p, categoryId: p.categoryId })}
           onUseExisting={(p) => update(creating.key, { product: p, categoryId: p.categoryId })}
-          onClose={() => setCreating(null)}
+          onClose={() => {
+            setCreating(null);
+            // The product dialog hands focus back to the product box, which would re-open its list on top of the
+            // new selection; let the focus settle, then close that list again by leaving the box.
+            setTimeout(() => { const a = document.activeElement; if (a instanceof HTMLInputElement && a.getAttribute('role') === 'combobox') a.blur(); }, 0);
+          }}
         />
       )}
     </>

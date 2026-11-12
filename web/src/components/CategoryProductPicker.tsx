@@ -168,10 +168,13 @@ export function CategoryProductPicker({
           onFocus={() => { setOpen(true); setHi(0); }}
           onChange={(e) => { setText(e.target.value); setOpen(true); setHi(0); }}
           onKeyDown={onKeyDown}
+          // Tabbing (or programmatically moving) focus out of the picker closes the list; clicks inside keep it open.
+          onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node | null)) setOpen(false); }}
         />
         {blocked && <p className="mt-1 text-xs text-slate-500">Products are shown after you choose a category.</p>}
         {open && !blocked && (
-          <div className="absolute left-0 right-0 z-30 mt-1 max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+          // Pressing the list's own scrollbar/padding must not take focus from the search box (which would close the list).
+          <div onMouseDown={(e) => { if (e.target === e.currentTarget) e.preventDefault(); }} className="absolute left-0 right-0 z-30 mt-1 max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
             {list.isPending ? (
               <div className="flex justify-center py-6"><Spinner label="Loading products" /></div>
             ) : list.isError ? (
