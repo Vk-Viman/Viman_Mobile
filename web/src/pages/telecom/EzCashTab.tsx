@@ -18,6 +18,7 @@ import { Money } from '../../components/Money';
 import { Pager } from '../../components/Pager';
 import { Spinner } from '../../components/Spinner';
 import { useToast } from '../../components/Toast';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useEzCashSales, useVoidEzCashSale } from '../../api/telecom';
 import { useSettings } from '../../api/settings';
@@ -99,7 +100,7 @@ export function EzCashTab() {
           intro={`This cancels the EZCash bills of ${formatLKR(voiding.billTotalCents)} dated ${voiding.businessDate}: the cash comes back out of the Telecom book and its commission is removed from the totals. It cannot be undone.`}
           submitLabel="Void entry"
           pending={voidMut.isPending}
-          run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, cb)}
+          run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, { onSuccess: (r) => { notifyCashWarnings(toast, r.warnings); cb.onSuccess(); }, onError: cb.onError })}
           onDone={() => { toast.success('EZCash entry voided.'); setVoiding(null); }}
           onClose={() => setVoiding(null)}
         />

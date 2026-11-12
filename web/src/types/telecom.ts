@@ -29,7 +29,7 @@ export interface ReloadSaleQuery { from?: string; to?: string; providerId?: numb
 export interface ReloadSaleList {
   items: ReloadSale[]; total: number; totals: { salesCents: number; commissionCents: number; extraCents: number };
 }
-export interface ReloadSaleOne { item: ReloadSale }
+export interface ReloadSaleOne { item: ReloadSale; warnings?: CashWarning[] }
 
 /** EZCash bills collected (always under Dialog). */
 export interface EzCashSale extends TelecomRecord {
@@ -38,7 +38,7 @@ export interface EzCashSale extends TelecomRecord {
 export interface EzCashSaleCreate { businessDate: string; billTotalCents: number; notes?: string; clientRef: string }
 export interface EzCashSaleQuery { from?: string; to?: string; status?: PostedStatus; limit?: number; offset?: number }
 export interface EzCashSaleList { items: EzCashSale[]; total: number; totals: { billTotalCents: number; commissionCents: number } }
-export interface EzCashSaleOne { item: EzCashSale }
+export interface EzCashSaleOne { item: EzCashSale; warnings?: CashWarning[] }
 
 export type TopupKind = 'provider_topup' | 'wallet_topup';
 

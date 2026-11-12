@@ -7,6 +7,7 @@
 import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useToast } from '../../components/Toast';
 import { useVoidSale } from '../../api/sales';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { BOOK_LABEL } from '../../lib/constants';
 import type { Sale } from '../../types/api';
 
@@ -21,7 +22,7 @@ export function VoidSaleDialog({ sale, onClose }: { sale: Sale; onClose: () => v
       intro={`This puts the sold items back into stock at their original cost and takes the money out of the ${BOOK_LABEL[sale.book]} cash book. It cannot be undone.`}
       submitLabel="Void sale"
       pending={voidMut.isPending}
-      run={(reason, cb) => voidMut.mutate({ id: sale.id, body: { reason } }, cb)}
+      run={(reason, cb) => voidMut.mutate({ id: sale.id, body: { reason } }, { onSuccess: (r) => { notifyCashWarnings(toast, r.warnings); cb.onSuccess(); }, onError: cb.onError })}
       onDone={() => { toast.success('Sale voided.'); onClose(); }}
       onClose={onClose}
     />

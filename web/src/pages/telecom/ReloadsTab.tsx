@@ -19,6 +19,7 @@ import { Pager } from '../../components/Pager';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
 import { useToast } from '../../components/Toast';
+import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useReloadProviders, useReloadSales, useVoidReloadSale } from '../../api/telecom';
 import { PAGE_SIZE } from '../../lib/constants';
@@ -120,7 +121,7 @@ export function ReloadsTab() {
           intro={`This cancels the ${voiding.providerName} reload of ${formatLKR(voiding.salesCents)} dated ${voiding.businessDate}: the cash comes back out of the Telecom book and its commission is removed from the totals. It cannot be undone.`}
           submitLabel="Void entry"
           pending={voidMut.isPending}
-          run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, cb)}
+          run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, { onSuccess: (r) => { notifyCashWarnings(toast, r.warnings); cb.onSuccess(); }, onError: cb.onError })}
           onDone={() => { toast.success('Reload entry voided.'); setVoiding(null); }}
           onClose={() => setVoiding(null)}
         />
