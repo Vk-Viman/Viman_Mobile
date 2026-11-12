@@ -189,7 +189,8 @@ export function icecreamFundsReport(conn: DatabaseSync, q: PeriodQuery): IceCrea
     ],
   };
   const profitTable: ReportTable = {
-    title: 'Recognized profit and excess cost', columns: PROFIT_COLUMNS, rows: rows.map((r) => profitRow(r.period.label, r.profit)),
+    // The title is exactly 31 characters: Excel's sheet-name limit.
+    title: 'Recognized profit & excess cost', columns: PROFIT_COLUMNS, rows: rows.map((r) => profitRow(r.period.label, r.profit)),
     totals: profitRow('Total', totals.profit),
     notes: [
       'Recognized profit changes only through the recognition events (daily profit share, profit-eligible releases, re-allocations, other costs from the Profit Fund, over/short).',
