@@ -2,8 +2,8 @@
  * repositories/categories.repo.ts - SQL for the `categories` table (product groups).
  *
  * Layer: repository. No business rules: the service (`catalog.service.ts`) decides what may change; the
- * database triggers of migration 003 are the backstop (default categories locked, book fixed once a category
- * has products). Each category belongs to exactly one book, shop or telecom (BUSINESS_RULES section 1).
+ * database triggers of migrations 003/015 are the backstop (default categories locked, book fixed once a
+ * category has products, never deleted, name unique per book). Each category belongs to exactly one book, shop or telecom (BUSINESS_RULES section 1).
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { SQL_NOW_UTC } from './sql-helpers.ts';
@@ -51,9 +51,12 @@ export function getCategory(conn: DatabaseSync, id: number): CategoryRow | undef
   return r ? map(r) : undefined;
 }
 
-/** One category by name (the column is NOCASE, so "pen" finds "Pen"), or undefined. */
-export function findCategoryByName(conn: DatabaseSync, name: string): CategoryRow | undefined {
-  const r = conn.prepare(`${SELECT} WHERE c.name = ?`).get(name) as unknown as Raw | undefined;
+/**
+ * One category by (book, name), or undefined. The name column is NOCASE, so "pen" finds "Pen"; the same name in
+ * the OTHER book is a different category (migration 015: unique per book).
+ */
+export function findCategoryByBookName(conn: DatabaseSync, book: Book, name: string): CategoryRow | undefined {
+  const r = conn.prepare(`${SELECT} WHERE c.book = ? AND c.name = ?`).get(book, name) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 

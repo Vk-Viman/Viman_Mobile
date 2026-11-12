@@ -10,7 +10,8 @@
  *  - Default categories (e.g. "Scratch Cards", telecom) cannot be renamed or moved to another book.
  *  - C12: the selling price is an owner-entered field, never derived from the average cost.
  *  - Services (printing...) hold no stock, so their reorder level must be 0.
- *  - Names are unique ignoring upper/lower case; codes likewise. Nothing is deleted, only made inactive (section 12).
+ *  - Product names and codes are unique ignoring upper/lower case; a category name is unique PER BOOK (the same
+ *    name may exist in Shop and in Telecom, migration 015). Categories are never deleted, only made inactive. Nothing is deleted, only made inactive (section 12).
  *  - Money is whole cents (section 0); the average unit cost shown on a product is for DISPLAY only (section 3).
  * Every create/update is written to the audit log inside the same transaction (section 12).
  */
@@ -19,7 +20,7 @@ import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
 import { mulDivRound } from '../lib/money.ts';
 import {
-  findCategoryByName, getCategory, insertCategory, listCategories, updateCategory,
+  findCategoryByBookName, getCategory, insertCategory, listCategories, updateCategory,
 } from '../repositories/categories.repo.ts';
 import type { CategoryRow } from '../repositories/categories.repo.ts';
 import {
@@ -88,6 +89,12 @@ function dupName(noun: string): AppError {
   return new AppError(409, 'DUPLICATE_NAME', message, { name: message });
 }
 
+/** 409 DUPLICATE_NAME for a category: the name is taken in that book ("A Shop category with this name already exists."). */
+function dupCategory(book: Book): AppError {
+  const message = `A ${book === 'shop' ? 'Shop' : 'Telecom'} category with this name already exists.`;
+  return new AppError(409, 'DUPLICATE_NAME', message, { name: message });
+}
+
 /** 409 DUPLICATE_CODE for a product. */
 function dupCode(noun: string): AppError {
   const message = `Another ${noun} already uses this code.`;
@@ -100,6 +107,10 @@ function dupCode(noun: string): AppError {
  */
 function mapUniqueAbort(err: unknown): never {
   const msg = err instanceof Error ? err.message : '';
+  if (/UNIQUE constraint failed: index 'ux_categories_book_name'/.test(msg)) {
+    const message = 'A category with this name already exists in that book.';
+    throw new AppError(409, 'DUPLICATE_NAME', message, { name: message });
+  }
   const m = /UNIQUE constraint failed: (categories|products|suppliers)\.(name|code)/.exec(msg);
   if (m) {
     const noun = m[1] === 'categories' ? 'category' : m[1] === 'products' ? 'product' : 'supplier';
@@ -134,7 +145,7 @@ export function createCategory(ctx: AppContext, body: { name: string; book: Book
   const name = reqText(fields, 'name', 'Name', body.name, CATEGORY_NAME_MAX);
   assertNoFieldErrors(fields);
   return runWrite(ctx, (conn) => {
-    if (findCategoryByName(conn, name)) throw dupName('category');
+    if (findCategoryByBookName(conn, body.book, name)) throw dupCategory(body.book);
     const id = insertCategory(conn, { name, book: body.book });
     const after = getCategory(conn, id)!;
     logAudit(conn, 'category', String(id), 'create', null, after);
@@ -168,13 +179,15 @@ export function updateCategoryItem(
     if (before.isDefault && (patch.name !== undefined || patch.book !== undefined)) {
       throw new AppError(409, 'DEFAULT_CATEGORY_LOCKED', 'The name and book of a default category cannot be changed.');
     }
-    if (patch.name !== undefined) {
-      const other = findCategoryByName(conn, patch.name);
-      if (other && other.id !== id) throw dupName('category');
-    }
     if (patch.book !== undefined && before.productCount > 0) {
       throw new AppError(409, 'CATEGORY_HAS_PRODUCTS',
         'The book of a category that has products cannot be changed.');
+    }
+    if (patch.name !== undefined || patch.book !== undefined) {
+      // The name must be free in the book the category will end up in (per-book, case-insensitive).
+      const targetBook = patch.book ?? before.book;
+      const other = findCategoryByBookName(conn, targetBook, patch.name ?? before.name);
+      if (other && other.id !== id) throw dupCategory(targetBook);
     }
     updateCategory(conn, id, patch);
     const after = getCategory(conn, id)!;
@@ -204,7 +217,7 @@ function toProduct(r: ProductRow): Product {
 }
 
 export interface ProductListQuery {
-  q?: string; book?: Book; categoryId?: number; lowStock?: boolean; active?: boolean; limit: number; offset: number;
+  q?: string; book?: Book; categoryId?: number; kind?: Kind; lowStock?: boolean; active?: boolean; limit: number; offset: number;
 }
 
 /** Lists products A-Z with the total match count; filters as in `ProductListQuery`. */
@@ -261,7 +274,7 @@ function inactiveCategory(): AppError {
 }
 
 export interface ProductCreate {
-  code?: string; name: string; description?: string; categoryId: number; kind: Kind;
+  code?: string; name: string; description?: string; categoryId?: number; newCategory?: { name: string; book: Book }; kind: Kind;
   sellPriceCents: number; minPriceCents: number; reorderLevel?: number;
 }
 
@@ -269,7 +282,12 @@ export interface ProductCreate {
  * Creates a product with zero stock. Its book is taken from its category (the client cannot choose it),
  * which is how the "segments are disjoint" rule is guaranteed. Stock only ever arrives through stock movements.
  *
- * @throws AppError 400 VALIDATION_ERROR / CATEGORY_INACTIVE, 409 DUPLICATE_NAME / DUPLICATE_CODE.
+ * The category is either an existing one (`categoryId`) or a NEW one (`newCategory`, created in the same
+ * transaction, so a failing product leaves no category behind). Exactly one of the two must be given.
+ *
+ * @throws AppError 400 VALIDATION_ERROR / CATEGORY_INACTIVE, 409 DUPLICATE_NAME (also for a newCategory that
+ *   already exists and is active: the body carries `existingCategoryId`) / DUPLICATE_CODE /
+ *   CATEGORY_INACTIVE (409, newCategory name matches an inactive category).
  */
 export function createProduct(ctx: AppContext, body: ProductCreate): Product {
   const fields: Fields = {};
@@ -278,13 +296,36 @@ export function createProduct(ctx: AppContext, body: ProductCreate): Product {
   const description = optText(fields, 'description', 'Description', body.description ?? '', PRODUCT_DESCRIPTION_MAX);
   const reorder = body.reorderLevel ?? 0;
   checkPrices(fields, body.sellPriceCents, body.minPriceCents, body.kind, reorder);
+  const hasId = body.categoryId !== undefined;
+  const hasNew = body.newCategory !== undefined;
+  if (hasId === hasNew) fields.categoryId = 'Choose an existing category or enter a new one (not both).';
+  const newName = body.newCategory === undefined
+    ? undefined : reqText(fields, 'newCategory.name', 'Category name', body.newCategory.name, CATEGORY_NAME_MAX);
   assertNoFieldErrors(fields);
 
   return runWrite(ctx, (conn) => {
-    const cat = chooseCategory(conn, body.categoryId);
-    if (!cat.active) throw inactiveCategory();
+    let cat: CategoryRow;
+    let createdCategory = false;
+    if (body.newCategory !== undefined && newName !== undefined) {
+      const existing = findCategoryByBookName(conn, body.newCategory.book, newName);
+      if (existing) {
+        if (!existing.active) {
+          const message = 'This category exists but is inactive. Reactivate it first.';
+          throw new AppError(409, 'CATEGORY_INACTIVE', message, { name: message }, { existingCategoryId: existing.id });
+        }
+        const dup = dupCategory(body.newCategory.book);
+        throw new AppError(409, 'DUPLICATE_NAME', dup.message, dup.fields, { existingCategoryId: existing.id });
+      }
+      const catId = insertCategory(conn, { name: newName, book: body.newCategory.book });
+      cat = getCategory(conn, catId)!;
+      createdCategory = true;
+    } else {
+      cat = chooseCategory(conn, body.categoryId!);
+      if (!cat.active) throw inactiveCategory();
+    }
     if (findProductByName(conn, name)) throw dupName('product');
     if (code !== null && findProductByCode(conn, code)) throw dupCode('product');
+    if (createdCategory) logAudit(conn, 'category', String(cat.id), 'create', null, cat);
     const id = insertProduct(conn, {
       code, name, description, categoryId: cat.id, kind: body.kind, book: cat.book,
       sellPriceCents: body.sellPriceCents, minPriceCents: body.minPriceCents, reorderLevel: reorder,
