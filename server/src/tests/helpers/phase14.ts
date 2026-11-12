@@ -724,6 +724,18 @@ export class Simulation {
     }
     expect(dash.cash.books.map((b: any) => b.balanceCents), `${label}: dashboard cash as of ${d}`).toEqual(['shop', 'telecom', 'icecream'].map((b) => n1(ctx, 'SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = ? AND business_date <= ?', b, d)));
     expect(dash.stock.valueCents, `${label}: dashboard stock value as of ${d}`).toBe(val.totals.valueCents);
+    // dashboard series: the 30 daily points equal the sum of the three daily P&L rows; the monthly points equal the month-to-date reports
+    const from30 = daysAgo(0) > d ? d : d; // (asOf is within the last 15 days, the 30-day window ends on d)
+    const win0 = new Date(Date.parse(`${from30}T00:00:00Z`) - 29 * 86400000).toISOString().slice(0, 10);
+    expect(dash.series.daily).toHaveLength(30);
+    const dayRows: Record<string, number> = {};
+    for (const [x, key] of [['shop', 'netProfitCents'], ['telecom', 'netProfitCents'], ['icecream', 'recognizedProfitCents']] as const) {
+      for (const r of (await get(app, `/reports/pnl/${x}?from=${win0}&to=${d}&granularity=day`)).body.rows) dayRows[r.period.label] = (dayRows[r.period.label] ?? 0) + r[key];
+    }
+    for (const pt of dash.series.daily) expect(pt.profitCents, `${label}: dashboard daily series ${pt.date} (asOf ${d})`).toBe(dayRows[pt.date] ?? 0);
+    const lastMonth = dash.series.monthly[dash.series.monthly.length - 1];
+    expect(lastMonth.month).toBe(d.slice(0, 7));
+    expect(lastMonth.combinedCents, `${label}: dashboard monthly series, current month`).toBe(dash.month.profitCents);
     // additivity: the day rows add up to the month rows and to the total
     for (const [x, key] of [['shop', 'netProfitCents'], ['telecom', 'netProfitCents'], ['icecream', 'recognizedProfitCents']] as const) {
       const days = (await get(app, `/reports/pnl/${x}?from=${daysAgo(14)}&to=${daysAgo(0)}&granularity=day`)).body;

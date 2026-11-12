@@ -404,6 +404,33 @@ describe('Combined P&L and dashboard', () => {
     expect(d.cash.books[2].funds).toEqual({ cost: 440000, electricity: 100000, profit: 1030000 });
     expect(d.stock.valueCents).toBe(1651591);
   });
+  /**
+   * Dashboard series and top products as of 08-14 (hand-calculated):
+   *  daily 08-12: Shop sales Sa7 270,000 + print 80,000 = 350,000, profit 155,250; Telecom -180,000; Ice 0 -> sales 350,000, profit -24,750.
+   *  daily 08-13: Sa8 399,999, profit 74,999 - 30,000 + 200,000 (the Rs 2,000 release) = 244,999.   daily 08-14: sales -93,456, profit 298,544 (the "today" tile).
+   *  monthly (August so far): Shop -306,234, Telecom -38,623, Ice 970,000, Combined 625,143.
+   *  top products this month by gross profit (revenue net of returns, cost = automatic + extra, net of returns):
+   *   Phone cover revenue 240,000+400,000+320,000-160,000-80,000 = 720,000; cost 90,000+156,522+125,217-62,609-30,000 = 279,130 -> 440,870.
+   *   Charger 240,000+399,999-133,333 = 506,666; cost 140,000+4,000+210,000-70,000 = 284,000 -> 222,666.   Earbuds 90,000+270,000 = 360,000; cost 50,000+168,750 -> 141,250.
+   *   Cable 50,000+25,000 = 75,000; cost 20,020+10,010 -> 44,970.   Scratch card 200,000+300,000 = 500,000; cost 180,000+10,000+270,000 = 460,000 -> 40,000.
+   *  closings: Shop last closed 08-08 (closed again after the reopen); Telecom and Ice Cream never closed by 08-14.
+   */
+  it('dashboard series, top products and closings as of 08-14', async () => {
+    const d = (await get(s.app, '/dashboard?asOf=2025-08-14')).body;
+    expect(d.series.daily).toHaveLength(30);
+    const pt = (date: string) => d.series.daily.find((x: any) => x.date === date);
+    expect(pt('2025-08-12')).toEqual({ date: '2025-08-12', salesCents: 350000, profitCents: -24750 });
+    expect(pt('2025-08-13')).toEqual({ date: '2025-08-13', salesCents: 399999, profitCents: 244999 });
+    expect(pt('2025-08-14')).toEqual({ date: '2025-08-14', salesCents: -93456, profitCents: 298544 });
+    expect(d.series.monthly).toHaveLength(12);
+    expect(d.series.monthly[11]).toEqual({ month: '2025-08', shopCents: -306234, telecomCents: -38623, icecreamCents: 970000, combinedCents: 625143 });
+    expect(d.series.topProducts).toEqual([
+      { name: 'Phone cover', revenueCents: 720000, grossProfitCents: 440870 }, { name: 'Charger', revenueCents: 506666, grossProfitCents: 222666 },
+      { name: 'Earbuds', revenueCents: 360000, grossProfitCents: 141250 }, { name: 'Cable', revenueCents: 75000, grossProfitCents: 44970 },
+      { name: 'Scratch card 100', revenueCents: 500000, grossProfitCents: 40000 }]);
+    expect(d.closings.lastClosedByBook).toEqual({ shop: '2025-08-08', telecom: null, icecream: null });
+  });
+
   /** asOf 08-31: month = August: Shop 1,975,000+230,000 = 2,205,000 / -143,755; Telecom 799,377 / -18,623; Ice 2,700,000 / 1,220,000; Combined 5,704,377 / 1,057,622. */
   it('dashboard as of 08-31 and 09-14', async () => {
     const a = (await get(s.app, '/dashboard?asOf=2025-08-31')).body;
@@ -418,6 +445,42 @@ describe('Combined P&L and dashboard', () => {
     expect(b.cash.books[2].funds).toEqual({ cost: 890000, electricity: -500000, profit: 1050000 });
     expect(b.stock.valueCents).toBe(1811035);
     expect(b.icecream).toMatchObject({ recognizedProfitMonthCents: -30000, excessCostNotChargedMonthCents: 170000, profitAfterExcessCostMonthCents: -200000, outstandingExcessCostCents: 170000, fundsTotalCents: 1440000, fundsMatchBook: true });
+  });
+});
+
+describe('cash book ledger pages and list totals', () => {
+  /** The ledger of each book, read page by page (limit 7), must carry a running balance equal to the opening balance plus the rows so far (business date, then id). */
+  it('running balances are right across pages for every book, for a window that starts mid-way', async () => {
+    for (const book of ['shop', 'telecom', 'icecream']) {
+      const from = '2025-08-12'; const to = '2025-09-14';
+      const all = rows(s.ctx, 'SELECT id, business_date d, amount_cents a FROM cash_entries WHERE book = ? ORDER BY business_date, id', book);
+      const opening = all.filter((r) => r.d < from).reduce((acc, r) => acc + Number(r.a), 0);
+      const inside = all.filter((r) => r.d >= from && r.d <= to);
+      let run = opening; const want = inside.map((r) => { run += Number(r.a); return [Number(r.id), run]; });
+      const got: Array<[number, number]> = [];
+      for (let off = 0; off < inside.length; off += 7) {
+        const page = (await get(s.app, `/cashbooks/${book}?from=${from}&to=${to}&limit=7&offset=${off}`)).body;
+        expect(page.openingCents).toBe(opening);
+        expect(page.total).toBe(inside.length);
+        for (const it of page.items) got.push([it.id, it.runningBalanceCents]);
+      }
+      expect(got, book).toEqual(want);
+      expect(want[want.length - 1]![1]).toBe(book === 'shop' ? 2977000 : book === 'telecom' ? 9694566 : 1440000);
+    }
+  });
+  /** GET /sales totals over posted sales: revenue 2,614,999 + 480,000 + telecom cards... split by book: Shop 3,094,999 (August 2,614,999 + September 480,000); Telecom 600,000 (T1 200,000 + T2 300,000 + T3 100,000). */
+  it('sales list totals per book equal the hand sums (voided sale excluded, refunds counted)', async () => {
+    const shop = (await get(s.app, '/sales?book=shop&limit=200')).body;
+    const tel = (await get(s.app, '/sales?book=telecom&limit=200')).body;
+    expect(shop.totals.revenueCents).toBe(2614999 + 480000);
+    expect(shop.totals.refundsCents).toBe(639999 + 120000);
+    expect(tel.totals.revenueCents).toBe(600000);
+    expect(tel.totals.refundsCents).toBe(0);
+    // cogs (automatic) shop: August 1,205,124 + September 237,283; telecom 180,000 + 270,000 + 90,000
+    expect(shop.totals.cogsCents).toBe(1205124 + 237283);
+    expect(tel.totals.cogsCents).toBe(540000);
+    expect(shop.totals.extraCostCents).toBe(4000);
+    expect(tel.totals.extraCostCents).toBe(10000);
   });
 });
 
