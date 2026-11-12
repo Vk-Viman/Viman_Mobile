@@ -534,7 +534,11 @@ export function segNetFromTables(ctx: AppContext, book: 'shop' | 'telecom', from
   const adj = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('loss','stocktake_gain','stocktake_loss','adjustment') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`)
     + n1(ctx, `SELECT COALESCE(SUM(cost_cents),0) FROM stock_losses WHERE status='posted' AND source='damaged_return' AND book='${book}' AND ${w('business_date')}`);
   const os = n1(ctx, `SELECT COALESCE(SUM(difference_cents),0) FROM cash_counts WHERE status='posted' AND book='${book}' AND ${w('business_date')}`);
-  return comm + (rev - cost) - exp - adj + os;
+  // R4 purchase refund gain, from the CASH side and the stock side independently: cash taken back for purchases (refund entries and void reversals, on their business date)
+  // minus the stock value removed by the purchase_return / purchase_void movements (the residual sweep is in `adj` already).
+  const refunds = n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='${book}' AND (type='purchase_refund' OR (type='purchase_payment' AND reverses_entry_id IS NOT NULL)) AND ${w('business_date')}`);
+  const removed = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('purchase_return','purchase_void') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`);
+  return comm + (rev - cost) - exp - adj + os + (refunds - removed);
 }
 
 /** Row count of every table: a cheap "did anything get written?" fingerprint. */
