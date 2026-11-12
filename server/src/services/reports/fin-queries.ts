@@ -14,11 +14,12 @@
  *  - Reload / EZCash       = posted `reload_sales` / `ezcash_sales` commission_cents (R14: collections and top-ups never read).
  *  - Operating expenses    = posted `expenses` of the book by category (E2: there is no electricity category).
  *  - Stock adjustments     = movement types of the product's book (migration 004, services/inventory.service.ts):
- *        'loss'            (value_delta < 0)  -> losses; its void is the exact negation, so it nets out
+ *        POSTED `stock_losses` rows (source 'manual' and 'damaged_return'; voided rows excluded) -> losses, one source per loss
  *        'stocktake_loss'  (value_delta < 0)  -> stocktake losses;  'stocktake_gain' (value_delta > 0) -> stocktake gains
  *        'adjustment'      (value-only)       -> residual sweeps of purchase returns/voids (R4)
- *      plus `stock_losses` rows with source = 'damaged_return' (a damaged sales return writes NO stock movement, only
- *      that one loss row at the original automatic cost - so it is counted exactly once, section 4).
+ *      (a damaged sales return writes NO stock movement, only its loss row at the original AUTOMATIC cost - the C13 extra cost is
+ *      reversed with the revenue, not lost - so it is counted exactly once, section 4; a manual loss also writes a 'loss' movement,
+ *      which is deliberately NOT read here, so it is never counted twice).
  *      NOT adjustments: 'personal_use' (goods drawing, below the line), 'sale', 'sale_return', 'sale_void', 'purchase',
  *      'purchase_return', 'purchase_void', 'opening'.
  *  - Cash over/short       = posted `cash_counts.difference_cents` of the book (C4: over +, short -).
@@ -113,23 +114,26 @@ export interface AdjustmentFigures {
  */
 export function adjustmentsByPeriod(conn: DatabaseSync, periods: readonly Period[], book: StockBook): AdjustmentFigures[] {
   const [from, to] = range(periods);
+  // Stocktake losses/gains and residual sweeps come from the stock ledger (their reversal rows net voids out). Losses come from the
+  // POSTED `stock_losses` rows of every source: a manual loss writes both a row and a 'loss' movement (read once, from the row), while a
+  // damaged return writes ONLY the row - so one source per loss means nothing is dropped or counted twice. A voided loss row is excluded.
   const moves = sumByPeriodAndGroup(conn, periods,
     `SELECT m.business_date AS d, m.type AS g, SUM(m.value_delta_cents) AS v
        FROM stock_movements m JOIN products p ON p.id = m.product_id
-      WHERE p.book = ? AND m.type IN ('loss','stocktake_loss','stocktake_gain','adjustment') AND m.business_date BETWEEN ? AND ?
+      WHERE p.book = ? AND m.type IN ('stocktake_loss','stocktake_gain','adjustment') AND m.business_date BETWEEN ? AND ?
       GROUP BY m.business_date, m.type`, [book, from, to], ['v'] as const);
-  const damaged = sumByPeriod(conn, periods,
-    `SELECT business_date AS d, SUM(cost_cents) AS c FROM stock_losses
-      WHERE book = ? AND source = 'damaged_return' AND status = 'posted' AND business_date BETWEEN ? AND ? GROUP BY business_date`,
+  const lossRows = sumByPeriodAndGroup(conn, periods,
+    `SELECT business_date AS d, source AS g, SUM(cost_cents) AS c FROM stock_losses
+      WHERE book = ? AND status = 'posted' AND business_date BETWEEN ? AND ? GROUP BY business_date, source`,
     [book, from, to], ['c'] as const);
   const v = (type: string, i: number): number => moves.get(type)?.[i]?.v ?? 0;
   return periods.map((_, i) => {
     // A loss removes value (negative delta) = a cost; a gain adds value (positive delta) = a credit.
-    const losses = neg(v('loss', i));
+    const losses = lossRows.get('manual')?.[i]?.c ?? 0;
     const stocktakeLosses = neg(v('stocktake_loss', i));
     const gains = v('stocktake_gain', i);
     const sweeps = neg(v('adjustment', i));
-    const damagedReturn = damaged[i]!.c;
+    const damagedReturn = lossRows.get('damaged_return')?.[i]?.c ?? 0;
     return {
       lossesCents: losses, damagedReturnLossesCents: damagedReturn, stocktakeLossesCents: stocktakeLosses,
       stocktakeGainsCents: gains, residualSweepsCents: sweeps,

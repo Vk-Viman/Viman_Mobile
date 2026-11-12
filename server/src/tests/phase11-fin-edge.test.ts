@@ -11,7 +11,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
-import { sql } from './helpers/phase4.ts';
+import { lossNew, lossVoid, sql } from './helpers/phase4.ts';
+import { buy, mkProduct } from './helpers/inventory.ts';
+import { clc, returnOk, rl, sellOk } from './helpers/phase5.ts';
 import { buildFinWorld, cellBy, q, rep, repXlsx } from './helpers/phase11fin.ts';
 
 const env = new TestEnv();
@@ -230,5 +232,36 @@ describe('reports are read-only and electricity is never an expense (E2)', () =>
       expect(Object.keys(r.totals.expenses.byCategory).sort()).toEqual(
         ['cleaning_supplies', 'internet', 'other', 'packaging', 'rent', 'repairs', 'stationery', 'transport', 'water']);
     }
+  });
+});
+
+describe('damaged return and voided loss (stock adjustments, BUSINESS_RULES 4, 11, C5, C13)', () => {
+  /**
+   * Product Z: 10 units for 10,000 (unit 1,000). 03-01 sale of 4 @ 3,000 with the cost entered as 1,250 per unit:
+   *   revenue 12,000, automatic cost 4,000, extra 4 x 250 = 1,000 -> gross profit 12,000 - 4,000 - 1,000 = 7,000.
+   * 03-02 ONE unit comes back DAMAGED: revenue -3,000, automatic cost -1,000, extra -250 (reversed, NOT lost) -> return gross profit -3,000 + 1,000 + 250 = -1,750;
+   *   exactly one loss at the AUTOMATIC cost 1,000 is written (no stock movement) -> adjustments 1,000 on 03-02, net 03-02 = -1,750 - 1,000 = -2,750.
+   * 03-03 a manual loss of 2 units (2,000) is VOIDED: it nets to zero (the row is void; its movement is reversed).
+   * Check by another route: the 3 units kept by customers earned 9,000 - 3,000 - 750 = 5,250; the damaged unit lost its cost 1,000 once -> 4,250 in total.
+   */
+  it('revenue and cost reverse in the return period, ONE loss at automatic cost only, a voided loss counts for nothing', async () => {
+    const d = await apiBase(await env.build());
+    const z = (await mkProduct(d, { minPriceCents: 1 })).id as number;
+    await buy(d, [{ productId: z, packs: 1, packSize: 10, lineTotalCents: 10000 }], { businessDate: '2025-02-28' });
+    const sale = (await sellOk(d, [clc(z, 4, 3000, 1250)], { businessDate: '2025-03-01' })).sales[0];
+    await returnOk(d, sale.id, [rl(sale.items[0].id, 1, false)], { businessDate: '2025-03-02' });
+    const loss = await lossNew(d, z, 2, { businessDate: '2025-03-03', reason: 'lost' });
+    expect(loss.status).toBe(201);
+    expect((await lossVoid(d, loss.body.item.id)).status).toBeLessThan(300);
+    const r = (await rep(d, 'pnl/shop', q('2025-03-01', '2025-03-03', 'day'))).body;
+    const [d1, d2, d3] = r.rows;
+    expect(d1.netProfitCents).toBe(7000);
+    expect(d1.goods).toMatchObject({ revenueCents: 12000, costAutomaticCents: 4000, costExtraCents: 1000, grossProfitCents: 7000 });
+    expect(d2.goods).toMatchObject({ returnsCents: 3000, revenueCents: -3000, costAutomaticCents: -1000, costExtraCents: -250, grossProfitCents: -1750 });
+    expect(d2.adjustments).toEqual({ lossesCents: 0, damagedReturnLossesCents: 1000, stocktakeLossesCents: 0, stocktakeGainsCents: 0, residualSweepsCents: 0, netCents: 1000 });
+    expect(d2.netProfitCents).toBe(-2750);
+    expect(d3.adjustments.netCents).toBe(0);
+    expect(d3.netProfitCents).toBe(0);
+    expect(r.totals.netProfitCents).toBe(4250);
   });
 });
