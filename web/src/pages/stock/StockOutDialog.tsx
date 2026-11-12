@@ -2,6 +2,7 @@
  * StockOutDialog: one form for the two ways stock leaves the shelf without a sale:
  *  - mode "loss": damaged / lost / expired stock written off   (POST /stock-losses)
  *  - mode "use":  goods the owner takes for personal use       (POST /drawings, kind "goods")
+ * The product is chosen category-first (PickCategoryProduct; inactive products stay selectable, per BUSINESS_RULES §13A decision 6).
  * Opened from Stock > Stock losses and Stock > Personal use. API hooks: api/stock.ts.
  *
  * Rules reflected here (the server enforces them and is authoritative):
@@ -17,12 +18,10 @@ import { useToast } from '../../components/Toast';
 import { useCreateDrawing, useCreateStockLoss } from '../../api/stock';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
-import { useDebounced } from '../../hooks/useDebounced';
-import { BOOK_LABEL } from '../../lib/constants';
 import { errorBanner, fieldError } from '../../lib/errors';
 import { parseIntStrict } from '../purchases/helpers';
-import { useStockProductChoices } from './shared';
-import type { StockLossReason } from '../../types/api';
+import { PickCategoryProduct } from './PickCategoryProduct';
+import type { Product, StockLossReason } from '../../types/api';
 
 /** Largest quantity accepted (matches the server's limit). */
 const MAX_QTY = 1_000_000_000;
@@ -42,17 +41,14 @@ export function StockOutDialog({ mode, onClose }: { mode: 'loss' | 'use'; onClos
   const clientRef = useClientRef();
 
   const { today, date: effDate, setDate } = useBusinessDate();
-  const [search, setSearch] = useState('');
-  const [productId, setProductId] = useState('');
+  // Category-first selection (PickCategoryProduct): the chosen product is cleared whenever the category changes.
+  const [selected, setSelected] = useState<Product | null>(null);
+  const productId = selected ? String(selected.id) : '';
   const [qty, setQty] = useState('');
   const [reason, setReason] = useState<StockLossReason>('damaged');
   const [note, setNote] = useState('');
   // Field errors for empty required fields appear only after a Save attempt, not while the form is still blank.
   const [showErrors, setShowErrors] = useState(false);
-
-  const q = useDebounced(search.trim());
-  const stockProducts = useStockProductChoices(q);
-  const selected = stockProducts.find((p) => String(p.id) === productId);
 
   const qtyN = parseIntStrict(qty);
   const qtyOk = qtyN !== null && qtyN >= 1 && qtyN <= MAX_QTY;
@@ -94,21 +90,7 @@ export function StockOutDialog({ mode, onClose }: { mode: 'loss' | 'use'; onClos
         </p>
       )}
       <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(err, 'businessDate')} />
-      <TextField label="Find product" placeholder="Type a name or code" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
-      <SelectField
-        label="Product"
-        value={productId}
-        onChange={(e) => setProductId(e.target.value)}
-        error={fieldError(err, 'productId') ?? (showErrors && !productId ? 'Choose a product.' : undefined)}
-        hint={selected ? `${BOOK_LABEL[selected.book]} book — ${selected.qtyOnHand} in stock now` : undefined}
-      >
-        <option value="">Select a product</option>
-        {stockProducts.map((p) => (
-          <option key={p.id} value={String(p.id)}>
-            {p.name}{p.code ? ` (${p.code})` : ''} — {p.qtyOnHand} in stock{p.active ? '' : ' (inactive)'}
-          </option>
-        ))}
-      </SelectField>
+      <PickCategoryProduct value={selected} onChange={setSelected} error={fieldError(err, 'productId') ?? (showErrors && !productId ? 'Choose a product.' : undefined)} />
       <TextField
         label="Quantity"
         inputMode="numeric"
