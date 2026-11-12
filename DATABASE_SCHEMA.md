@@ -127,7 +127,7 @@ Entities and actions written today: `settings` update; `backup` restore; `catego
 | `CUSTOM` | Custom image print | 4000 | 650 |
 
 Triggers: `PRINT_TYPE_CODE_IMMUTABLE`, no delete. Editable: name, price, cost, active.
-*Printing defaults:* this table is the operational source of truth. It is seeded once by the migration. The Settings → Printing defaults tab edits `settings.printDefaults`, which no service reads, so changing it does not change any print service type or price.
+*Printing defaults:* this table is the operational source of truth. It is seeded once by the migration. The Settings → Printing defaults tab shows `settings.printDefaults` read-only; no service reads it, so it never changes any print service type or price.
 
 **`print_sales`** `business_date`, `posted_at`, `service_type_id FK`, `description` (snapshot of the type name), `qty` (1..10^6), `unit_price_cents` (0..10^9), `unit_cost_cents` (0..10^9, snapshot of the type's standard cost), `revenue_cents`, `cogs_cents`, status columns, `notes`, `client_ref UNIQUE`. `CHECK (revenue_cents = qty * unit_price_cents AND cogs_cents = qty * unit_cost_cents)`. `SERVICE_TYPE_INACTIVE` trigger refuses a sale on an inactive type.
 

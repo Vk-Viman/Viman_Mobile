@@ -101,7 +101,7 @@ Dates on every form start at today and cannot be later than today. You may choos
 
 **Reports.** *Profit & loss* (Shop, Telecom, Ice Cream or Combined), *Cash books*, *Ice Cream* (funds and profit), *Stock* (valuation, movements, losses, product profit, low stock), *Activity* (sales, purchases, drawings, printing variance), *Backdated* (records entered with an earlier date). Pick a period and daily or monthly rows; each report can be downloaded as Excel. Every row uses only the records dated inside its own period.
 
-**Settings.** *General*: shop name, address, phone, email. *Commission rates*: reload and EZCash commission. *Printing defaults*: a stored list of print prices (see the note under Printing). *Backups*: backup now, restore. *Audit log*: who-changed-what history, newest first, with a filter by kind of record.
+**Settings.** *General*: shop name, address, phone, email. *Commission rates*: reload and EZCash commission. *Printing defaults*: a read-only reference list; print prices are managed under Printing → Service types. *Backups*: backup now, restore. *Audit log*: who-changed-what history, newest first, with a filter by kind of record.
 
 ## Troubleshooting
 

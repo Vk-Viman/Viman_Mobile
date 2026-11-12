@@ -62,7 +62,7 @@ Contents: [Conventions](#conventions) · [Error codes](#error-codes) · [System]
 | 400 | `CATEGORY_INACTIVE`, `CATEGORY_BOOK_MISMATCH` | products |
 | 400 | `MIXED_BOOKS` | purchase with Shop and Telecom products |
 | 400 | `PRODUCT_NOT_STOCKABLE` | purchases, stock losses, goods drawings (service product) |
-| 400 | `PRODUCT_NOT_SELLABLE_YET` | `POST /sales` with a `kind = "service"` product ("Service products cannot be sold yet."; printing uses `/print-sales`) |
+| 400 | `PRODUCT_NOT_SELLABLE_YET` | `POST /sales` with a `kind = "service"` product ("Service products are not sold in the POS. Use Printing for print and photocopy jobs."; printing uses `/print-sales`) |
 | 400 | `PRODUCT_INACTIVE` | `POST /sales` |
 | 400 | `PRODUCT_NOT_IN_BOOK` | stocktake item from the other book |
 | 400 | `RESTORE_CONFIRM_REQUIRED` | restore without `confirm = "RESTORE"` |
@@ -116,7 +116,7 @@ Contents: [Conventions](#conventions) · [Error codes](#error-codes) · [System]
 }
 ```
 The values shown are the built-in defaults, used when no row is stored. `updatedAt` is the latest `updated_at` across stored sections (null if none).
-**`printDefaults` is stored and shown in Settings but not read by any other service.** The prices and standard costs actually used for printing are the `print_service_types` rows (see [Printing](#printing)); editing `printDefaults` does not change them.
+**`printDefaults` is stored and shown read-only in Settings (labelled "Initial price list, kept for reference; not used for sales") but not read by any other service.** The prices and standard costs actually used for printing are the `print_service_types` rows (see [Printing](#printing)); editing `printDefaults` does not change them.
 
 ### `PUT /settings`
 Body: any subset of `shop`, `rates`, `printDefaults` (at least one). A section that is present **replaces that section entirely**.
@@ -238,7 +238,7 @@ Scope: stock products only. Shop goods are book `shop`, line type `goods`; scrat
   - **Extra cost (C13):** `unitCostCents` is the cost per unit to charge. Omitted or equal to the automatic cost → extra 0. It may be raised, never lowered: `qty × unitCostCents` below the automatic cost is `422 COST_BELOW_AUTOMATIC` (`fields["items.N.unitCostCents"]`, `error.minUnitCostCents = ceil(cogsCents / qty)`). `extraCostCents = qty × unitCostCents − cogsCents`. The extra creates no stock movement and no cash entry.
   - `warnings` entries `{ code, message, lineIndex }`, never blocking: `PRICE_BELOW_MINIMUM`, `PRICE_BELOW_COST` (against the automatic unit cost), `ZERO_COST` (quantity sold but no cost recorded).
 - `GET /sales?from=&to=&book=&status=&productId=&limit=&offset=` → `{ items, total, totals: { revenueCents, cogsCents, extraCostCents, costCents, refundsCents } }` (totals over posted sales matching the filter). `limit` 1–200 (default 50). `GET /sales/:id` → `{ item }`.
-- `POST /sales/:id/void` `{ reason }` → `{ item }`. `409 HAS_RETURNS`. The sale's movements are exactly negated (stock returns at the original snapshot value) and its cash entry reversed.
+- `POST /sales/:id/void` `{ reason }` → `{ item, warnings }` (R13 negative-cash warning after the reversal; never blocks). `409 HAS_RETURNS`. The sale's movements are exactly negated (stock returns at the original snapshot value) and its cash entry reversed.
 - `POST /sales/:id/returns` `{ businessDate, items: [{ saleItemId, qty (1–10^6), resalable: boolean }] (1–100), note?, clientRef }` → `201 { item: SaleReturn, sale, warnings }`.
   - Errors: R-RD, `409 SALE_VOID`, `422 RETURN_EXCEEDS_SOLD`; each line once per request and belonging to the sale (`400`).
   - Values (C5): revenue, automatic cost and extra cost each use `mulDivRound(amount, qty, item.qty)`; the return that completes the line takes the exact remainder. `refundCents` = Σ revenue portions.
@@ -254,10 +254,10 @@ Cash-only module (R14: no float or wallet balances). Revenue is the commission o
 - `GET /reload-providers` → `{ items: [{ id, name, commissionBp (effective: own rate or the shop default), ownCommissionBp (null = use default), active }] }`. Providers (seeded): Dialog, Mobitel, Hutch, Airtel.
 - `PUT /reload-providers/:id` `{ commissionBp: integer 0–10000 | null, active: boolean }` → `{ item }`; audited; never changes existing sales.
 - `POST /reload-sales` `{ businessDate, providerId, salesCents (1–10^12), extraCents? (0–10^12, default 0), notes?, clientRef }` → `201 { item }`. `commissionCents = mulDivRound(salesCents, rateBp, 10000) + extraCents`, where `rateBp` is the provider's own rate or `settings.rates.reloadCommissionBp` (default 600). Cash `reload_collection` +`salesCents` (telecom). `409 PROVIDER_INACTIVE`.
-- `GET /reload-sales?from=&to=&providerId=&status=&limit=&offset=` → `{ items, total, totals: { salesCents, commissionCents, extraCents } }` (posted rows). `GET /reload-sales/:id`; `POST /reload-sales/:id/void`.
+- `GET /reload-sales?from=&to=&providerId=&status=&limit=&offset=` → `{ items, total, totals: { salesCents, commissionCents, extraCents } }` (posted rows). `GET /reload-sales/:id`; `POST /reload-sales/:id/void` → `{ item, warnings }`.
   `ReloadSale` = `{ id, businessDate, postedAt, backdated, providerId, providerName, salesCents, commissionBp, extraCents, commissionCents, notes, status, voidedAt, voidReason, clientRef }`.
 - `POST /ezcash-sales` `{ businessDate, billTotalCents (1–10^12), notes?, clientRef }` → `201 { item }`. Provider is Dialog automatically. `commissionCents = mulDivRound(billTotalCents, rateBp, 10000)` with `settings.rates.ezcashCommissionBp` (default 80); Dialog's own reload rate is not used and an inactive Dialog does not block EZCash. Cash `ezcash_collection` +`billTotalCents`.
-- `GET /ezcash-sales` (same filters without `providerId`; `totals: { billTotalCents, commissionCents }`), `GET /ezcash-sales/:id`, `POST /ezcash-sales/:id/void`.
+- `GET /ezcash-sales` (same filters without `providerId`; `totals: { billTotalCents, commissionCents }`), `GET /ezcash-sales/:id`, `POST /ezcash-sales/:id/void` → `{ item, warnings }`.
 - `POST /telecom/topups` `{ businessDate, kind: "provider_topup"|"wallet_topup", providerId? (required for provider_topup, forbidden for wallet_topup), amountCents (1–10^12), notes?, clientRef }` → `201 { item, warnings }`. Cash-out `provider_topup` or `wallet_topup` (telecom). `409 PROVIDER_INACTIVE`; wrong `providerId` usage is `400 VALIDATION_ERROR` (`fields.providerId`).
 - `GET /telecom/topups?from=&to=&kind=&providerId=&status=` → `{ items, total, totals: { providerTopupCents, walletTopupCents, totalCents } }`; `GET /telecom/topups/:id`; `POST /telecom/topups/:id/void`.
 - `GET /telecom/summary?from=&to=` → `{ from|null, to|null, providers: [{ providerId, name, reloadSalesCents, reloadCommissionCents (incl. extra), ezcashBillCents, ezcashCommissionCents, topupsCents, commissionRevenueCents }], totals: { reloadSalesCents, reloadCommissionCents, reloadExtraCents, ezcashBillCents, ezcashCommissionCents, providerTopupsCents, walletTopupsCents, topupsCents, commissionRevenueCents } }` (posted rows).
@@ -271,7 +271,7 @@ Cash-only module (R14: no float or wallet balances). Revenue is the commission o
 - `POST /print-service-types` `{ code (^[A-Z0-9_]{2,20}$), name, priceCents, costCents (0–10^9) }` → `201 { item }`; `409 DUPLICATE_CODE`.
 - `PUT /print-service-types/:id` `{ name, priceCents, costCents, active }` (all required) → `{ item }`. Codes never change, types are never deleted, past sales are never changed.
 - `POST /print-sales` `{ businessDate, serviceTypeId, qty (1–10^6), unitPriceCents? (0–10^9, default = the type's price), notes?, clientRef }` → `201 { item, warnings }`. `unit_cost` is a snapshot of the type's current standard cost; `revenueCents = qty × unitPriceCents`; `cogsCents = qty × unitCostCents`. Cash `sale_service` +revenue (shop). `warnings: ["PRICE_BELOW_COST"]` when the price is below the standard cost. `409 SERVICE_TYPE_INACTIVE`; an unknown type is `400 VALIDATION_ERROR`.
-- `GET /print-sales?from=&to=&serviceTypeId=&status=` → `{ items, total, totals: { revenueCents, cogsCents, grossProfitCents } }`; `GET /print-sales/:id`; `POST /print-sales/:id/void` → `{ item }`.
+- `GET /print-sales?from=&to=&serviceTypeId=&status=` → `{ items, total, totals: { revenueCents, cogsCents, grossProfitCents } }`; `GET /print-sales/:id`; `POST /print-sales/:id/void` → `{ item, warnings }`.
   `PrintSale` = `{ id, businessDate, postedAt, backdated, serviceTypeId, serviceTypeCode, description, qty, unitPriceCents, unitCostCents, revenueCents, cogsCents, grossProfitCents, status, voidedAt, voidReason, notes, clientRef }`.
 - `POST /printing-supplies` `{ businessDate, amountCents (1–10^12), description, clientRef }` → `201 { item, warnings }`. Cash-out `printing_supplies` (shop); **no P&L effect** (R12; the Printing variance report compares supplies spent with standard cost charged).
 - `GET /printing-supplies?from=&to=&status=` → `{ items, total, totals: { amountCents } }`; `GET /printing-supplies/:id`; `POST /printing-supplies/:id/void` → `{ item }`.
