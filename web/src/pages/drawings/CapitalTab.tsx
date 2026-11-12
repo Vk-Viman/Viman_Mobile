@@ -70,7 +70,7 @@ export function CapitalTab() {
     {
       key: 'act', header: 'Actions',
       render: (e) => {
-        if (e.kind === 'opening_balance') return <Link to="/cashbooks" className="text-sm text-brand-700 hover:underline">Manage in Cash Books</Link>;
+        if (e.kind === 'opening_balance') return <Link to="/cash-books" className="text-sm text-brand-700 hover:underline">Manage in Cash Books</Link>;
         return e.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(e)} aria-label={`Void capital #${e.id}`}>Void</Button> : null;
       },
     },
