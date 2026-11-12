@@ -520,16 +520,25 @@ export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext })
  * (automatic + extra cost), minus Telecom expenses, minus stock adjustments (loss / stocktake / residual-sweep movements of Telecom products and damaged-return
  * losses), plus cash over/short of the Telecom book. Posted rows only; voided rows and reversal rows are ignored exactly as the rules say.
  */
-export function telecomNetFromTables(ctx: AppContext): number {
-  const comm = n1(ctx, "SELECT COALESCE(SUM(commission_cents),0) FROM reload_sales WHERE status='posted'") + n1(ctx, "SELECT COALESCE(SUM(commission_cents),0) FROM ezcash_sales WHERE status='posted'");
-  const rev = n1(ctx, "SELECT COALESCE(SUM(si.revenue_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='telecom'")
-    - n1(ctx, "SELECT COALESCE(SUM(r.refund_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='telecom'");
-  const cost = n1(ctx, "SELECT COALESCE(SUM(si.cogs_cents + si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='telecom'")
-    - n1(ctx, "SELECT COALESCE(SUM(r.cogs_reversed_cents + r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='telecom'");
-  const exp = n1(ctx, "SELECT COALESCE(SUM(amount_cents),0) FROM expenses WHERE status='posted' AND book='telecom'");
-  const adj = -n1(ctx, "SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('loss','stocktake_gain','stocktake_loss','adjustment') AND product_id IN (SELECT id FROM products WHERE book='telecom')")
-    + n1(ctx, "SELECT COALESCE(SUM(cost_cents),0) FROM stock_losses WHERE status='posted' AND source='damaged_return' AND book='telecom'");
-  const os = n1(ctx, "SELECT COALESCE(SUM(difference_cents),0) FROM cash_counts WHERE status='posted' AND book='telecom'");
+export function telecomNetFromTables(ctx: AppContext): number { return segNetFromTables(ctx, 'telecom', '0000-01-01', '9999-12-31'); }
+
+/**
+ * Shop or Telecom net profit for business dates in [from, to], straight from the raw rows (no report code): every figure is attributed to the business date of the
+ * record that carries it - a sale to its own date, a return to the RETURN's date (R5/R7), a stock adjustment to its movement's date, a cash difference to the count's.
+ */
+export function segNetFromTables(ctx: AppContext, book: 'shop' | 'telecom', from: string, to: string): number {
+  const w = (col: string) => `${col} >= '${from}' AND ${col} <= '${to}'`;
+  const comm = book === 'telecom'
+    ? n1(ctx, `SELECT COALESCE(SUM(commission_cents),0) FROM reload_sales WHERE status='posted' AND ${w('business_date')}`) + n1(ctx, `SELECT COALESCE(SUM(commission_cents),0) FROM ezcash_sales WHERE status='posted' AND ${w('business_date')}`)
+    : n1(ctx, `SELECT COALESCE(SUM(revenue_cents - cogs_cents),0) FROM print_sales WHERE status='posted' AND ${w('business_date')}`);
+  const rev = n1(ctx, `SELECT COALESCE(SUM(si.revenue_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='${book}' AND ${w('x.business_date')}`)
+    - n1(ctx, `SELECT COALESCE(SUM(r.refund_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='${book}' AND ${w('r.business_date')}`);
+  const cost = n1(ctx, `SELECT COALESCE(SUM(si.cogs_cents + si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='${book}' AND ${w('x.business_date')}`)
+    - n1(ctx, `SELECT COALESCE(SUM(r.cogs_reversed_cents + r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='${book}' AND ${w('r.business_date')}`);
+  const exp = n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM expenses WHERE status='posted' AND book='${book}' AND ${w('business_date')}`);
+  const adj = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('loss','stocktake_gain','stocktake_loss','adjustment') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`)
+    + n1(ctx, `SELECT COALESCE(SUM(cost_cents),0) FROM stock_losses WHERE status='posted' AND source='damaged_return' AND book='${book}' AND ${w('business_date')}`);
+  const os = n1(ctx, `SELECT COALESCE(SUM(difference_cents),0) FROM cash_counts WHERE status='posted' AND book='${book}' AND ${w('business_date')}`);
   return comm + (rev - cost) - exp - adj + os;
 }
 
@@ -736,6 +745,11 @@ export class Simulation {
     const lastMonth = dash.series.monthly[dash.series.monthly.length - 1];
     expect(lastMonth.month).toBe(d.slice(0, 7));
     expect(lastMonth.combinedCents, `${label}: dashboard monthly series, current month`).toBe(dash.month.profitCents);
+    // per-DAY attribution (business date; a return belongs to the day of the RETURN): every day row of the Shop and Telecom P&L equals independent SQL for that single date
+    for (const x of ['shop', 'telecom'] as const) {
+      const days = (await get(app, `/reports/pnl/${x}?from=${daysAgo(16)}&to=${daysAgo(0)}&granularity=day`)).body;
+      for (const r of days.rows) expect(r.netProfitCents, `${label}: ${x} P&L of ${r.period.label} vs SQL over the raw rows`).toBe(segNetFromTables(ctx, x, r.period.label, r.period.label));
+    }
     // additivity: the day rows add up to the month rows and to the total
     for (const [x, key] of [['shop', 'netProfitCents'], ['telecom', 'netProfitCents'], ['icecream', 'recognizedProfitCents']] as const) {
       const days = (await get(app, `/reports/pnl/${x}?from=${daysAgo(14)}&to=${daysAgo(0)}&granularity=day`)).body;

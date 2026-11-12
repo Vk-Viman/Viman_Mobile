@@ -36,6 +36,7 @@ import { apiBase } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
 import { get } from './helpers/catalog.ts';
 import { assertGlobalInvariants, buildWorld14, rows } from './helpers/phase14.ts';
+import { pack } from './helpers/phase12.ts';
 import type { World14 } from './helpers/phase14.ts';
 
 const env = new TestEnv();
@@ -445,6 +446,34 @@ describe('Combined P&L and dashboard', () => {
     expect(b.cash.books[2].funds).toEqual({ cost: 890000, electricity: -500000, profit: 1050000 });
     expect(b.stock.valueCents).toBe(1811035);
     expect(b.icecream).toMatchObject({ recognizedProfitMonthCents: -30000, excessCostNotChargedMonthCents: 170000, profitAfterExcessCostMonthCents: -200000, outstandingExcessCostCents: 170000, fundsTotalCents: 1440000, fundsMatchBook: true });
+  });
+});
+
+describe('Excel export pack (rupees, from the same hand figures)', () => {
+  const sheet = (wb: any, name: string) => wb.worksheets.find((w: any) => w.name === name)!;
+  const rowOf = (ws: any, label: string) => (ws.getRows(1, ws.rowCount)!.find((r: any) => r.getCell(1).value === label)!.values as unknown[]).slice(1);
+  it('the workbook shows the August / September / total figures of the hand calculation (cents / 100)', async () => {
+    const p = await pack(s, 'from=2025-08-01&to=2025-09-30');
+    expect(p.status).toBe(200);
+    const names = p.wb!.worksheets.map((x) => x.name);
+    expect(names).toEqual(['Combined P&L (by month)', 'Shop P&L', 'Telecom P&L', 'Ice Cream P&L', 'Ice Cream funds', 'Ice Cream profit and excess', 'Cash book - Shop', 'Cash book - Telecom',
+      'Cash book - Ice Cream', 'Inventory valuation', 'Low stock', 'Sales', 'Purchases', 'Drawings', 'Printing variance']);
+    const c = sheet(p.wb, 'Combined P&L (by month)');
+    expect(rowOf(c, '2025-08')).toEqual(['2025-08', -1437.55, -186.23, 12200, 10576.22, 0, 10576.22, 5300, 7500, 0]);
+    expect(rowOf(c, '2025-09')).toEqual(['2025-09', -7357.01, -916, -300, -8573.01, 1700, -10273.01, 200, 5000, 1700]);
+    expect(rowOf(c, 'Total')).toEqual(['Total', -8794.56, -1102.23, 11900, 2003.21, 1700, 303.21, 5500, 12500, 1700]);
+    const sh = sheet(p.wb, 'Shop P&L');
+    expect(rowOf(sh, '2025-08')).toEqual(['2025-08', 19750, 9025.15, 40, 10684.85, 2300, 910, 1390, 12200, 1262.4, -50, -1437.55]);
+    expect(rowOf(sh, '2025-09')).toEqual(['2025-09', 3600, 1672.83, -20, 1947.17, 1250, 450, 800, 10000, 224.18, 120, -7357.01]);
+    expect(rowOf(sheet(p.wb, 'Cash book - Shop'), '2025-08')).toEqual(['2025-08', 0, 92548.99, 54448.99, 38100]);
+    expect((rowOf(sheet(p.wb, 'Cash book - Telecom'), '2025-09') as number[])[4]).toBe(96945.66);
+    expect((rowOf(sheet(p.wb, 'Cash book - Ice Cream'), '2025-09') as number[])[4]).toBe(14400);
+    const v = sheet(p.wb, 'Inventory valuation');
+    // product rows have no label in column 1 (SKU is empty): look the products up by name in column 2
+    const byName = (n: string) => (v.getRows(1, v.rowCount)!.find((r: any) => r.getCell(2).value === n)!.values as unknown[]).slice(2);
+    expect(byName('Cable')).toEqual(['Cable', 'Electronics', 'shop', 5, 100.1, 500.5]);
+    expect(byName('Phone cover')).toEqual(['Phone cover', 'Electronics', 'shop', 14, 324.28, 4539.85]);
+    expect(byName('Scratch card 100')).toEqual(['Scratch card 100', 'Scratch Cards', 'telecom', 38, 90, 3420]);
   });
 });
 
