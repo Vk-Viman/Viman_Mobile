@@ -52,6 +52,13 @@ import { DaysTab } from './pages/icecream/DaysTab';
 import { PaymentsTab } from './pages/icecream/PaymentsTab';
 import { FundMovesTab } from './pages/icecream/FundMovesTab';
 import { FundsTab } from './pages/icecream/FundsTab';
+import { ReportsPage } from './pages/reports/ReportsPage';
+import { PnlTab } from './pages/reports/PnlTab';
+import { CashReportTab } from './pages/reports/CashReportTab';
+import { IceCreamReportTab } from './pages/reports/IceCreamReportTab';
+import { StockReportTab } from './pages/reports/StockReportTab';
+import { ActivityReportTab } from './pages/reports/ActivityReportTab';
+import { BackdatedReportTab } from './pages/reports/BackdatedReportTab';
 import { OpeningStockPage } from './pages/opening-stock/OpeningStockPage';
 import { ManualTab } from './pages/opening-stock/ManualTab';
 import { ImportTab } from './pages/opening-stock/ImportTab';
@@ -95,6 +102,14 @@ export function App() {
           <Route path="payments" element={<PaymentsTab />} />
           <Route path="moves" element={<FundMovesTab />} />
           <Route path="funds" element={<FundsTab />} />
+        </Route>
+        <Route path="reports" element={<ReportsPage />}>
+          <Route index element={<PnlTab />} />
+          <Route path="cash" element={<CashReportTab />} />
+          <Route path="icecream" element={<IceCreamReportTab />} />
+          <Route path="stock" element={<StockReportTab />} />
+          <Route path="activity" element={<ActivityReportTab />} />
+          <Route path="backdated" element={<BackdatedReportTab />} />
         </Route>
         <Route path="telecom" element={<TelecomPage />}>
           <Route index element={<ReloadsTab />} />

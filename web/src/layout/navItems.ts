@@ -39,6 +39,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/cash-books', label: 'Cash Books', icon: Wallet, phase: 8, description: 'Daily cash book for each of the three segments, with transfers and cash counts.', built: true },
   { to: '/drawings', label: 'Drawings', icon: HandCoins, phase: 9, description: 'Owner drawings and capital introduced into the business.', built: true },
   { to: '/ice-cream', label: 'Ice Cream', icon: IceCreamCone, phase: 10, description: 'Daily ice cream sales, costs and electricity.', built: true },
-  { to: '/reports', label: 'Reports', icon: BarChart3, phase: 11, description: 'Profit and loss, cash and stock reports by segment and period.' },
+  { to: '/reports', label: 'Reports', icon: BarChart3, phase: 11, description: 'Profit and loss, cash and stock reports by segment and period.', built: true },
   { to: '/settings', label: 'Settings', icon: Settings, phase: 1, description: 'Shop details, commission rates, printing defaults, backups and audit log.', built: true },
 ];

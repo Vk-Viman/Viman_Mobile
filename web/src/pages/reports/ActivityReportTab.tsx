@@ -1,0 +1,7 @@
+/**
+ * ActivityReportTab: Sales, purchases, drawings and printing variance.
+ * STUB created by the orchestrator in Wave 4 so the route table compiles; the Phase 11 agent replaces it.
+ */
+export function ActivityReportTab() {
+  return <p className="text-sm text-slate-500">Coming in Phase 11.</p>;
+}
