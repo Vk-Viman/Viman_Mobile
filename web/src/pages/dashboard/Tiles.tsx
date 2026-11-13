@@ -3,6 +3,7 @@
  * Presentation only: every figure is shown exactly as the server sent it (integer cents); nothing is calculated here.
  * Negative values are red (the Money component) and also carry a minus sign, so a loss never relies on colour alone.
  */
+import { ExternalBackupStatus } from './ExternalBackupStatus';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Badge } from '../../components/Badge';
 import { Card } from '../../components/Card';
@@ -156,6 +157,7 @@ export function BackupCard({ backup }: { backup: Dashboard['backup'] }) {
           <p className="text-xs text-slate-500">{backup.ageHours === null ? '' : `${backup.ageHours} hours ago`}</p>
         </>
       )}
+      <ExternalBackupStatus external={backup.external} />
     </Card>
   );
 }

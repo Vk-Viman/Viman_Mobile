@@ -12,6 +12,9 @@ import { ZERO_TILE, dash, datesEndingOn, dbSnapshot } from './helpers/phase12.ts
 import { buildDashboard, BACKUP_STALE_HOURS } from '../services/dashboard.service.ts';
 import { createBackup } from '../services/backup.service.ts';
 
+/** The external-backup part of the dashboard backup block when no external folder is configured (migration 018). */
+const NO_EXTERNAL = { status: 'not_configured', lastSuccessAt: null, daysSinceSuccess: null, warning: expect.any(String) };
+
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
 const fresh = async (): Promise<ApiBase> => apiBase(await env.build());
@@ -39,7 +42,7 @@ describe('empty database', () => {
       // a book with no entry yet has nothing to close, so a brand-new shop does not start with a list of "unclosed" days
       openDaysBehind: [{ book: 'shop', dates: [] }, { book: 'telecom', dates: [] }, { book: 'icecream', dates: [] }],
     });
-    expect(d.backup).toEqual({ latestAt: null, ageHours: null, status: 'none' });
+    expect(d.backup).toEqual({ latestAt: null, ageHours: null, status: 'none', external: NO_EXTERNAL });
     expect(d.series.daily).toEqual(datesEndingOn('2025-06-15', 30).map((date) => ({ date, salesCents: 0, profitCents: 0 })));
     expect(d.series.monthly).toHaveLength(12);
     expect(d.series.monthly[0]).toEqual({ month: '2024-07', shopCents: 0, telecomCents: 0, icecreamCents: 0, combinedCents: 0 });
@@ -181,7 +184,7 @@ describe('closings: last closed date and days not yet closed (R9, section 8)', (
 describe('backup block', () => {
   it('none -> ok after a backup; age in hours from the real clock; stale after the limit', async () => {
     const s = await fresh();
-    expect((await dash(s)).body.backup).toEqual({ latestAt: null, ageHours: null, status: 'none' });
+    expect((await dash(s)).body.backup).toEqual({ latestAt: null, ageHours: null, status: 'none', external: NO_EXTERNAL });
     const info = createBackup(s.ctx, 'manual');
     const ok = (await dash(s)).body.backup;
     expect(ok.status).toBe('ok');
@@ -190,10 +193,10 @@ describe('backup block', () => {
     expect(ok.ageHours).toBeLessThan(1);
     // fixed clocks through the service: exactly 5 hours, 48 hours (still ok) and 48.1 hours (stale) after the file time
     const at = new Date(info.createdAt).getTime();
-    expect(buildDashboard(s.ctx, '2025-05-10', new Date(at + 5 * 3600000)).backup).toEqual({ latestAt: info.createdAt, ageHours: 5, status: 'ok' });
+    expect(buildDashboard(s.ctx, '2025-05-10', new Date(at + 5 * 3600000)).backup).toEqual({ latestAt: info.createdAt, ageHours: 5, status: 'ok', external: NO_EXTERNAL });
     expect(buildDashboard(s.ctx, '2025-05-10', new Date(at + BACKUP_STALE_HOURS * 3600000)).backup.status).toBe('ok');
     const stale = buildDashboard(s.ctx, '2025-05-10', new Date(at + (BACKUP_STALE_HOURS + 0.1) * 3600000)).backup;
-    expect(stale).toEqual({ latestAt: info.createdAt, ageHours: 48.1, status: 'stale' });
+    expect(stale).toEqual({ latestAt: info.createdAt, ageHours: 48.1, status: 'stale', external: NO_EXTERNAL });
   });
 
   it('the newest of several backups is the one reported', async () => {

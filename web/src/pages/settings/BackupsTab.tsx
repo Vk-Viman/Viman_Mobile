@@ -21,6 +21,7 @@ import type { Backup } from '../../types/api';
 import { formatBytes, formatDateTime } from '../../lib/format';
 import { errorMessage } from './formUtils';
 import { ApiError } from '../../api/client';
+import { ExternalBackupSection } from './ExternalBackupSection';
 
 /** Badge colour per backup reason (why it was taken). */
 const tone = { startup: 'neutral', manual: 'brand', 'pre-restore': 'amber' } as const;
@@ -78,6 +79,8 @@ export function BackupsTab() {
   ];
 
   return (
+    <div className="space-y-6">
+    <ExternalBackupSection />
     <Card
       title="Backups"
       actions={
@@ -131,5 +134,6 @@ export function BackupsTab() {
         <p>A safety backup of the current data is made first, so you can undo this by restoring that safety backup.</p>
       </ConfirmDialog>
     </Card>
+    </div>
   );
 }

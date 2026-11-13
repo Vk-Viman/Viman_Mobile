@@ -304,7 +304,7 @@ describe('GET /dashboard - shape', () => {
     expect(Object.keys(d430).sort()).toEqual(['asOf', 'backup', 'cash', 'closings', 'definitions', 'icecream', 'month', 'series', 'stock', 'today', 'warnings']);
     expect(Object.keys(d430.series).sort()).toEqual(['daily', 'monthly', 'topProducts']);
     expect(Object.keys(d430.closings).sort()).toEqual(['lastClosedByBook', 'openDaysBehind']);
-    expect(Object.keys(d430.backup).sort()).toEqual(['ageHours', 'latestAt', 'status']);
+    expect(Object.keys(d430.backup).sort()).toEqual(['ageHours', 'external', 'latestAt', 'status']);
     for (const k of ['sales', 'salesShop', 'salesTelecom', 'salesIcecream', 'salesCombined', 'profit', 'today', 'month', 'cash', 'excessCost']) {
       expect(typeof d430.definitions[k], k).toBe('string');
     }

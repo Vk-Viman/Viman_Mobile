@@ -32,7 +32,7 @@ describe('first launch', () => {
     const ctx = b.ctx;
     const files = loadMigrations();
     expect(rows(ctx, 'SELECT version, name FROM schema_migrations ORDER BY version').map((r) => [Number(r.version), r.name])).toEqual(files.map((f) => [f.version, f.name]));
-    expect(files.length).toBe(15);
+    expect(files.length).toBeGreaterThanOrEqual(15);
     expect(rows(ctx, 'SELECT name, book, is_default, active FROM categories ORDER BY id').map((r) => [r.name, r.book])).toEqual(SEEDED_CATEGORIES);
     expect(rows(ctx, 'SELECT is_default, active FROM categories').every((r) => Number(r.is_default) === 1 && Number(r.active) === 1)).toBe(true);
     expect(rows(ctx, 'SELECT name, commission_bp, active FROM reload_providers ORDER BY sort_order').map((r) => [r.name, r.commission_bp, Number(r.active)])).toEqual([

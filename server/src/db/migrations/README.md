@@ -262,6 +262,11 @@ How the rebuild is done safely: the runner executes the file in a transaction wi
 
 **Rollback:** forward-only. To undo, restore the backup the app takes automatically at start-up before 015 ran.
 
+## 018_external_backups.sql (external backups, decision 11)
+Tables `backup_settings` (at most one row, `id = 1`, created when a folder is first set - the table starts empty; `external_dir` NULL = not configured; `updated_at` is when the folder was last set, used for the "configured but never copied for 7 days" rule; delete guard `BACKUP_SETTINGS_DELETE_FORBIDDEN`) and `external_backup_log` (append-only: `status` ok / failed / skipped; `ok` needs a target name, size and a 64-hex SHA-256; `failed` needs an error text; update and delete are refused with `EXTERNAL_BACKUP_LOG_APPEND_ONLY`). Nothing existing is changed. The status shown in the app (ok / not_configured / drive_missing / failed / stale) is derived from these rows plus a live check of the folder, never stored.
+
+**Rollback:** forward-only. To undo, restore the backup the app takes automatically at start-up before 018 ran.
+
 ## Rules of thumb for a new migration
 - Next number, three digits, lower-case name; never edit an applied file (the checksum would stop startup).
 - Money in integer cents, rates in basis points, dates as `YYYY-MM-DD` text with the strict CHECK, timestamps from `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.
