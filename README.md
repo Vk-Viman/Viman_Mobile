@@ -333,6 +333,11 @@ All automatic backups live on the same PC, so a failed disk or a theft would tak
 3. Unplug the drive. Keep working: you should see only a warning, no errors. Plug it back in (same drive letter) and press **Copy backup now** again.
 4. Confirm the new file appears and the Dashboard warning is gone.
 5. Optionally restore that copy on a test copy of the project and check your figures.
+6. **Automatic check (recommended):** with the drive plugged in, run this in a Command Prompt in the project folder (it only reads, it never changes anything):
+   ```
+   node scriptserify-external-backup.mjs E:VimanBackups
+   ```
+   It compares every copy on the drive with the backup of the same name in `dataackups` (SHA-256), checks that each copy opens as a valid database, flags leftover temporary files and files that do not belong, and asks the running program for its external-backup status. Exit code 0 means everything passed. Options: `--data <data folder>` and `--port <port>`.
 
 ### After a power cut or a damaged database
 The database is written with full durability, so a power cut normally loses nothing that was already saved. If the file is damaged the system refuses to start (so nothing is written on top of it) and prints these steps in the black window:
@@ -483,6 +488,18 @@ Size guide: **S** = about a day, **M** = a few days, **L** = a week or more (rou
 | Multi-shop / multi-PC | Only if the business grows | L |
 
 ---
+
+### 10.4 Hardening backlog from the final independent audit (2026-11-13)
+The audit found **no Critical or High** problem and no historical record changed. It listed these smaller items, none reachable through the normal screens except where noted; they are proposals, not yet scheduled (details in `AUDIT_REPORT_2026-11-13.md`):
+
+| Priority | Item | Size |
+|---|---|---|
+| Medium | Database-level closed-day protection only covers cash entries and three Ice Cream tables; stock-only and profit-only tables are protected by the program but not by database triggers | M |
+| Medium | A raw SQL status change (posted to void) is accepted without reversal rows on returns and other documents; the program itself always writes the reversal | M |
+| Medium | External backup: after 7+ days with every backup already on the drive, the stale warning cannot be cleared by Copy backup now (only a new backup clears it) | S |
+| Medium | External backup: while a drive stays read-only or full, the failure log grows every 10 minutes | S |
+| Low | External backup: a copy already on the drive under a different letter case makes that backup fail every run; raw EEXIST text on junction folders; the cloud-name check has some false positives (for example a folder called Boxes) and misses (for example Nextcloud) | S |
+| Low | Restore validates structure, not content: a few flipped bytes in a copy can restore without a refusal (use the verify script on the drive) | M |
 
 ## 11. For developers
 
