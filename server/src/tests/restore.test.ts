@@ -364,7 +364,8 @@ describe('restore rollback (RESTORE_FAILED)', () => {
     const tampered = createBackup(s.ctx, 'manual', new Date('2026-03-02T00:00:00Z'));
     const path = join(s.dataDir, 'backups', tampered.name);
     const db = new DatabaseSync(path);
-    try { db.exec("UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 1"); } finally { db.close(); }
+    // migration 020 guards schema_migrations against UPDATE; the test simulates a corrupted file, so it lifts the guard on its own copy
+    try { db.exec("DROP TRIGGER trg_schema_migrations_no_update; UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 1"); } finally { db.close(); }
     return { ...s, tampered, tamperedPath: path };
   }
 

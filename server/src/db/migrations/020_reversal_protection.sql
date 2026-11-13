@@ -59,13 +59,13 @@ BEGIN
   SELECT RAISE(ABORT, 'UNIQUE constraint failed: cash_entries.ref_id');
 END;
 
--- A cash entry that claims to reverse another must mirror it exactly (all types, not only return reversals).
+-- A cash entry that claims to reverse another must mirror it (all types, not only return reversals): opposite amount, same book,
+-- fund and business date, and the original must not itself be a reversal. (An id that does not exist is the FOREIGN KEY's business.)
 CREATE TRIGGER trg_cash_entries_reversal_mirror BEFORE INSERT ON cash_entries
-WHEN NEW.reverses_entry_id IS NOT NULL AND NOT EXISTS (
+WHEN NEW.reverses_entry_id IS NOT NULL AND EXISTS (SELECT 1 FROM cash_entries WHERE id = NEW.reverses_entry_id) AND NOT EXISTS (
   SELECT 1 FROM cash_entries o
    WHERE o.id = NEW.reverses_entry_id AND o.reverses_entry_id IS NULL AND o.amount_cents = -NEW.amount_cents
-     AND o.book = NEW.book AND o.fund IS NEW.fund AND o.business_date = NEW.business_date AND o.type = NEW.type
-     AND o.ref_table IS NEW.ref_table AND o.ref_id IS NEW.ref_id AND o.transfer_id IS NEW.transfer_id)
+     AND o.book = NEW.book AND o.fund IS NEW.fund AND o.business_date = NEW.business_date)
 BEGIN
   SELECT RAISE(ABORT, 'REVERSAL_MISMATCH');
 END;
@@ -106,7 +106,7 @@ BEGIN
 END;
 
 CREATE TRIGGER trg_icecream_fund_entries_reversal_mirror BEFORE INSERT ON icecream_fund_entries
-WHEN NEW.reverses_entry_id IS NOT NULL AND NOT EXISTS (
+WHEN NEW.reverses_entry_id IS NOT NULL AND EXISTS (SELECT 1 FROM icecream_fund_entries WHERE id = NEW.reverses_entry_id) AND NOT EXISTS (
   SELECT 1 FROM icecream_fund_entries o
    WHERE o.id = NEW.reverses_entry_id AND o.reverses_entry_id IS NULL AND o.amount_cents = -NEW.amount_cents
      AND o.fund = NEW.fund AND o.business_date = NEW.business_date
@@ -159,7 +159,7 @@ END;
 -- A reversal movement cancels exactly one original of the SAME record and product: same date, opposite quantity, value of the
 -- opposite sign and not larger (R4 may cap a removal at the pool value), same type (a purchase is undone as 'purchase_void').
 CREATE TRIGGER trg_stock_movements_reversal_mirror BEFORE INSERT ON stock_movements
-WHEN NEW.reverses_movement_id IS NOT NULL AND NOT EXISTS (
+WHEN NEW.reverses_movement_id IS NOT NULL AND EXISTS (SELECT 1 FROM stock_movements WHERE id = NEW.reverses_movement_id) AND NOT EXISTS (
   SELECT 1 FROM stock_movements o
    WHERE o.id = NEW.reverses_movement_id AND o.reverses_movement_id IS NULL AND o.product_id = NEW.product_id
      AND o.ref_table IS NEW.ref_table AND o.ref_id IS NEW.ref_id AND o.business_date = NEW.business_date
@@ -194,8 +194,22 @@ END;
 --      also for value-only sale_return rows); the only unlinked row allowed is ONE residual sweep: a value-only negative
 --      adjustment written exactly when the product pool equals the units about to leave (the service's R-VR 3 sweep);
 --    * value removed per return and product <= value restored; units removed <= units restocked (existing cap, unchanged);
---    * a refund reversal must mirror its refund entry of the same return (RETURN_REVERSAL_INVALID, as before).
+--    * a refund reversal must mirror its refund entry of the same return and is accepted only after the return's stock side is reversed
+--      (order of a void: stock reversals, refund reversal, status flip; RETURN_REVERSAL_INVALID otherwise, as before).
 -- ---------------------------------------------------------------------------------------------
+-- (created before the validity triggers: SQLite fires the newest trigger first, so a malformed row is reported by the validity trigger)
+CREATE TRIGGER trg_stock_movements_return_reversal_newest
+BEFORE INSERT ON stock_movements
+WHEN NEW.ref_table = 'sales_returns' AND NEW.type IN ('sale_return','adjustment') AND NEW.qty_delta <= 0
+ AND (SELECT status FROM sales_returns WHERE id = NEW.ref_id) = 'posted' AND EXISTS (SELECT 1
+                FROM sales_return_items mine
+                JOIN sales_return_items other ON other.sale_item_id = mine.sale_item_id AND other.sales_return_id > mine.sales_return_id
+                JOIN sales_returns r2 ON r2.id = other.sales_return_id AND r2.status = 'posted'
+               WHERE mine.sales_return_id = NEW.ref_id)
+BEGIN
+  SELECT RAISE(ABORT, 'RETURN_NOT_NEWEST');
+END;
+
 DROP TRIGGER trg_stock_movements_return_reversal_void;
 CREATE TRIGGER trg_stock_movements_return_reversal_void
 BEFORE INSERT ON stock_movements
@@ -211,18 +225,6 @@ WHEN NEW.ref_table = 'sales_returns' AND NEW.type IN ('sale_return','adjustment'
                         AND o.qty_delta = (SELECT qty_on_hand FROM products WHERE id = NEW.product_id)))))
 BEGIN
   SELECT RAISE(ABORT, 'RETURN_NOT_VOID');
-END;
-
-CREATE TRIGGER trg_stock_movements_return_reversal_newest
-BEFORE INSERT ON stock_movements
-WHEN NEW.ref_table = 'sales_returns' AND NEW.type IN ('sale_return','adjustment') AND NEW.qty_delta <= 0
- AND EXISTS (SELECT 1
-                FROM sales_return_items mine
-                JOIN sales_return_items other ON other.sale_item_id = mine.sale_item_id AND other.sales_return_id > mine.sales_return_id
-                JOIN sales_returns r2 ON r2.id = other.sales_return_id AND r2.status = 'posted'
-               WHERE mine.sales_return_id = NEW.ref_id)
-BEGIN
-  SELECT RAISE(ABORT, 'RETURN_NOT_NEWEST');
 END;
 
 CREATE TRIGGER trg_stock_movements_return_reversal_value
@@ -242,7 +244,7 @@ END;
 -- quantity per product can never exceed the resalable quantity of the return's own lines.
 CREATE TRIGGER trg_stock_movements_return_restock
 BEFORE INSERT ON stock_movements
-WHEN NEW.ref_table = 'sales_returns' AND (
+WHEN NEW.ref_table = 'sales_returns' AND EXISTS (SELECT 1 FROM sales_returns WHERE id = NEW.ref_id) AND (
      NEW.type NOT IN ('sale_return','adjustment')
   OR (NEW.qty_delta > 0 AND (NEW.type <> 'sale_return'
         OR NEW.qty_delta + COALESCE((SELECT SUM(m.qty_delta) FROM stock_movements m
@@ -254,12 +256,40 @@ BEGIN
   SELECT RAISE(ABORT, 'RETURN_RESTOCK_EXCEEDS');
 END;
 
+CREATE TRIGGER trg_cash_entries_return_reversal_newest
+BEFORE INSERT ON cash_entries
+WHEN NEW.ref_table = 'sales_returns' AND NEW.amount_cents > 0 AND NEW.reverses_entry_id IS NOT NULL
+ AND (SELECT status FROM sales_returns WHERE id = NEW.ref_id) = 'posted' AND EXISTS (SELECT 1
+                FROM sales_return_items mine
+                JOIN sales_return_items other ON other.sale_item_id = mine.sale_item_id AND other.sales_return_id > mine.sales_return_id
+                JOIN sales_returns r2 ON r2.id = other.sales_return_id AND r2.status = 'posted'
+               WHERE mine.sales_return_id = NEW.ref_id)
+BEGIN
+  SELECT RAISE(ABORT, 'RETURN_NOT_NEWEST');
+END;
+-- (unit cap of 017, re-created last so that it still answers first for an over-reversal, as before)
+DROP TRIGGER trg_stock_movements_return_reversal_cap;
+CREATE TRIGGER trg_stock_movements_return_reversal_cap
+BEFORE INSERT ON stock_movements
+WHEN NEW.ref_table = 'sales_returns' AND NEW.type = 'sale_return' AND NEW.qty_delta < 0
+ AND (-NEW.qty_delta + COALESCE((SELECT -SUM(m.qty_delta) FROM stock_movements m
+                                  WHERE m.ref_table = 'sales_returns' AND m.ref_id = NEW.ref_id AND m.type = 'sale_return'
+                                    AND m.product_id = NEW.product_id AND m.qty_delta < 0), 0))
+     > COALESCE((SELECT SUM(ri.qty) FROM sales_return_items ri JOIN sale_items si ON si.id = ri.sale_item_id
+                  WHERE ri.sales_return_id = NEW.ref_id AND ri.resalable = 1 AND si.product_id = NEW.product_id), 0)
+BEGIN
+  SELECT RAISE(ABORT, 'RETURN_REVERSAL_EXCEEDS');
+END;
+
 DROP TRIGGER trg_cash_entries_return_reversal;
 CREATE TRIGGER trg_cash_entries_return_reversal
 BEFORE INSERT ON cash_entries
 WHEN NEW.ref_table = 'sales_returns' AND NEW.amount_cents > 0
  AND (NEW.reverses_entry_id IS NULL
       OR (SELECT status FROM sales_returns WHERE id = NEW.ref_id) IS NOT 'posted'
+      OR EXISTS (SELECT 1 FROM stock_movements m   -- the stock side is reversed first: a restock row still without its reversal means no void is in progress
+                  WHERE m.ref_table = 'sales_returns' AND m.ref_id = NEW.ref_id AND m.qty_delta > 0 AND m.reverses_movement_id IS NULL
+                    AND NOT EXISTS (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = m.id))
       OR NOT EXISTS (SELECT 1 FROM cash_entries o
                       WHERE o.id = NEW.reverses_entry_id AND o.ref_table = 'sales_returns' AND o.ref_id = NEW.ref_id
                         AND o.book = NEW.book AND o.type = NEW.type AND o.amount_cents = -NEW.amount_cents
@@ -268,17 +298,6 @@ BEGIN
   SELECT RAISE(ABORT, 'RETURN_REVERSAL_INVALID');
 END;
 
-CREATE TRIGGER trg_cash_entries_return_reversal_newest
-BEFORE INSERT ON cash_entries
-WHEN NEW.ref_table = 'sales_returns' AND NEW.amount_cents > 0 AND NEW.reverses_entry_id IS NOT NULL
- AND EXISTS (SELECT 1
-                FROM sales_return_items mine
-                JOIN sales_return_items other ON other.sale_item_id = mine.sale_item_id AND other.sales_return_id > mine.sales_return_id
-                JOIN sales_returns r2 ON r2.id = other.sales_return_id AND r2.status = 'posted'
-               WHERE mine.sales_return_id = NEW.ref_id)
-BEGIN
-  SELECT RAISE(ABORT, 'RETURN_NOT_NEWEST');
-END;
 
 -- ---------------------------------------------------------------------------------------------
 -- 4. M2: the status flip. posted -> void (completed -> void for a stocktake; a draft has no rows and passes) is refused with
@@ -316,7 +335,7 @@ END;
 
 CREATE TRIGGER trg_sales_returns_void_requires_reversal
 BEFORE UPDATE OF status ON sales_returns
-WHEN OLD.status <> 'void' AND NEW.status = 'void' AND NEW.voided_at IS NOT NULL AND NEW.void_reason IS NOT NULL
+WHEN OLD.status <> 'void' AND NEW.status = 'void' AND NEW.voided_at IS NOT NULL AND NEW.void_reason IS NOT NULL AND NEW.id IS OLD.id AND NEW.sale_id IS OLD.sale_id AND NEW.business_date IS OLD.business_date AND NEW.posted_at IS OLD.posted_at AND NEW.refund_cents IS OLD.refund_cents AND NEW.cogs_reversed_cents IS OLD.cogs_reversed_cents AND NEW.extra_cost_reversed_cents IS OLD.extra_cost_reversed_cents AND NEW.note IS OLD.note AND NEW.client_ref IS OLD.client_ref
  AND (
     EXISTS (SELECT 1 FROM cash_entries o
              WHERE o.ref_table = 'sales_returns' AND o.ref_id = OLD.id AND o.reverses_entry_id IS NULL AND o.amount_cents <> 0
@@ -813,5 +832,5 @@ END;
 CREATE TRIGGER trg_external_backup_log_no_replace BEFORE INSERT ON external_backup_log
 WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM external_backup_log WHERE id = NEW.id)
 BEGIN
-  SELECT RAISE(ABORT, 'external_backup_log is append-only');
+  SELECT RAISE(ABORT, 'EXTERNAL_BACKUP_LOG_APPEND_ONLY');
 END;

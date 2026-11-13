@@ -180,7 +180,8 @@ describe('schema sanity (from sqlite_master)', () => {
     const guarded = new Set(rows(ctx, "SELECT tbl_name FROM sqlite_master WHERE type='trigger' AND sql LIKE '%BEFORE DELETE%'").map((r) => r.tbl_name as string));
     const unguarded = tableNames(ctx).filter((t) => !guarded.has(t));
     // (stocktake_items is guarded too: a trigger refuses deleting lines of a completed stocktake)
-    expect(unguarded.sort()).toEqual(['products', 'schema_migrations', 'settings', 'suppliers'].sort());
+    // migration 020 also guards schema_migrations (no UPDATE / DELETE / REPLACE), so it is no longer unguarded
+    expect(unguarded.sort()).toEqual(['products', 'settings', 'suppliers'].sort());
   });
 
   it('on a real world: dates and posting timestamps of every record cannot be edited, no record row can be deleted, a product with history cannot be deleted', async () => {

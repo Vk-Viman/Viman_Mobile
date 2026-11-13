@@ -68,6 +68,7 @@ describe('migrate', () => {
   it('tampered checksum row -> MIGRATION_CHECKSUM_MISMATCH', () => {
     const c = mem();
     migrate(c);
+    c.exec('DROP TRIGGER trg_schema_migrations_no_update'); // migration 020 guards the history; this test simulates a tampered file
     c.exec("UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 1");
     expect(codeOf(() => migrate(c)).code).toBe('MIGRATION_CHECKSUM_MISMATCH');
   });

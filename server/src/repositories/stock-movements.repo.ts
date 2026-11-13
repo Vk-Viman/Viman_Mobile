@@ -52,11 +52,16 @@ export function insertMovement(conn: DatabaseSync, m: {
   /** Migration 020: the original movement this row reverses (void paths only); at most one reversal per original. */
   reversesMovementId?: number | null;
 }): number {
-  const res = conn.prepare(
-    `INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason, reverses_movement_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(m.productId, m.businessDate, m.type, m.qtyDelta, m.valueDeltaCents, m.unitCostCents, m.refTable, m.refId, m.reason,
-    m.reversesMovementId ?? null);
+  // The link column exists from migration 020; plain rows do not name it (so the function also works on an older schema).
+  const res = m.reversesMovementId === undefined || m.reversesMovementId === null
+    ? conn.prepare(
+      `INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(m.productId, m.businessDate, m.type, m.qtyDelta, m.valueDeltaCents, m.unitCostCents, m.refTable, m.refId, m.reason)
+    : conn.prepare(
+      `INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason, reverses_movement_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(m.productId, m.businessDate, m.type, m.qtyDelta, m.valueDeltaCents, m.unitCostCents, m.refTable, m.refId, m.reason, m.reversesMovementId);
   return Number(res.lastInsertRowid);
 }
 

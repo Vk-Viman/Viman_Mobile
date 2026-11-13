@@ -76,6 +76,7 @@ describe('migration 015 on a database that already holds data', () => {
     raw.exec(ddl('trigger', 'trg_categories_default_locked'));
     raw.exec(ddl('trigger', 'trg_categories_book_has_products'));
     raw.exec('DROP TABLE c_bak');
+    raw.exec('DROP TRIGGER trg_schema_migrations_no_delete'); // migration 020 guards the history; the test rebuilds a version-14 database
     raw.exec('DELETE FROM schema_migrations WHERE version = 15');
     raw.exec('COMMIT');
     expect(objects(raw)).toEqual(objects14);

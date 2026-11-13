@@ -49,6 +49,7 @@ describe('migration 011', () => {
       'trg_opening_stock_batches_business_date_immutable', 'trg_opening_stock_batches_future_date',
       'trg_opening_stock_batches_immutable', 'trg_opening_stock_batches_no_delete',
       'trg_opening_stock_batches_posted_at_immutable', 'trg_opening_stock_batches_valid_date',
+      'trg_opening_stock_batches_void_requires_reversal', // migration 020 (M2)
     ]);
   });
   it('creates no cash entry and no purchase by itself (opening stock has no cash/P&L side)', () => {
