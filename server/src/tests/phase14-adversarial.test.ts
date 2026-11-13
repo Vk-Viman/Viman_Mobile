@@ -398,8 +398,10 @@ describe('closed days: every write AND every void on a closed day is refused DAY
 
   it('a sale return dated on the closed day is refused; the other days are unaffected; reopen makes the void work and it is audited', async () => {
     await refused(w, 'return on closed day', () => send(w, MAKERS.saleReturn!(w, D(2))), 409, 'DAY_CLOSED');
-    const ok = await send(w, MAKERS.expense!(w, D(3)));
-    expect(ok.status, 'the day before is open').toBe(201);
+    // section 8 (migration 016): the day BEFORE a closed day is protected (BACKDATE_BEFORE_CLOSED_DAY); the day AFTER is open
+    await refused(w, 'the day before a closed day', () => send(w, MAKERS.expense!(w, D(3))), 409, 'BACKDATE_BEFORE_CLOSED_DAY');
+    const ok = await send(w, MAKERS.expense!(w, D(1)));
+    expect(ok.status, 'the day after is open').toBe(201);
     const closings = (await get(w.s.app, '/daily-closings?book=shop')).body.items as any[];
     const c = closings.find((x) => x.businessDate === D(2) && x.isClosed)!;
     const before = Number(rows(w.s.ctx, "SELECT COUNT(*) n FROM audit_logs WHERE action = 'reopen' OR entity LIKE '%closing%'")[0]!.n);

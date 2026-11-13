@@ -47,6 +47,21 @@ export function isDayClosed(conn: DatabaseSync, book: CashBook, date: string): b
   return r !== undefined;
 }
 
+/**
+ * Closed-day ordering probe (R9 + section 8 ordering protection), ONE indexed query for one book:
+ * `latest` = the latest business date currently closed on or after `date` (null when there is none) and `onDay` =
+ * whether `date` itself is closed. `latest > date` means "a LATER day is closed"; `onDay` is the exact-day case.
+ * (Equivalent to MAX(business_date) over the currently closed days restricted to `>= date`, because the maximum
+ * of the whole set is >= date exactly when this restricted maximum exists.)
+ */
+export function closedDayProbe(conn: DatabaseSync, book: CashBook, date: string): { latest: string | null; onDay: boolean } {
+  const r = conn.prepare(
+    `SELECT MAX(business_date) AS latest, COALESCE(MAX(business_date = ?), 0) AS on_day
+       FROM daily_closings WHERE book = ? AND business_date >= ? AND ${CLOSED_SQL}`,
+  ).get(date, book, date) as unknown as { latest: string | null; on_day: N };
+  return { latest: r.latest, onDay: Number(r.on_day) === 1 };
+}
+
 /** One closing by id, or undefined. */
 export function getClosing(conn: DatabaseSync, id: number): ClosingRow | undefined {
   const r = conn.prepare(`${SELECT} WHERE id = ?`).get(id) as unknown as Raw | undefined;

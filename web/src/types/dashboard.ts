@@ -3,6 +3,8 @@
  * All money is integer cents exactly as the server sent it; the screen never calculates a business figure.
  */
 
+import type { ExternalBackupSummary } from './externalBackup';
+
 /** The three business segments (cash books). */
 export type Segment = 'shop' | 'telecom' | 'icecream';
 
@@ -48,7 +50,7 @@ export interface Dashboard {
     lastClosedByBook: Record<Segment, string | null>;
     openDaysBehind: Array<{ book: Segment; dates: string[] }>;
   };
-  backup: { latestAt: string | null; ageHours: number | null; status: 'ok' | 'stale' | 'none' };
+  backup: { latestAt: string | null; ageHours: number | null; status: 'ok' | 'stale' | 'none'; external: ExternalBackupSummary };
   series: {
     daily: Array<{ date: string; salesCents: number; profitCents: number }>;
     monthly: Array<{ month: string; shopCents: number; telecomCents: number; icecreamCents: number; combinedCents: number }>;

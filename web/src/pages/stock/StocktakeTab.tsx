@@ -20,6 +20,7 @@ import { Pager } from '../../components/Pager';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
 import { BookBadge } from '../../components/StatusBadges';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useCreateStocktake, useStocktakes } from '../../api/stock';
@@ -64,7 +65,10 @@ function NewStocktakeDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <FormDialog title="New stocktake" submitLabel="Create and open count sheet" canSubmit={canSubmit} loading={create.isPending} error={errorBanner(create.error, ['businessDate', 'book', 'notes'])} onSubmit={submit} onClose={onClose}>
-      <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(create.error, 'businessDate')} />
+      <div>
+        <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(create.error, 'businessDate')} />
+        <BackdatedNotice date={effDate} today={today} />
+      </div>
       <SelectField label="Book" value={book} onChange={(e) => setBook(e.target.value as Book)} error={fieldError(create.error, 'book')} hint="Shop and Telecom stock are counted separately.">
         <option value="shop">Shop</option>
         <option value="telecom">Telecom</option>

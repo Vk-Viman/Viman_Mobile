@@ -1,5 +1,5 @@
 /**
- * ServiceTypesTab (route "/printing/types"): the print price list.
+ * ServiceTypesTab (route "/services/types"): the price list of every service (printing, photocopying, lamination, phone setup...).
  *
  * Lists every service type with its price and standard cost per page; add a new type or edit name, price, cost and
  * the active flag. API: GET/POST /print-service-types, PUT /print-service-types/:id (api/printing.ts).
@@ -43,7 +43,7 @@ export function ServiceTypesTab() {
         actions={<Button onClick={() => setDialog('new')}><Plus size={16} aria-hidden="true" /> Add service type</Button>}
       >
         <p className="mb-4 text-sm text-slate-500">
-          This is the price list used on the Print sales tab. The standard cost is what one page costs you (paper, toner, wear); it is copied onto
+          This is the price list used on the Print & service sales tab. You can add ANY service here (for example phone setup or lamination) with its own price and standard cost. The standard cost is what one unit of the service costs you (for a page: paper, toner, wear); it is copied onto
           every sale, so changing a price or cost here never changes sales you already recorded. Switch a service off to hide it from quick entry.
           The starting prices came from Settings → Printing defaults; from now on this list is the one that counts.
         </p>

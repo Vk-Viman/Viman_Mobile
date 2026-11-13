@@ -11,7 +11,7 @@ import { TestEnv } from './helpers/tmp.ts';
 import { apiBase } from './helpers/inventory.ts';
 import { get } from './helpers/catalog.ts';
 import { assertGlobalInvariants, buildWorld14, rows, tableNames } from './helpers/phase14.ts';
-import { loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
+import { latestVersion, loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
@@ -32,7 +32,7 @@ describe('first launch', () => {
     const ctx = b.ctx;
     const files = loadMigrations();
     expect(rows(ctx, 'SELECT version, name FROM schema_migrations ORDER BY version').map((r) => [Number(r.version), r.name])).toEqual(files.map((f) => [f.version, f.name]));
-    expect(files.length).toBe(15);
+    expect(files.length).toBe(latestVersion()); // no gaps: as many files as the highest version (was a literal 15 before migration 016)
     expect(rows(ctx, 'SELECT name, book, is_default, active FROM categories ORDER BY id').map((r) => [r.name, r.book])).toEqual(SEEDED_CATEGORIES);
     expect(rows(ctx, 'SELECT is_default, active FROM categories').every((r) => Number(r.is_default) === 1 && Number(r.active) === 1)).toBe(true);
     expect(rows(ctx, 'SELECT name, commission_bp, active FROM reload_providers ORDER BY sort_order').map((r) => [r.name, r.commission_bp, Number(r.active)])).toEqual([
@@ -137,13 +137,14 @@ describe('migration runner', () => {
     expect(err?.code).toBe('MIGRATION_DB_TOO_NEW');
     db.close();
     const dir2 = copyDir(env);
-    writeFileSync(join(dir2, '016_broken.sql'), 'CREATE TABLE half_built (id INTEGER); CREATE TABLE half_built (id INTEGER);');
+    const brokenName = `${String(latestVersion() + 1).padStart(3, '0')}_broken.sql`; // the number after the last real migration
+    writeFileSync(join(dir2, brokenName), 'CREATE TABLE half_built (id INTEGER); CREATE TABLE half_built (id INTEGER);');
     const db2 = new DatabaseSync(':memory:');
     let e2: any;
     try { migrate(db2, dir2); } catch (e) { e2 = e; }
-    expect(String(e2?.message)).toContain('016_broken.sql');
+    expect(String(e2?.message)).toContain(brokenName);
     expect(rows({ database: { conn: db2 } } as any, "SELECT name FROM sqlite_master WHERE name = 'half_built'")).toEqual([]);
-    expect(Number(rows({ database: { conn: db2 } } as any, 'SELECT MAX(version) v FROM schema_migrations')[0]!.v)).toBe(15);
+    expect(Number(rows({ database: { conn: db2 } } as any, 'SELECT MAX(version) v FROM schema_migrations')[0]!.v)).toBe(latestVersion());
     db2.close();
   });
 });

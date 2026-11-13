@@ -9,11 +9,12 @@
  *   GET  /sales                  list with filters and totals     GET /sales/:id   one sale
  *   POST /sales/:id/void         void (R1)
  *   POST /sales/:id/returns      return goods (201 { item, sale }; 200 on a repeated `clientRef`)
+ *   POST /sales/:id/returns/:returnId/void   void a return (R-VR; 200 { item, sale, warnings })
  */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import {
-  createSaleReturn, createSales, getSale, listSales, voidSale,
+  createSaleReturn, createSales, getSale, listSales, voidSale, voidSaleReturn,
 } from '../services/sales.service.ts';
 import type { SaleCreate, SaleReturnCreate } from '../services/sales.service.ts';
 import {
@@ -98,6 +99,16 @@ const returnBody = {
   },
 } as const;
 
+const returnVoidParams = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'returnId'],
+  properties: {
+    id: { type: 'string', pattern: '^[0-9]{1,9}$' },
+    returnId: { type: 'string', pattern: '^[0-9]{1,9}$' },
+  },
+} as const;
+
 /** Registers the sales endpoints under the `/api/v1` prefix. */
 export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/sales', { schema: { body: createBody } }, async (request, reply) => {
@@ -133,5 +144,10 @@ export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.post('/sales/:id/returns', { schema: { params: idParamsSchema, body: returnBody } }, async (request, reply) => {
     const { item, sale, warnings, created } = createSaleReturn(ctx, parseId(request.params), request.body as SaleReturnCreate);
     return reply.code(created ? 201 : 200).send({ item, sale, warnings });
+  });
+
+  app.post('/sales/:id/returns/:returnId/void', { schema: { params: returnVoidParams, body: voidBody } }, async (request) => {
+    const p = request.params as { id: string; returnId: string };
+    return voidSaleReturn(ctx, Number(p.id), Number(p.returnId), request.body as { reason: string });
   });
 }

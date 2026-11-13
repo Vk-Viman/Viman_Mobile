@@ -36,6 +36,8 @@ export interface LossFigures {
   stocktakeLossCents: number; stocktakeGainCents: number; sweepCents: number; stockAdjustmentsNetCents: number;
   /** R4: purchase refund (return / void) above the stock value removed - a gain; it reduces `stockAdjustmentsNetCents` (same figure as the P&L). */
   purchaseRefundGainCents: number;
+  /** R-VR 3: stock value restored by voided sales returns minus the value their voids took out (a gain; reduces the net line, same figure as the P&L). */
+  salesReturnVoidGainCents: number;
 }
 
 /** Breakdown line over the whole range. */
@@ -56,7 +58,7 @@ export interface LossesReport {
 
 const zero = (): LossFigures => ({
   lossCount: 0, qty: 0, costCents: 0, damagedCents: 0, lostCents: 0, expiredCents: 0, otherCents: 0, fromReturnsCents: 0,
-  stocktakeLossCents: 0, stocktakeGainCents: 0, sweepCents: 0, stockAdjustmentsNetCents: 0, purchaseRefundGainCents: 0,
+  stocktakeLossCents: 0, stocktakeGainCents: 0, sweepCents: 0, stockAdjustmentsNetCents: 0, purchaseRefundGainCents: 0, salesReturnVoidGainCents: 0,
 });
 
 /** Stock losses report for [from, to]. */
@@ -113,8 +115,15 @@ export function stockLossesReport(conn: DatabaseSync, q: LossesQuery): LossesRep
     for (const r of conn.prepare(sql.replace('KEY', kSql)).all(...params) as unknown as SqlRow[]) at(String(r.k)).purchaseRefundGainCents += num(r.v);
   }
 
+  // R-VR 3 void-return gain (same definition as fin-queries.ts): sum of the 'sale_return' movements of VOID returns (restored - removed).
+  for (const r of conn.prepare(
+    `SELECT ${mKey} AS k, SUM(m.value_delta_cents) AS v FROM stock_movements m JOIN products p ON p.id = m.product_id
+       JOIN sales_returns sr ON sr.id = m.ref_id
+      WHERE m.type = 'sale_return' AND m.ref_table = 'sales_returns' AND sr.status = 'void' AND m.business_date BETWEEN ? AND ?${mBook} GROUP BY k`,
+  ).all(...base) as unknown as SqlRow[]) at(String(r.k)).salesReturnVoidGainCents += num(r.v);
+
   // Section 11 line: posted losses (manual AND damaged-return, which writes no stock movement) + stocktake losses + sweeps - gains - refund gain.
-  for (const f of byLabel.values()) f.stockAdjustmentsNetCents = f.costCents + f.stocktakeLossCents + f.sweepCents - f.stocktakeGainCents - f.purchaseRefundGainCents;
+  for (const f of byLabel.values()) f.stockAdjustmentsNetCents = f.costCents + f.stocktakeLossCents + f.sweepCents - f.stocktakeGainCents - f.purchaseRefundGainCents - f.salesReturnVoidGainCents;
   const rows = fillPeriods(q.from, q.to, q.granularity, byLabel, zero);
   const totals = zero();
   for (const r of rows) addInto(totals, r);
@@ -143,13 +152,14 @@ export function stockLossesReport(conn: DatabaseSync, q: LossesQuery): LossesRep
       { key: 'fromReturnsCents', label: 'From damaged returns', kind: 'money' }, { key: 'stocktakeLossCents', label: 'Stocktake losses', kind: 'money' },
       { key: 'stocktakeGainCents', label: 'Stocktake gains', kind: 'money' }, { key: 'sweepCents', label: 'Residual sweeps', kind: 'money' },
       { key: 'purchaseRefundGainCents', label: 'Purchase refund above stock value removed (R4)', kind: 'money' },
+      { key: 'salesReturnVoidGainCents', label: 'Void-return stock value gain (R-VR)', kind: 'money' },
       { key: 'stockAdjustmentsNetCents', label: 'Stock adjustments (net)', kind: 'money' },
     ],
     rows: rows.map((r) => ({ period: r.period.label, ...numericOnly(r) })),
     totals: { period: 'Total', ...numericOnly(totals) },
     notes: [
       'Losses are valued at the average cost when recorded. Voided losses are not counted.',
-      'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain (voids net out). Personal-use goods drawings are not adjustments.',
+      'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain - void-return stock value gain (voids net out). Personal-use goods drawings are not adjustments.',
     ],
   };
   const extraTables: ReportTable[] = [

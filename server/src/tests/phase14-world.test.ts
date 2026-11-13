@@ -274,7 +274,7 @@ describe('Shop P&L', () => {
       goods: { salesCents: 2614999, returnsCents: 639999, revenueCents: 1975000, costAutomaticCents: 902515, costExtraCents: 4000, costOfSalesCents: 906515, grossProfitCents: 1068485 },
       services: { revenueCents: 230000, costCents: 91000, grossProfitCents: 139000 }, grossProfitCents: 1207485,
       expenses: { totalCents: 1220000, byCategory: { rent: 1000000, water: 80000, packaging: 25000, cleaning_supplies: 45000, other: 70000, internet: 0, transport: 0, repairs: 0, stationery: 0 } },
-      adjustments: { lossesCents: 66260, damagedReturnLossesCents: 30000, stocktakeLossesCents: 50000, stocktakeGainsCents: 20020, residualSweepsCents: 0, purchaseRefundGainCents: 0, netCents: 126240 },
+      adjustments: { lossesCents: 66260, damagedReturnLossesCents: 30000, stocktakeLossesCents: 50000, stocktakeGainsCents: 20020, residualSweepsCents: 0, purchaseRefundGainCents: 0, salesReturnVoidGainCents: 0, netCents: 126240 },
       cashOverShortCents: -5000, netProfitCents: -143755,
     });
     expect(m['2025-09']).toMatchObject({
@@ -463,8 +463,8 @@ describe('Excel export pack (rupees, from the same hand figures)', () => {
     expect(rowOf(c, '2025-09')).toEqual(['2025-09', -7357.01, -916, -300, -8573.01, 1700, -10273.01, 200, 5000, 1700]);
     expect(rowOf(c, 'Total')).toEqual(['Total', -8794.56, -1102.23, 11900, 2003.21, 1700, 303.21, 5500, 12500, 1700]);
     const sh = sheet(p.wb, 'Shop P&L');
-    expect(rowOf(sh, '2025-08')).toEqual(['2025-08', 19750, 9025.15, 40, 10684.85, 2300, 910, 1390, 12200, 1262.4, 0, -50, -1437.55]);
-    expect(rowOf(sh, '2025-09')).toEqual(['2025-09', 3600, 1672.83, -20, 1947.17, 1250, 450, 800, 10000, 224.18, 0, 120, -7357.01]);
+    expect(rowOf(sh, '2025-08')).toEqual(['2025-08', 19750, 9025.15, 40, 10684.85, 2300, 910, 1390, 12200, 1262.4, 0, 0, -50, -1437.55]);
+    expect(rowOf(sh, '2025-09')).toEqual(['2025-09', 3600, 1672.83, -20, 1947.17, 1250, 450, 800, 10000, 224.18, 0, 0, 120, -7357.01]);
     expect(rowOf(sheet(p.wb, 'Cash book - Shop'), '2025-08')).toEqual(['2025-08', 0, 92548.99, 54448.99, 38100]);
     expect((rowOf(sheet(p.wb, 'Cash book - Telecom'), '2025-09') as number[])[4]).toBe(96945.66);
     expect((rowOf(sheet(p.wb, 'Cash book - Ice Cream'), '2025-09') as number[])[4]).toBe(14400);

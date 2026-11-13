@@ -38,6 +38,9 @@ SQLite (`node:sqlite`), WAL mode, `foreign_keys=ON`, `busy_timeout=5000`, `synch
 | `012_cashbooks_expenses.sql` | 8 | `expenses`, `capital_entries`, `cash_counts`, `daily_closings`, `icecream_fund_entries`; `DAY_CLOSED` trigger on `cash_entries`; `INVALID_BUSINESS_DATE` triggers on 14 older tables |
 | `013_cash_transfers.sql` | 9 | `cash_transfers`; transfer-leg trigger on `cash_entries`; cash-drawing amount trigger |
 | `014_icecream.sql` | 10 | `icecream_days`, `icecream_sales`, `icecream_payments`, `icecream_fund_moves` + day-closed triggers |
+| `018_external_backups.sql` | decision 11 | `backup_settings` (single row), append-only `external_backup_log` |
+| `017_void_sales_return.sql` | R-VR | `sales_returns.status/voided_at/void_reason`; triggers: posted→void only, newest-first (`RETURN_NOT_NEWEST`), cascade (returned_qty, damaged-return loss), returned_qty = Σ posted return lines, reversal guards (`RETURN_NOT_VOID`, `RETURN_REVERSAL_EXCEEDS`, `RETURN_REVERSAL_INVALID`), unique refund-reversal link |
+| `016_closed_day_ordering.sql` | §8 | `trg_cash_entries_day_closed` and the five Ice Cream day-closed triggers recreated: `DAY_CLOSED` on a closed day, `BACKDATE_BEFORE_CLOSED_DAY` before the latest closed day of the book |
 | `015_category_per_book.sql` | categories | `categories` rebuilt: name unique **per book** (`ux_categories_book_name`), delete guard `trg_categories_no_delete` (`CATEGORY_DELETE_FORBIDDEN`), ids/links preserved |
 
 Migrations are applied in order, each in its own transaction together with its `schema_migrations` row. The checksum is SHA-256 of the file text with CRLF normalised to LF. A changed applied file stops startup (`MIGRATION_CHECKSUM_MISMATCH`); a database newer than the program stops startup (`MIGRATION_DB_TOO_NEW`). The restore check requires only the Phase 1 tables (`schema_migrations`, `settings`, `audit_logs`); an older backup is upgraded by `migrate()` after the swap.

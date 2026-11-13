@@ -1,5 +1,5 @@
 /**
- * QuickEntry: the fast "record a print sale" panel at the top of Printing > Print sales.
+ * QuickEntry: the fast "record a print sale" panel at the top of Services > Print & service sales.
  *
  * One tap on a service button (B/W, colour, photocopy ...) selects it and fills in its price; the cashier types the
  * number of pages, may change the price for this one sale (e.g. a custom job), and saves.

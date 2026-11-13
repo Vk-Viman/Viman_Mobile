@@ -2,7 +2,7 @@
  * Settings > Printing defaults tab (route "/settings/printing"): READ-ONLY reference.
  *
  * Nothing in the app reads `settings.printDefaults`: the real print prices and standard costs live in
- * Printing > Service types (route "/printing/types"). This tab therefore says so, links there, and shows the stored
+ * Services > Service types (route "/services/types"). This tab therefore says so, links there, and shows the stored
  * initial list as plain text, labelled as kept for reference only. The settings API and the stored data are untouched.
  * API: GET /settings (api/settings.ts).
  */
@@ -55,8 +55,8 @@ export function PrintingTab() {
   return (
     <Card title="Printing defaults">
       <p className="mb-4 text-sm text-slate-700">
-        Print prices and standard costs are managed under{' '}
-        <Link to="/printing/types" className="font-medium text-blue-700 underline">Printing &rarr; Service types</Link>.
+        Service prices and standard costs are managed under{' '}
+        <Link to="/services/types" className="font-medium text-blue-700 underline">Services &rarr; Service types</Link>.
         Changing the list below does nothing, so it cannot be edited here.
       </p>
       {q.isPending ? <Spinner label="Loading" /> : q.isError ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : (

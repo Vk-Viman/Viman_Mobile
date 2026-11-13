@@ -30,7 +30,7 @@ export const SALE_ITEM_KEYS = [
 /** Sorted keys of a SaleReturn. */
 export const RETURN_KEYS = [
   'backdated', 'businessDate', 'clientRef', 'cogsReversedCents', 'extraCostReversedCents', 'id', 'items', 'note', 'postedAt',
-  'refundCents', 'saleId',
+  'refundCents', 'saleId', 'status', 'voidReason', 'voidedAt',
 ].sort();
 /** Sorted keys of one returned line. */
 export const RETURN_ITEM_KEYS = ['cogsCents', 'extraCostCents', 'id', 'productId', 'productName', 'qty', 'resalable', 'revenueCents', 'saleItemId'].sort();

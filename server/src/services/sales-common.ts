@@ -42,6 +42,8 @@ export interface SaleReturnLine {
 export interface SaleReturn {
   id: number; saleId: number; businessDate: string; postedAt: string; backdated: boolean; refundCents: number;
   cogsReversedCents: number; extraCostReversedCents: number; note: string; clientRef: string; items: SaleReturnLine[];
+  /** 'void' once the return was taken back (R-VR); a void return stays listed but no longer counts anywhere. */
+  status: 'posted' | 'void'; voidedAt: string | null; voidReason: string | null;
 }
 /** A sale with its lines and returns, as returned by the API. */
 export interface Sale {
@@ -77,7 +79,7 @@ export function toSaleReturn(conn: DatabaseSync, r: SaleReturnRow): SaleReturn {
     id: r.id, saleId: r.saleId, businessDate: r.businessDate, postedAt: r.postedAt,
     backdated: isBackdated(r.businessDate, r.postedAt), refundCents: r.refundCents,
     cogsReversedCents: r.cogsReversedCents, extraCostReversedCents: r.extraCostReversedCents, note: r.note,
-    clientRef: r.clientRef,
+    clientRef: r.clientRef, status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason,
     items: listSaleReturnItems(conn, r.id).map((i) => ({
       id: i.id, saleItemId: i.saleItemId, productId: i.productId, productName: i.productName, qty: i.qty,
       resalable: i.resalable, revenueCents: i.revenueCents, cogsCents: i.cogsCents,

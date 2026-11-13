@@ -14,7 +14,7 @@
  *         ZERO_COST) that carry the cart position of the line.
  *  - R1 / C6: a void never edits or deletes; the stock movements are exactly negated, the cash entry is cancelled
  *         by a reversing entry that keeps the sale's business date, and the sale is only marked `void`.
- *         A sale that has returns cannot be voided.
+ *         A sale that has POSTED returns cannot be voided (a return that was voided no longer counts, R-VR 7).
  *  - R-FD: no future-dated sales. Section 12: `clientRef` makes a repeated cart return the saved sales; every
  *         write is audited with its business date and backdated flag.
  * A whole cart (both books) is saved in ONE database transaction: sales, lines, stock movements, cash, audit.
@@ -28,7 +28,7 @@ import { getProduct } from '../repositories/products.repo.ts';
 import type { ProductRow } from '../repositories/products.repo.ts';
 import { listMovementsByRef } from '../repositories/stock-movements.repo.ts';
 import {
-  getSale as getSaleRow, getSaleByClientRef, insertSale, insertSaleItem, listSaleReturns, listSales as listSaleRows,
+  countPostedSaleReturns, getSale as getSaleRow, getSaleByClientRef, insertSale, insertSaleItem, listSales as listSaleRows,
   markSaleVoid,
 } from '../repositories/sales.repo.ts';
 import type { SaleBook, SaleStatus, SalesTotals } from '../repositories/sales.repo.ts';
@@ -49,6 +49,7 @@ import type { Fields } from './validation.ts';
 
 export type { Sale, SaleItem, SaleReturn, SaleReturnLine } from './sales-common.ts';
 export { createSaleReturn } from './sales-returns.service.ts';
+export { voidSaleReturn } from './sales-return-void.ts';
 export type { SaleReturnCreate } from './sales-returns.service.ts';
 
 /** One line of the cart as sent by the browser. */
@@ -305,7 +306,7 @@ export function voidSale(ctx: AppContext, id: number, body: { reason: string }):
     assertDayOpen(conn, [header.book], header.businessDate); // R9: a void is judged on the sale's own date
     if (header.status === 'void') throw alreadyVoid('sale');
     // A sale with returns is already partly undone; voiding it too would reverse the same goods twice.
-    if (listSaleReturns(conn, id).length > 0) {
+    if (countPostedSaleReturns(conn, id) > 0) { // R-VR 7: voided returns no longer count
       throw new AppError(409, 'HAS_RETURNS', 'This sale has returns, so it cannot be voided.');
     }
     const before = toSale(conn, header);

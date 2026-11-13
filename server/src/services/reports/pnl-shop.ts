@@ -72,6 +72,7 @@ const COLUMNS: ReportColumn[] = [
   { key: 'expenses', label: 'Operating expenses', kind: 'money' },
   { key: 'adjustments', label: 'Stock adjustments (net)', kind: 'money' },
   { key: 'purchaseRefundGain', label: 'Purchase refund above stock value removed (R4)', kind: 'money' },
+  { key: 'salesReturnVoidGain', label: 'Void-return stock value gain (R-VR)', kind: 'money' },
   { key: 'overShort', label: 'Cash over / short', kind: 'money' },
   { key: 'netProfit', label: 'Net profit', kind: 'money' },
 ];
@@ -81,6 +82,7 @@ function flat(label: string, f: ShopFigures): Record<string, ReportCell> {
     period: label, goodsRevenue: f.goods.revenueCents, costAutomatic: f.goods.costAutomaticCents, costExtra: f.goods.costExtraCents,
     goodsProfit: f.goods.grossProfitCents, serviceRevenue: f.services.revenueCents, serviceCost: f.services.costCents,
     serviceProfit: f.services.grossProfitCents, expenses: f.expenses.totalCents, adjustments: f.adjustments.netCents, purchaseRefundGain: f.adjustments.purchaseRefundGainCents,
+    salesReturnVoidGain: f.adjustments.salesReturnVoidGainCents,
     overShort: f.cashOverShortCents, netProfit: f.netProfitCents,
   };
 }
@@ -91,8 +93,9 @@ export const SHOP_NOTES: string[] = [
   'Cost = automatic (weighted-average) cost plus any extra cost the cashier added on the sale (C13).',
   'Printing supplies bought, owner drawings, capital, transfers and opening balances are not in profit.',
   'There is no electricity expense in the Shop: the whole shop electricity bill is carried by the Ice Cream book.',
-  'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain.',
+  'Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain - void-return stock value gain.',
   'Purchase refund above stock value removed (R4): when a returned or voided purchase is refunded in cash for more than the stock value that leaves the shelf, the difference is a gain (shown positive; it is already inside Stock adjustments (net) as a reduction).',
+  'Void-return stock value gain (R-VR): when a sales return is voided, the stock leaves again at the value the return restored, limited to what the stock is worth now; a lower value is a gain (shown positive, already inside Stock adjustments (net)). A voided return itself is not counted anywhere: its sales, cost and extra cost stand as if it had never been recorded.',
 ];
 
 /**
