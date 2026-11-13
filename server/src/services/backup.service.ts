@@ -8,7 +8,10 @@
  *  - Backups are created at start-up and on demand; the newest 30 are kept (and the newest 10 safety copies
  *    that are made just before a restore), older ones are removed.
  *  - A restore never touches the live database until the candidate file has passed every check: SQLite header,
- *    read-only open, integrity check, required tables, schema version not newer than this system. Then a safety
+ *    read-only open, integrity check, required tables, schema version not newer than this system (structural gates,
+ *    `validateDatabaseFile`), then the full validation of `database-validation.ts` on a temporary copy (finding M7:
+ *    foreign keys, migration records, schema objects, trial upgrade, stock/cash/fund/return/void invariants). A
+ *    refusal is 422 and writes only one audit row (`backup/restore_refused`). Then a safety
  *    backup is made, the file is swapped with an atomic rename, and the audit log records the restore.
  *    If anything fails after the swap began, the previous data is put back automatically.
  *  - While a restore runs `ctx.isRestoring` is true and `app.ts` answers every /api request with 503.
@@ -240,10 +243,15 @@ export const MAX_REFUSAL_FAILURES = 10;
 
 /** Builds the 422 answer for a candidate that failed validation: a plain sentence plus the failures (max 10 shown). */
 export function refusalError(code: string, message: string, failures: ValidationFailure[]): AppError {
-  return new AppError(422, code, message, undefined, {
+  const err = new AppError(422, code, message, undefined, {
     failures: failures.slice(0, MAX_REFUSAL_FAILURES), totalFailures: failures.length,
   });
+  allFailures.set(err, failures);
+  return err;
 }
+
+/** The complete failure list of a refusal (the answer itself only carries the first 10); used for the audit row. */
+const allFailures = new WeakMap<AppError, ValidationFailure[]>();
 
 /**
  * Full validation of the candidate file (after the structural gates): opens it read-only and runs every check of
@@ -279,7 +287,7 @@ function validateCandidate(candidate: string): void {
  */
 function recordRefusal(ctx: AppContext, label: string, err: AppError): void {
   try {
-    const failures = (err.extra?.failures as ValidationFailure[] | undefined) ?? [];
+    const failures = allFailures.get(err) ?? [];
     const codes = failures.length ? [...new Set(failures.map((f) => f.code))] : [err.code];
     ctx.database.tx((conn) => {
       logAudit(conn, 'backup', label, 'restore_refused', null,
