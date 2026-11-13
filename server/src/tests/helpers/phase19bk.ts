@@ -92,6 +92,24 @@ export async function distinctBackup(b: { app: FastifyInstance }): Promise<strin
   return m.body.item.name as string;
 }
 
+/**
+ * A small invariants check that does not trip over the backup-feature tables (the shared phase 14 checker flags any table that
+ * has a `status` column outside posted/void, so it fails as soon as `external_backup_log` holds a row; see the audit report).
+ */
+export async function lightInvariants(s: { app: FastifyInstance; ctx: AppContext }): Promise<void> {
+  const { expect } = await import('vitest');
+  const conn = s.ctx.database.conn;
+  expect(Object.values(conn.prepare('PRAGMA integrity_check').get() as Record<string, string>)[0]).toBe('ok');
+  expect(conn.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  const recon = (await get(s.app, '/inventory/reconciliation')).body;
+  expect(recon.ok, JSON.stringify(recon.mismatches)).toBe(true);
+  const api = (await get(s.app, '/cashbooks')).body;
+  for (const b of api.books) {
+    const sum = conn.prepare('SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ?').get(b.book) as { t: number };
+    expect(b.balanceCents, `cash book ${b.book}`).toBe(Number(sum.t));
+  }
+}
+
 /** The verification script (repository scripts folder). */
 export const SCRIPT = resolve(import.meta.dirname, '../../../../scripts/verify-external-backup.mjs');
 /** Runs the script and returns its exit code and output. */
