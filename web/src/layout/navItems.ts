@@ -33,7 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/purchases', label: 'Purchases', icon: Truck, phase: 3, description: 'Record stock bought from suppliers and what you paid.', built: true },
   { to: '/stock', label: 'Stock', icon: Boxes, phase: 4, description: 'See stock on hand, and record stocktakes, stock losses and personal use.', built: true },
   { to: '/opening-stock', label: 'Opening Stock', icon: ClipboardList, phase: 13, description: 'Enter starting stock by hand or from an Excel template at go-live.', built: true },
-  { to: '/printing', label: 'Printing', icon: Printer, phase: 7, description: 'Print and photocopy sales, service prices and paper/toner supplies.', built: true },
+  { to: '/services', label: 'Services', icon: Printer, phase: 7, description: 'Printing, photocopying and other services: sales, service prices and paper/toner supplies.', built: true },
   { to: '/telecom', label: 'Telecom', icon: Smartphone, phase: 6, description: 'Record reload and EZCash collections and provider top-ups, with commissions. Scratch cards are sold in Sales.', built: true },
   { to: '/expenses', label: 'Expenses', icon: Receipt, phase: 8, description: 'Record shop and telecom expenses (ice cream costs are recorded under Ice Cream).', built: true },
   { to: '/cash-books', label: 'Cash Books', icon: Wallet, phase: 8, description: 'Cash book for each of the three segments: balances, ledgers, opening balances, cash counts and daily closings.', built: true },

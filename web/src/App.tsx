@@ -116,7 +116,8 @@ export function App() {
           <Route path="ezcash" element={<EzCashTab />} />
           <Route path="topups" element={<TopupsTab />} />
         </Route>
-        <Route path="printing" element={<PrintingPage />}>
+        <Route path="printing/*" element={<Navigate to="/services" replace />} />
+        <Route path="services" element={<PrintingPage />}>
           <Route index element={<PrintSalesTab />} />
           <Route path="types" element={<ServiceTypesTab />} />
           <Route path="supplies" element={<SuppliesTab />} />
