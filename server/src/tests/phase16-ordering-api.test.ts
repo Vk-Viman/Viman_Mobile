@@ -64,6 +64,8 @@ interface Scenario {
   void?: (s: ApiBase, ctx: any, created: Res) => Promise<Res>;
   /** Only ONE record per book can exist at a time (opening balance, Ice Cream daily entry per date): the matrix voids the old one first. */
   once?: boolean;
+  /** At most ONE posted record exists at a time and the old one cannot be voided while the day is closed (opening balance): the matrix skips the "later date" creates. */
+  single?: boolean;
   omit?: string[];
 }
 
@@ -186,12 +188,12 @@ const scenarios: Scenario[] = [
     void: (s, _c, c) => expVoid(s, c.body.item.id),
   },
   {
-    name: 'opening balance (shop)', book: 'shop', once: true,
+    name: 'opening balance (shop)', book: 'shop', once: true, single: true,
     create: (s, _c, date) => openNew(s, 'shop', { businessDate: date }),
     void: (s, _c, c) => capVoid(s, c.body.item.id),
   },
   {
-    name: 'opening balance (Ice Cream fund)', book: 'icecream', once: true,
+    name: 'opening balance (Ice Cream fund)', book: 'icecream', once: true, single: true,
     create: (s, _c, date) => openNew(s, 'icecream', { businessDate: date, fund: 'profit' }),
     void: (s, _c, c) => capVoid(s, c.body.item.id),
   },
@@ -286,7 +288,7 @@ describe.each(scenarios)('ordering - $name', (sc) => {
     expect(world(s, sc.omit)).toEqual(before);
 
     // 6. a date after every closed day is fine
-    const later = ok201(await sc.create(s, ctx, once(sc) ? today() : L()));
+    const later = sc.single ? undefined : ok201(await sc.create(s, ctx, once(sc) ? today() : L()));
 
     // 7. reopening the LATEST closed day C: the latest closed day is now M, so the same create names M (a reopened day no longer counts)
     expect((await reopenNew(s, cC.id, 'correcting a mistake')).status).toBe(200);
@@ -295,7 +297,7 @@ describe.each(scenarios)('ordering - $name', (sc) => {
       code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(sc.book, M()), book: sc.book, closedDate: M(), businessDate: E(),
     });
     // the reopened day C itself is no longer DAY_CLOSED, and it is later than M, so a write dated C is accepted
-    const onReopened = ok201(await sc.create(s, ctx, once(sc) ? daysAgo(2) : C()));
+    const onReopened = sc.single ? undefined : ok201(await sc.create(s, ctx, once(sc) ? daysAgo(2) : C()));
 
     // 8. reopening M too: nothing is closed any more, so the old record can be voided and a new one dated E created
     expect((await reopenNew(s, cM.id, 'correcting a mistake')).status).toBe(200);
@@ -316,8 +318,8 @@ describe.each(scenarios)('ordering - $name', (sc) => {
       expect(v.status).toBe(409);
       expect(err(v)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', closedDate: C(), businessDate: E() });
     }
-    expect(later.status).toBe(201);
-    expect(onReopened.status).toBe(201);
+    expect(later?.status ?? 201).toBe(201);
+    expect(onReopened?.status ?? 201).toBe(201);
   });
 });
 
@@ -368,6 +370,17 @@ describe('ordering - returns are judged on the RETURN\'s date', () => {
     const closing = (await get(s.app, `/daily-closings?book=shop&from=${C()}&to=${C()}`)).body.items[0];
     await reopenNew(s, closing.id, 'late return');
     expect((await ret(E())).status).toBe(201);
+  });
+});
+
+// =============================================================================================
+describe('ordering - opening balance on a later date', () => {
+  it.each(['shop', 'icecream'] as const)('%s: with a closed day and no opening balance yet, a later date is accepted and an earlier one refused', async (book) => {
+    const s = await setup();
+    const extra = book === 'icecream' ? { fund: 'profit' } : {};
+    await closeOk(s, book, C());
+    expect(err(await openNew(s, book, { businessDate: E(), ...extra })).code).toBe('BACKDATE_BEFORE_CLOSED_DAY');
+    ok201(await openNew(s, book, { businessDate: L(), ...extra }));
   });
 });
 
@@ -493,9 +506,6 @@ describe('ordering - validation order and idempotence', () => {
     ok201(await dayNew(s, { businessDate: E() }));
     await closeOk(s, 'icecream', C());
     expect(err(await dayNew(s, { businessDate: E() })).code).toBe('BACKDATE_BEFORE_CLOSED_DAY');
-    // a sale void that would also be HAS_RETURNS: closed-day check first
-    const sale = (await sellOk(s, [cl(p.id, 2, 3000)], { businessDate: daysAgo(7) })).sales[0];
-    await post(s.app, `/sales/${sale.id}/returns`, { businessDate: daysAgo(7), items: [{ saleItemId: sale.items[0].id, qty: 1, resalable: true }], clientRef: ref() }).then(ok201);
   });
 
   it('a sale with a return: its void is judged on the sale\'s date (closed-day check before HAS_RETURNS)', async () => {
