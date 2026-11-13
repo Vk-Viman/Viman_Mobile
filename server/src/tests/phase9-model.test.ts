@@ -41,8 +41,25 @@ class Model {
   balance(book: Book): number { return this.entries.filter((e) => e.book === book).reduce((a, e) => a + e.amount, 0); }
   fund(f: Fund): number { return this.entries.filter((e) => e.book === 'icecream' && e.fund === f).reduce((a, e) => a + e.amount, 0); }
   isClosed(book: Book, date: string): boolean { return this.closed.has(`${book}|${date}`); }
-  /** The first closed book (shop, telecom, icecream order) among `books` on `date`, or undefined. */
-  firstClosed(books: Book[], date: string): Book | undefined { return BOOKS.find((b) => books.includes(b) && this.isClosed(b, date)); }
+  /** The latest currently-closed date of a book, or null. */
+  latest(book: Book): string | null {
+    let best: string | null = null;
+    for (const k of this.closed) { const [b, d] = k.split('|'); if (b === book && (best === null || (d as string) > best)) best = d as string; }
+    return best;
+  }
+  /**
+   * Closed-day rules for a write dated `date` touching `books` (section 8): DAY_CLOSED when the day is closed for any of them (it wins, first book in
+   * shop, telecom, icecream order), else BACKDATE_BEFORE_CLOSED_DAY naming the first book whose latest closed day is after `date`; undefined when open.
+   */
+  refusal(books: Book[], date: string): { code: 'DAY_CLOSED' | 'BACKDATE_BEFORE_CLOSED_DAY'; book: Book; closedDate?: string } | undefined {
+    const exact = BOOKS.find((b) => books.includes(b) && this.isClosed(b, date));
+    if (exact) return { code: 'DAY_CLOSED', book: exact };
+    for (const b of BOOKS) {
+      const l = this.latest(b);
+      if (books.includes(b) && l !== null && l > date) return { code: 'BACKDATE_BEFORE_CLOSED_DAY', book: b, closedDate: l };
+    }
+    return undefined;
+  }
   /** The warnings the rules require after a write that moved cash OUT of `books`: negative books and, for Ice Cream, negative funds. */
   warnings(books: Book[]): string[] {
     const out: string[] = [];
@@ -114,10 +131,10 @@ async function run(seed: number, steps: number): Promise<Stats> {
         r = await drawCash(s, body);
       }
     }
-    const closedBook = m.firstClosed(rec.books, date);
-    if (closedBook) {
-      expect(r.status, at(i, `${kind} on closed ${closedBook}: ${JSON.stringify(r.body)}`)).toBe(409);
-      expect(err(r), at(i, 'closed error')).toMatchObject({ code: 'DAY_CLOSED', book: closedBook, businessDate: date });
+    const refused = m.refusal(rec.books, date);
+    if (refused) {
+      expect(r.status, at(i, `${kind} refused (${refused.code} ${refused.book}): ${JSON.stringify(r.body)}`)).toBe(409);
+      expect(err(r), at(i, 'closed error')).toMatchObject({ businessDate: date, ...refused });
       stats.closedRefused++;
       return;
     }
@@ -142,11 +159,10 @@ async function run(seed: number, steps: number): Promise<Stats> {
     const rec = pick(m.records);
     const url = rec.kind === 'transfer' ? `/cash-transfers/${rec.id}/void` : rec.kind === 'drawing' ? `/drawings/${rec.id}/void` : `/capital-entries/${rec.id}/void`;
     const r = rec.kind === 'transfer' ? await trVoid(s, rec.id) : await post(s.app, url, { reason: 'model void' });
-    const closedBook = m.firstClosed(rec.books, rec.date);
-    if (closedBook) {
-      expect(r.status, at(i, `void ${rec.kind} on closed ${closedBook}`)).toBe(409);
-      expect(err(r).code, at(i, 'void closed code')).toBe('DAY_CLOSED');
-      expect(err(r).book, at(i, 'void closed book')).toBe(closedBook);
+    const refused = m.refusal(rec.books, rec.date);
+    if (refused) {
+      expect(r.status, at(i, `void ${rec.kind} refused (${refused.code} ${refused.book})`)).toBe(409);
+      expect(err(r), at(i, 'void closed error')).toMatchObject({ businessDate: rec.date, ...refused });
       stats.closedRefused++;
       return;
     }

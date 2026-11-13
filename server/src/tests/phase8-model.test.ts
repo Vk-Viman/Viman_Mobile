@@ -41,6 +41,21 @@ class Model {
     this.entries[book].push({ date, amount, fund, seq: this.seq++ });
   }
   isClosed(book: Book, date: string): boolean { return this.closed.has(`${book}|${date}`); }
+  /** The latest currently-closed date of a book, or null (closed-day ordering protection, section 8). */
+  latest(book: Book): string | null {
+    let best: string | null = null;
+    for (const k of this.closed) { const [b, d] = k.split('|'); if (b === book && (best === null || (d as string) > best)) best = d as string; }
+    return best;
+  }
+  /**
+   * Why a write dated `date` in `book` is refused, or null. `money` = the write posts a cash entry (a count that matches, or the void of one, posts
+   * none and only needs an open day): DAY_CLOSED on a closed day, BACKDATE_BEFORE_CLOSED_DAY when a later day is closed.
+   */
+  refusal(book: Book, date: string, money = true): 'DAY_CLOSED' | 'BACKDATE_BEFORE_CLOSED_DAY' | null {
+    if (this.isClosed(book, date)) return 'DAY_CLOSED';
+    const l = this.latest(book);
+    return money && l !== null && l > date ? 'BACKDATE_BEFORE_CLOSED_DAY' : null;
+  }
   /** Balance of the book at the END of `date` (every entry dated on or before it). */
   expected(book: Book, date: string): number {
     return this.entries[book].filter((e) => e.date <= date).reduce((a, e) => a + e.amount, 0);
@@ -75,10 +90,11 @@ async function run(seed: number, steps: number): Promise<Stats> {
   let lastExpense: { body: Record<string, unknown>; id: number } | null = null;
   const at = (i: number, what: string) => `seed ${seed} step ${i}: ${what}`;
 
-  /** Expects the answer the model predicts for a write dated on `date` in `book` (closed -> 409 DAY_CLOSED). */
-  const expectClosed = (i: number, r: { status: number; body: any }, book: Book, date: string, what: string): void => {
+  /** Expects the answer the model predicts for a refused write dated `date` in `book` (409 DAY_CLOSED, or BACKDATE_BEFORE_CLOSED_DAY before a closed day). */
+  const expectClosed = (i: number, r: { status: number; body: any }, book: Book, date: string, what: string, money = true): void => {
     expect(r.status, at(i, `${what} ${JSON.stringify(r.body)}`)).toBe(409);
-    expect(err(r), at(i, what)).toMatchObject({ code: 'DAY_CLOSED', book, businessDate: date });
+    if (m.refusal(book, date, money) === 'DAY_CLOSED') expect(err(r), at(i, what)).toMatchObject({ code: 'DAY_CLOSED', book, businessDate: date });
+    else expect(err(r), at(i, what)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book, businessDate: date, closedDate: m.latest(book) });
     stats.closedRejections++;
   };
 
@@ -91,7 +107,7 @@ async function run(seed: number, steps: number): Promise<Stats> {
       const amount = int(100, 9999);
       const body = { businessDate: date, book, category: 'other', amountCents: amount, description: 'E', clientRef: ref() };
       const r = await expNew(s, body);
-      if (m.isClosed(book, date)) return expectClosed(i, r, book, date, 'expense create');
+      if (m.refusal(book, date)) return expectClosed(i, r, book, date, 'expense create');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       m.push(book, date, -amount);
       m.records.push({ id: r.body.item.id, book, date, amount, voided: false, kind: 'expense' });
@@ -107,7 +123,7 @@ async function run(seed: number, steps: number): Promise<Stats> {
         purchase: () => post(s.app, `/purchases/${r.id}/void`, { reason: 'x' }),
       }[r.kind as 'expense']();
       const res = await call;
-      if (m.isClosed(r.book, r.date)) return expectClosed(i, res, r.book, r.date, `void ${r.kind}`);
+      if (m.refusal(r.book, r.date)) return expectClosed(i, res, r.book, r.date, `void ${r.kind}`);
       expect(res.status, at(i, `void ${r.kind} ${JSON.stringify(res.body)}`)).toBe(200);
       stats.voids++;
       // the reversal is the exact negation of the original: cash-in kinds (reload, print sale) went in, the others went out
@@ -116,35 +132,35 @@ async function run(seed: number, steps: number): Promise<Stats> {
     } else if (op < 26) { // printing supply (shop cash out)
       const amount = int(100, 9999);
       const r = await supNew(s, { businessDate: date, amountCents: amount });
-      if (m.isClosed('shop', date)) return expectClosed(i, r, 'shop', date, 'supply');
+      if (m.refusal('shop', date)) return expectClosed(i, r, 'shop', date, 'supply');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       m.push('shop', date, -amount);
       m.records.push({ id: r.body.item.id, book: 'shop', date, amount, voided: false, kind: 'supply' });
     } else if (op < 31) { // print sale (shop cash in): qty x 1,500
       const qty = int(1, 20);
       const r = await psNew(s, { businessDate: date, qty });
-      if (m.isClosed('shop', date)) return expectClosed(i, r, 'shop', date, 'print sale');
+      if (m.refusal('shop', date)) return expectClosed(i, r, 'shop', date, 'print sale');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       m.push('shop', date, qty * 1500);
       m.records.push({ id: r.body.item.id, book: 'shop', date, amount: qty * 1500, voided: false, kind: 'print' });
     } else if (op < 36) { // reload (telecom cash in the FULL collection)
       const amount = int(1000, 50000);
       const r = await post(s.app, '/reload-sales', { businessDate: date, providerId: prov.Dialog, salesCents: amount, clientRef: ref() });
-      if (m.isClosed('telecom', date)) return expectClosed(i, r, 'telecom', date, 'reload');
+      if (m.refusal('telecom', date)) return expectClosed(i, r, 'telecom', date, 'reload');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       m.push('telecom', date, amount);
       m.records.push({ id: r.body.item.id, book: 'telecom', date, amount, voided: false, kind: 'reload' });
     } else if (op < 40) { // wallet top-up (telecom cash out)
       const amount = int(500, 20000);
       const r = await post(s.app, '/telecom/topups', { businessDate: date, kind: 'wallet_topup', amountCents: amount, clientRef: ref() });
-      if (m.isClosed('telecom', date)) return expectClosed(i, r, 'telecom', date, 'topup');
+      if (m.refusal('telecom', date)) return expectClosed(i, r, 'telecom', date, 'topup');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       m.push('telecom', date, -amount);
       m.records.push({ id: r.body.item.id, book: 'telecom', date, amount, voided: false, kind: 'topup' });
     } else if (op < 43) { // shop purchase (cash out)
       const total = int(1000, 90000);
       const r = await post(s.app, '/purchases', { businessDate: date, items: [{ productId: product.id, packs: 1, packSize: 3, lineTotalCents: total }], clientRef: ref() });
-      if (m.isClosed('shop', date)) return expectClosed(i, r, 'shop', date, 'purchase');
+      if (m.refusal('shop', date)) return expectClosed(i, r, 'shop', date, 'purchase');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       m.push('shop', date, -total);
       m.records.push({ id: r.body.item.id, book: 'shop', date, amount: total, voided: false, kind: 'purchase' });
@@ -153,7 +169,7 @@ async function run(seed: number, steps: number): Promise<Stats> {
       const fund = book === 'icecream' ? pick(FUNDS) : null;
       const amount = int(1000, 99999);
       const r = await openNew(s, book, { businessDate: date, amountCents: amount, ...(fund ? { fund } : {}) });
-      if (m.isClosed(book, date)) return expectClosed(i, r, book, date, 'opening');
+      if (m.refusal(book, date)) return expectClosed(i, r, book, date, 'opening');
       if (m.hasOpening(book, fund)) {
         expect(r.status, at(i, 'opening exists')).toBe(409);
         expect(err(r).code, at(i, 'opening exists')).toBe('OPENING_BALANCE_EXISTS');
@@ -168,7 +184,7 @@ async function run(seed: number, steps: number): Promise<Stats> {
       if (live.length === 0) return;
       const r = pick(live);
       const res = await capVoid(s, r.id);
-      if (m.isClosed(r.book, r.date)) return expectClosed(i, res, r.book, r.date, 'void opening');
+      if (m.refusal(r.book, r.date)) return expectClosed(i, res, r.book, r.date, 'void opening');
       expect(res.status, at(i, JSON.stringify(res.body))).toBe(200);
       m.push(r.book, r.date, -r.amount, r.fund ?? null);
       r.voided = true;
@@ -180,7 +196,7 @@ async function run(seed: number, steps: number): Promise<Stats> {
       const diff = counted - expected;
       const fund = book === 'icecream' ? pick(FUNDS) : undefined;
       const r = await countNew(s, book, counted, { businessDate: date, note: 'n', ...(fund ? { fund } : {}) });
-      if (m.isClosed(book, date)) return expectClosed(i, r, book, date, 'count');
+      if (m.refusal(book, date, diff !== 0)) return expectClosed(i, r, book, date, 'count', diff !== 0);
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       expect(r.body.item, at(i, 'count figures')).toMatchObject({ expectedCents: expected, countedCents: counted, differenceCents: diff });
       if (diff !== 0) { m.push(book, date, diff, book === 'icecream' ? (fund as Fund) : null); stats.nonZeroCounts++; }
@@ -190,7 +206,7 @@ async function run(seed: number, steps: number): Promise<Stats> {
       if (live.length === 0) return;
       const r = pick(live);
       const res = await countVoid(s, r.id);
-      if (m.isClosed(r.book, r.date)) return expectClosed(i, res, r.book, r.date, 'void count');
+      if (m.refusal(r.book, r.date, r.amount !== 0)) return expectClosed(i, res, r.book, r.date, 'void count', r.amount !== 0);
       expect(res.status, at(i, JSON.stringify(res.body))).toBe(200);
       if (r.amount !== 0) m.push(r.book, r.date, -r.amount, r.fund ?? null);
       r.voided = true;
@@ -207,6 +223,8 @@ async function run(seed: number, steps: number): Promise<Stats> {
         expect(err(r).code, at(i, 'already closed')).toBe('DAY_ALREADY_CLOSED');
         return;
       }
+      // a count whose adjustment would post a cash entry dated before a later closed day is refused (section 8); no count or a matching one is allowed
+      if (withCount && m.refusal(book, date, diff !== 0)) return expectClosed(i, r, book, date, 'closing with a count variance', diff !== 0);
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       expect(r.body.item.expectedCents, at(i, 'closing expected')).toBe(expected);
       if (withCount && diff !== 0) m.push(book, date, diff, book === 'icecream' ? (fund as Fund) : null);

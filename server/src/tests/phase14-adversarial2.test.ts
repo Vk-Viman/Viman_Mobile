@@ -136,7 +136,7 @@ describe('daily closings and opening balances', () => {
     await assertGlobalInvariants(s);
   });
 
-  it('a closing and its day status: closing a future date is refused; closing a day does not block the day before or after; each book closes separately', async () => {
+  it('a closing and its day status: closing a future date is refused; closing a day does not block the day after (the day before is protected by the ordering rule); each book closes separately', async () => {
     const s = await apiBase(await env.build());
     await must(await openNew(s, 'shop', { businessDate: D(8), amountCents: 100 }), 'open');
     const f = await unchanged(s, () => closeNew(s, 'shop', D(-1)));
@@ -144,7 +144,9 @@ describe('daily closings and opening balances', () => {
     await must(await closeNew(s, 'shop', D(3)), 'close');
     expect((await get(s.app, `/daily-closings/status?book=shop&businessDate=${D(3)}`)).body.isClosed).toBe(true);
     expect((await get(s.app, `/daily-closings/status?book=telecom&businessDate=${D(3)}`)).body.isClosed).toBe(false);
-    expect((await post(s.app, '/capital', { businessDate: D(4), book: 'shop', amountCents: 1, clientRef: ref() })).status).toBe(201);
+    // section 8 (migration 016): the day before the closed day D(3) is protected; before 016 this was accepted (201)
+    const before = await unchanged(s, () => post(s.app, '/capital', { businessDate: D(4), book: 'shop', amountCents: 1, clientRef: ref() }));
+    expect([before.status, before.body.error?.code]).toEqual([409, 'BACKDATE_BEFORE_CLOSED_DAY']);
     expect((await post(s.app, '/capital', { businessDate: D(2), book: 'shop', amountCents: 1, clientRef: ref() })).status).toBe(201);
     expect((await post(s.app, '/capital', { businessDate: D(3), book: 'telecom', amountCents: 1, clientRef: ref() })).status).toBe(201);
     const c = await unchanged(s, () => capNew(s, { businessDate: D(3), book: 'shop', amountCents: 1 }));
