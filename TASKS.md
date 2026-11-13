@@ -54,3 +54,7 @@ Each item below was checked in the code.
 - **A stocktake draft** can be created on a closed day (only completing it is refused, DAY_CLOSED).
 - **Restore** checks integrity and schema only: a backup whose stock cache disagrees with its movements restores and is flagged afterwards by `/inventory/reconciliation`. A tampered backup checksum is refused with 500 RESTORE_FAILED (data intact) rather than 422.
 - **Very large balances:** per-request limits keep every amount far below 2^53 cents; only an absurd number of 10^12-cent entries could exceed it.
+
+### Future enhancements (owner-approved to defer)
+- **Stocktake expected quantity at count time** (BUSINESS_RULES §13A decision 4): record the expected quantity when each line is counted and adjust for movements since, so a stocktake can safely run while the shop is trading. Until then: complete the stocktake immediately after counting, when the shop is quiet.
+- **POS service lines** (decision 7): not planned; services use Services → Service types.
