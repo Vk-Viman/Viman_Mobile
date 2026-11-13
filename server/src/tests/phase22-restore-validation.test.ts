@@ -4,7 +4,7 @@
 // unchanged, or with raw bytes) and checks that the matching check - and only plausible companions - report it in plain words.
 // Honest limit (also in the module header): a change inside a free-text column (a name, a note) keeps the file perfectly consistent and cannot be detected.
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,6 +34,8 @@ beforeAll(async () => {
   base = join(work, 'base.db');
   await s.app.close();
 }, 180000);
+// All tests here are synchronous and heavy; yielding to the event loop after each lets vitest's worker report progress (otherwise its RPC times out).
+afterEach(async () => { await new Promise((r) => setTimeout(r, 0)); });
 afterAll(async () => { await env.cleanup(); rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 /** Copy of the valid database. */
