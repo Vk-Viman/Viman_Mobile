@@ -262,6 +262,17 @@ How the rebuild is done safely: the runner executes the file in a transaction wi
 
 **Rollback:** forward-only. To undo, restore the backup the app takes automatically at start-up before 015 ran.
 
+## 016_closed_day_ordering.sql (closed-day ordering protection, BUSINESS_RULES section 8, approved 2026-11-13)
+**Why:** a daily closing freezes a book's balance for that day, but an entry dated *earlier* than a closed day still changed the running balance, so the closed day's stored snapshot could drift. A write dated earlier than the **latest currently-closed day** of its book is now refused `BACKDATE_BEFORE_CLOSED_DAY`; a write exactly on a closed day stays `DAY_CLOSED`; later dates and books without closed days are unaffected; a reopened day (`reopened_at` set and not re-closed) no longer counts. The owner reopens the later closed day(s) first (audited).
+
+**What it changes (no new tables; older migrations untouched, triggers are dropped and created again):**
+- `trg_cash_entries_day_closed` (012) - same name, stronger: fires when any closed day of the entry's book has `business_date >= NEW.business_date`; aborts `DAY_CLOSED` when that day is the entry's own date, otherwise `BACKDATE_BEFORE_CLOSED_DAY`. A void's reversal row copies the original business date, so it follows the same rule. Closing a day **without** a count posts no cash entry and stays allowed; a closing whose count posts a `cash_adjustment` dated D is refused when a later day is already closed (the service answers the same code first, and a count with no difference posts no entry and is allowed).
+- The Ice Cream record triggers of 014 (`trg_icecream_days_day_closed`, `..._day_closed_void`, `trg_icecream_payments_day_closed`, `trg_icecream_fund_moves_day_closed`, `..._day_closed_void`) - same extension (insert, and the void of days and moves judged on the record's own date).
+
+**Service side:** `services/day-closing.ts` `assertDayOpen` (one indexed probe per touched book, `closedDayProbe` in `daily-closings.repo.ts`) is the single shared check every write service already calls; `mapCashAbort` maps the new abort to the same 409 (without dates, as the trigger cannot carry them). Both use the (book, business_date) unique index, so the check is one range probe.
+
+**Rollback:** forward-only (restore the start-up backup). Dropping the new triggers and re-creating the 012/014 versions would restore the old behaviour.
+
 ## Rules of thumb for a new migration
 - Next number, three digits, lower-case name; never edit an applied file (the checksum would stop startup).
 - Money in integer cents, rates in basis points, dates as `YYYY-MM-DD` text with the strict CHECK, timestamps from `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.

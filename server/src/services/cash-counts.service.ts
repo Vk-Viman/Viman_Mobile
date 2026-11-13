@@ -28,7 +28,7 @@ import { logAudit } from './audit.service.ts';
 import { postCash, reverseCash } from './cash-posting.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
-import { assertDayOpen } from './day-closing.ts';
+import { assertDayNotClosed, assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated, isBackdatedToday,
@@ -99,13 +99,17 @@ export function checkCountFund(book: CashBook, fund: IceFund | undefined): void 
  * (+ fund row for Ice Cream) and the audit row. The caller handles idempotency (`clientRef` repeats) and R-FD.
  * Shared by `createCashCount` and the daily closing (which counts, then closes).
  *
- * @throws AppError 409 DAY_CLOSED, 400 NOTE_REQUIRED / FUND_REQUIRED.
+ * @throws AppError 409 DAY_CLOSED / BACKDATE_BEFORE_CLOSED_DAY (only when the count has a difference to post),
+ *   400 NOTE_REQUIRED / FUND_REQUIRED.
  */
 export function postCashCount(conn: DatabaseSync, body: CashCountInput, note: string): { item: CashCount; warnings: CashWarning[] } {
-  assertDayOpen(conn, [body.book], body.businessDate); // R9
+  assertDayNotClosed(conn, [body.book], body.businessDate); // R9: the exact day first
   const expectedCents = cashBalanceAsOf(conn, body.book, body.businessDate);
   const differenceCents = body.countedCents - expectedCents; // C4: counted - expected
   if (differenceCents !== 0) {
+    // Section 8 ordering: an adjustment dated before a LATER closed day would change that closed day. A count that
+    // matches posts no cash entry, changes no balance and so stays allowed (closing without a cash entry is fine).
+    assertDayOpen(conn, [body.book], body.businessDate);
     if (note.length === 0) {
       throw new AppError(400, 'NOTE_REQUIRED', 'The count does not match the books. Please write a note to explain the difference.',
         { note: 'A note is required when the count differs from the books.' });
@@ -140,7 +144,8 @@ export function postCashCount(conn: DatabaseSync, body: CashCountInput, note: st
  * Records a cash count (see the file header). Idempotent by `clientRef`: a repeat returns the saved count with
  * `created: false`; the same reference used for another book or date is 409 CLIENT_REF_CONFLICT.
  *
- * Validation order: fields -> fund rule -> R-FD -> clientRef repeat -> DAY_CLOSED -> NOTE_REQUIRED / FUND_REQUIRED.
+ * Validation order: fields -> fund rule -> R-FD -> clientRef repeat -> DAY_CLOSED -> (difference <> 0:
+ * BACKDATE_BEFORE_CLOSED_DAY) -> NOTE_REQUIRED / FUND_REQUIRED.
  *
  * @throws AppError 400 VALIDATION_ERROR / FUND_NOT_ALLOWED / FUND_REQUIRED / NOTE_REQUIRED / FUTURE_DATE_NOT_ALLOWED,
  *   409 DAY_CLOSED / CLIENT_REF_CONFLICT.
@@ -179,7 +184,10 @@ export function voidCashCount(ctx: AppContext, id: number, body: { reason: strin
   return runWrite(ctx, (conn) => {
     const row = getCashCount(conn, id);
     if (!row) throw notFound('Cash count');
-    assertDayOpen(conn, [row.book], row.businessDate); // R9: judged on the count's own date
+    // R9: judged on the count's own date. A count with an adjustment is reversed by a cash entry dated like the count,
+    // so it also follows the ordering protection; a count without one moves no money and only needs an open day.
+    if (row.cashEntryId !== null) assertDayOpen(conn, [row.book], row.businessDate);
+    else assertDayNotClosed(conn, [row.book], row.businessDate);
     if (row.status === 'void') throw alreadyVoid('cash count');
     const before = toCount(row);
 
