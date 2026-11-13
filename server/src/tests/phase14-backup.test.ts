@@ -19,7 +19,6 @@ import type { World14 } from './helpers/phase14.ts';
 import { cl, sellOk } from './helpers/phase5.ts';
 import { expNew } from './helpers/phase8.ts';
 import { dayOk, payOk } from './helpers/phase10.ts';
-import { latestVersion } from '../db/migrate.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
