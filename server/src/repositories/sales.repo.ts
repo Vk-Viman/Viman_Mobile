@@ -17,6 +17,7 @@ import { SQL_NOW_UTC } from './sql-helpers.ts';
 
 export type SaleBook = 'shop' | 'telecom';
 export type SaleStatus = 'posted' | 'void';
+export type SaleReturnStatus = 'posted' | 'void';
 export type SaleLineType = 'goods' | 'card';
 
 /**
@@ -41,6 +42,8 @@ export interface SaleItemRow {
 export interface SaleReturnRow {
   id: number; saleId: number; businessDate: string; postedAt: string; refundCents: number;
   cogsReversedCents: number; extraCostReversedCents: number; note: string; clientRef: string;
+  /** 'posted', or 'void' once the return was taken back (rule R-VR); a void return is kept for the history. */
+  status: SaleReturnStatus; voidedAt: string | null; voidReason: string | null;
 }
 /** One returned line; `resalable` false means the goods were damaged (written off, not restocked). */
 export interface SaleReturnItemRow {
@@ -66,7 +69,8 @@ interface RawItem {
 }
 interface RawReturn {
   id: N; sale_id: N; business_date: string; posted_at: string; refund_cents: N; cogs_reversed_cents: N;
-  extra_cost_reversed_cents: N; note: string; client_ref: string;
+  extra_cost_reversed_cents: N; note: string; client_ref: string; status: SaleReturnStatus; voided_at: string | null;
+  void_reason: string | null;
 }
 interface RawReturnItem {
   id: N; sales_return_id: N; sale_item_id: N; product_id: N; product_name: string; qty: N; resalable: N;
@@ -83,7 +87,7 @@ const ITEM_SELECT = `SELECT i.id, i.sale_id, i.line_no, i.line_type, i.product_i
   i.cogs_cents, i.extra_cost_cents, i.returned_qty FROM sale_items i JOIN products p ON p.id = i.product_id`;
 
 const RETURN_SELECT = `SELECT r.id, r.sale_id, r.business_date, r.posted_at, r.refund_cents, r.cogs_reversed_cents,
-  r.extra_cost_reversed_cents, r.note, r.client_ref FROM sales_returns r`;
+  r.extra_cost_reversed_cents, r.note, r.client_ref, r.status, r.voided_at, r.void_reason FROM sales_returns r`;
 
 const RETURN_ITEM_SELECT = `SELECT ri.id, ri.sales_return_id, ri.sale_item_id, i.product_id, p.name AS product_name,
   ri.qty, ri.resalable, ri.revenue_cents, ri.cogs_cents, ri.extra_cost_cents
@@ -111,6 +115,7 @@ function mapReturn(r: RawReturn): SaleReturnRow {
     id: Number(r.id), saleId: Number(r.sale_id), businessDate: r.business_date, postedAt: r.posted_at,
     refundCents: Number(r.refund_cents), cogsReversedCents: Number(r.cogs_reversed_cents),
     extraCostReversedCents: Number(r.extra_cost_reversed_cents), note: r.note, clientRef: r.client_ref,
+    status: r.status, voidedAt: r.voided_at, voidReason: r.void_reason,
   };
 }
 function mapReturnItem(r: RawReturnItem): SaleReturnItemRow {
@@ -190,7 +195,7 @@ export function getSaleItem(conn: DatabaseSync, id: number): SaleItemRow | undef
  *          `limit`/`offset` page the list (totals ignore paging).
  * @returns `totals.revenueCents` = sum of sale totals, `cogsCents` = sum of line automatic costs,
  *          `extraCostCents` = sum of line extra costs (C13), `costCents` = cogs + extra, `refundsCents` = sum
- *          of refunds of returns made against those sales.
+ *          of refunds of POSTED returns made against those sales (a voided return no longer counts, R-VR).
  */
 export function listSales(conn: DatabaseSync, q: {
   from?: string; to?: string; book?: SaleBook; status?: SaleStatus; productId?: number; limit: number; offset: number;
@@ -217,7 +222,7 @@ export function listSales(conn: DatabaseSync, q: {
   const cogsCents = Number(cost.c);
   const extraCostCents = Number(cost.x);
   const refunds = (conn.prepare(
-    `SELECT COALESCE(SUM(r.refund_cents), 0) AS v FROM sales_returns r JOIN sales s ON s.id = r.sale_id${posted}`,
+    `SELECT COALESCE(SUM(r.refund_cents), 0) AS v FROM sales_returns r JOIN sales s ON s.id = r.sale_id${posted} AND r.status = 'posted'`,
   ).get(...params) as unknown as { v: N }).v;
   const rows = conn.prepare(`${SALE_SELECT}${w} ORDER BY s.business_date DESC, s.id DESC LIMIT ? OFFSET ?`)
     .all(...params, q.limit, q.offset) as unknown as RawSale[];
@@ -304,16 +309,45 @@ export function listSaleReturnItems(conn: DatabaseSync, salesReturnId: number): 
 }
 
 /**
- * What earlier returns already took back for one sale line: total quantity, revenue, automatic cost and extra cost (C13). The service
+ * What earlier POSTED returns already took back for one sale line (voided returns are ignored, R-VR): total quantity, revenue, automatic cost and extra cost (C13). The service
  * uses it to give the LAST return the exact remainder so the portions add up to the line with no rounding gap (C5).
  */
 export function returnedAmountsSoFar(conn: DatabaseSync, saleItemId: number): ReturnedAmounts {
   const r = conn.prepare(
-    `SELECT COALESCE(SUM(qty), 0) AS q, COALESCE(SUM(revenue_cents), 0) AS rev, COALESCE(SUM(cogs_cents), 0) AS cogs,
-            COALESCE(SUM(extra_cost_cents), 0) AS extra
-     FROM sales_return_items WHERE sale_item_id = ?`,
+    `SELECT COALESCE(SUM(ri.qty), 0) AS q, COALESCE(SUM(ri.revenue_cents), 0) AS rev, COALESCE(SUM(ri.cogs_cents), 0) AS cogs,
+            COALESCE(SUM(ri.extra_cost_cents), 0) AS extra
+     FROM sales_return_items ri JOIN sales_returns r ON r.id = ri.sales_return_id
+     WHERE ri.sale_item_id = ? AND r.status = 'posted'`,
   ).get(saleItemId) as unknown as { q: N; rev: N; cogs: N; extra: N };
   return {
     qty: Number(r.q), revenueCents: Number(r.rev), cogsCents: Number(r.cogs), extraCostCents: Number(r.extra),
   };
+}
+
+/** Marks a return void (posted -> void, DB clock). The database then lowers the line counters and voids the damaged-return loss rows. */
+export function markSaleReturnVoid(conn: DatabaseSync, id: number, reason: string): void {
+  conn.prepare(
+    `UPDATE sales_returns SET status = 'void', voided_at = ${SQL_NOW_UTC}, void_reason = ? WHERE id = ?`,
+  ).run(reason, id);
+}
+
+/** Number of POSTED returns of one sale (a sale can only be voided when this is 0, R-VR 7). */
+export function countPostedSaleReturns(conn: DatabaseSync, saleId: number): number {
+  const r = conn.prepare(`SELECT COUNT(*) AS n FROM sales_returns WHERE sale_id = ? AND status = 'posted'`)
+    .get(saleId) as unknown as { n: N };
+  return Number(r.n);
+}
+
+/**
+ * The newest POSTED return (highest id) that shares a sale line with return `returnId` and is newer than it, or
+ * undefined when `returnId` is the newest posted return of every line it touches (R-VR 1).
+ */
+export function newerPostedReturn(conn: DatabaseSync, returnId: number): SaleReturnRow | undefined {
+  const r = conn.prepare(
+    `${RETURN_SELECT} WHERE r.status = 'posted' AND r.id > ? AND EXISTS (
+       SELECT 1 FROM sales_return_items a JOIN sales_return_items b ON b.sale_item_id = a.sale_item_id
+        WHERE a.sales_return_id = ? AND b.sales_return_id = r.id)
+     ORDER BY r.id DESC LIMIT 1`,
+  ).get(returnId, returnId) as unknown as RawReturn | undefined;
+  return r ? mapReturn(r) : undefined;
 }

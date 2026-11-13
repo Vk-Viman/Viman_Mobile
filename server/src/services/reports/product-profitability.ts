@@ -64,7 +64,7 @@ export function productProfitability(conn: DatabaseSync, q: ProfitabilityQuery):
        JOIN sale_items si ON si.id = ri.sale_item_id
        JOIN sales s ON s.id = si.sale_id
        JOIN products p ON p.id = si.product_id JOIN categories c ON c.id = p.category_id
-      WHERE s.status = 'posted' AND r.business_date BETWEEN ? AND ?${f} GROUP BY si.product_id`,
+      WHERE s.status = 'posted' AND r.status = 'posted' AND r.business_date BETWEEN ? AND ?${f} GROUP BY si.product_id`,
   ).all(q.from, q.to, ...extra) as unknown as SqlRow[];
 
   const byProduct = new Map<number, ProfitabilityRow>();

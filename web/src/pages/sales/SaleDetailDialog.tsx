@@ -2,7 +2,7 @@
  * SaleDetailDialog: read-only details of one sale (header, lines, returns) with the "Void sale" and "Return items"
  * actions. Opened from the History list.
  * API: GET /sales/:id (api/sales.ts); the actions open VoidSaleDialog / SaleReturnDialog.
- * Rules shown: a sale with returns cannot be voided (the server says HAS_RETURNS), a void sale accepts no actions
+ * Rules shown: each return is listed with its status and a "Void return" action (R-VR; disabled while a newer return of the same item exists, the server's reason is shown when it refuses); a sale with POSTED returns cannot be voided (the server says HAS_RETURNS), a void sale accepts no actions
  * (ALREADY_VOID / SALE_VOID), and "Return items" is unavailable once everything has been returned. Unit cost is the
  * snapshot of the AUTOMATIC cost taken at sale time and never changes afterwards; C13 adds the extra cost the cashier
  * charged and the resulting charged cost (shown per line and in the header). All amounts are the server's integer cents.
@@ -17,8 +17,10 @@ import { Money } from '../../components/Money';
 import { Spinner } from '../../components/Spinner';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSale } from '../../api/sales';
+import type { Sale, SaleReturn } from '../../types/api';
 import { formatDateTime } from '../../lib/format';
 import { SaleReturnDialog } from './SaleReturnDialog';
+import { VoidReturnDialog } from './VoidReturnDialog';
 import { VoidSaleDialog } from './VoidSaleDialog';
 
 /** @param id the sale to show. Mount only while open (parent keys it by id so switching sales reloads). */
@@ -26,15 +28,19 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
   const q = useSale(id);
   // Which action dialog is open on top of this one (null = none).
   const [sub, setSub] = useState<'void' | 'return' | null>(null);
+  // The return whose "Void return" dialog is open (R-VR); kept by id so the dialog always shows the freshest data.
+  const [voidRetId, setVoidRetId] = useState<number | null>(null);
   const s = q.data?.item;
 
-  const hasReturns = (s?.returns.length ?? 0) > 0;
+  // R-VR 7: only POSTED returns block a sale void (a voided return no longer counts).
+  const hasReturns = s?.returns.some((r) => r.status === 'posted') ?? false;
+  const voidRet = s && voidRetId !== null ? s.returns.find((r) => r.id === voidRetId) : undefined;
   const fullyReturned = s ? s.items.every((i) => i.qty - i.returnedQty <= 0) : true;
 
   return (
     <>
       {/* `paused` hands Esc/Tab to the action dialog while it is open on top of this one. */}
-      <Modal title={`Sale #${id}`} onClose={onClose} paused={sub !== null} widthClass="max-w-4xl">
+      <Modal title={`Sale #${id}`} onClose={onClose} paused={sub !== null || voidRet !== undefined} widthClass="max-w-4xl">
         {q.isPending ? (
           <div className="flex justify-center py-10"><Spinner label="Loading sale" /></div>
         ) : q.isError || !s ? (
@@ -105,7 +111,9 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
                     <li key={r.id} className="rounded-lg border border-slate-200 p-3 text-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span>
+                          <span className="mr-2 font-medium">Return #{r.id}</span>
                           {r.businessDate} {r.backdated && <Badge tone="amber">Backdated</Badge>}
+                          <span className="ml-2"><PostedStatusBadge status={r.status} /></span>
                           <span className="ml-2 text-xs text-slate-500">posted {formatDateTime(r.postedAt)}</span>
                         </span>
                         <span>
@@ -122,6 +130,20 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
                         ))}
                       </ul>
                       {r.note && <p className="mt-1 text-slate-500">Note: {r.note}</p>}
+                      {r.status === 'void' ? (
+                        <p className="mt-1 text-xs text-slate-500">
+                          Voided {formatDateTime(r.voidedAt)}: {r.voidReason ?? '—'}. It no longer counts in sales, cost or cash.
+                        </p>
+                      ) : s.status === 'posted' && (
+                        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                          {newerBlocking(s, r) !== null && (
+                            <span className="mr-auto text-xs text-slate-500">
+                              Return #{newerBlocking(s, r)} was made after this one on the same item(s); void it first.
+                            </span>
+                          )}
+                          <Button variant="danger" disabled={newerBlocking(s, r) !== null} onClick={() => setVoidRetId(r.id)}>Void return</Button>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -143,8 +165,23 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
       </Modal>
       {s && sub === 'void' && <VoidSaleDialog sale={s} onClose={() => setSub(null)} />}
       {s && sub === 'return' && <SaleReturnDialog sale={s} onClose={() => setSub(null)} />}
+      {s && voidRet && <VoidReturnDialog sale={s} ret={voidRet} onClose={() => setVoidRetId(null)} />}
     </>
   );
+}
+
+/**
+ * R-VR 1: the id of the newest POSTED return that shares a sale line with `r` and is newer than it (that one must be voided first),
+ * or null when `r` is the newest posted return of every line it touches. The server decides again; this only pre-disables the button.
+ */
+function newerBlocking(sale: Sale, r: SaleReturn): number | null {
+  const lines = new Set(r.items.map((i) => i.saleItemId));
+  let newest: number | null = null;
+  for (const o of sale.returns) {
+    if (o.status !== 'posted' || o.id <= r.id || !o.items.some((i) => lines.has(i.saleItemId))) continue;
+    if (newest === null || o.id > newest) newest = o.id;
+  }
+  return newest;
 }
 
 /** One "label: value" line of the details list. */

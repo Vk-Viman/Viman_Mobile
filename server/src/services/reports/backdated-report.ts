@@ -49,7 +49,7 @@ interface Spec {
 
 const specs: Spec[] = [
   { type: 'sale', label: 'Sale', from: 'sales t', date: 't.business_date', posted: 't.posted_at', id: 't.id', amount: 't.total_cents', book: 't.book', status: 't.status' },
-  { type: 'sale_return', label: 'Sales return', from: 'sales_returns t JOIN sales o ON o.id = t.sale_id', date: 't.business_date', posted: 't.posted_at', id: 't.id', amount: 't.refund_cents', book: 'o.book', status: "'posted'" },
+  { type: 'sale_return', label: 'Sales return', from: 'sales_returns t JOIN sales o ON o.id = t.sale_id', date: 't.business_date', posted: 't.posted_at', id: 't.id', amount: 't.refund_cents', book: 'o.book', status: 't.status' },
   { type: 'purchase', label: 'Purchase', from: 'purchases t', date: 't.business_date', posted: 't.posted_at', id: 't.id', amount: 't.total_cents', book: 't.book', status: 't.status' },
   { type: 'purchase_return', label: 'Purchase return', from: 'purchase_returns t JOIN purchases o ON o.id = t.purchase_id', date: 't.business_date', posted: 't.posted_at', id: 't.id', amount: 't.refund_cents', book: 'o.book', status: "'posted'" },
   { type: 'stock_loss', label: 'Stock loss', from: 'stock_losses t', date: 't.business_date', posted: 't.posted_at', id: 't.id', amount: 't.cost_cents', book: 't.book', status: 't.status' },

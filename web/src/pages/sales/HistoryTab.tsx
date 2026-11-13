@@ -75,7 +75,11 @@ export function HistoryTab() {
     {
       key: 'returns',
       header: 'Returns',
-      render: (s) => (s.returns.length > 0 ? <Badge tone="amber">{s.returns.length} return{s.returns.length === 1 ? '' : 's'}</Badge> : '—'),
+      render: (s) => {
+        // R-VR: a voided return no longer counts
+        const n = s.returns.filter((r) => r.status === 'posted').length;
+        return n > 0 ? <Badge tone="amber">{n} return{n === 1 ? '' : 's'}</Badge> : '—';
+      },
     },
   ];
 
