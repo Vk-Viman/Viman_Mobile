@@ -42,7 +42,7 @@ describe('empty database', () => {
       // a book with no entry yet has nothing to close, so a brand-new shop does not start with a list of "unclosed" days
       openDaysBehind: [{ book: 'shop', dates: [] }, { book: 'telecom', dates: [] }, { book: 'icecream', dates: [] }],
     });
-    expect(d.backup).toEqual({ latestAt: null, ageHours: null, status: 'none' });
+    expect(d.backup).toEqual({ latestAt: null, ageHours: null, status: 'none', external: NO_EXTERNAL });
     expect(d.series.daily).toEqual(datesEndingOn('2025-06-15', 30).map((date) => ({ date, salesCents: 0, profitCents: 0 })));
     expect(d.series.monthly).toHaveLength(12);
     expect(d.series.monthly[0]).toEqual({ month: '2024-07', shopCents: 0, telecomCents: 0, icecreamCents: 0, combinedCents: 0 });
@@ -184,7 +184,7 @@ describe('closings: last closed date and days not yet closed (R9, section 8)', (
 describe('backup block', () => {
   it('none -> ok after a backup; age in hours from the real clock; stale after the limit', async () => {
     const s = await fresh();
-    expect((await dash(s)).body.backup).toEqual({ latestAt: null, ageHours: null, status: 'none' });
+    expect((await dash(s)).body.backup).toEqual({ latestAt: null, ageHours: null, status: 'none', external: NO_EXTERNAL });
     const info = createBackup(s.ctx, 'manual');
     const ok = (await dash(s)).body.backup;
     expect(ok.status).toBe('ok');
