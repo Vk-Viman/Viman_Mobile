@@ -11,6 +11,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../../components/Button';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { FormDialog } from '../../components/FormDialog';
 import { MoneyInput } from '../../components/MoneyInput';
 import { SelectField } from '../../components/SelectField';
@@ -84,6 +85,8 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
   const [reorder, setReorder] = useState(product ? String(product.reorderLevel) : '0');
   const [active, setActive] = useState(product?.active ?? true);
   const [serverErr, setServerErr] = useState<ApiError | Error | null>(null);
+  // True while the "units are still in stock" question (owner decision 6) is shown before a deactivation is saved.
+  const [confirmingOff, setConfirmingOff] = useState(false);
 
   const isService = kind === 'service';
   const creatingCategory = categoryId === NEW_CATEGORY;
@@ -190,7 +193,12 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
       ? serverErr.message
       : null;
 
+  // Deactivating a product that still has stock asks first (the stock stays valued but cannot be sold or purchased).
+  const needsDeactivationWarning = product !== null && product.active && !active && product.qtyOnHand > 0;
+
   const submit = () => {
+    if (needsDeactivationWarning && !confirmingOff) { setConfirmingOff(true); return; }
+    setConfirmingOff(false);
     setServerErr(null);
     if (product) {
       update.mutate({ id: product.id, body }, {
@@ -224,147 +232,159 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
   };
 
   return (
-    <FormDialog
-      title={editing ? `Edit product: ${product.name}` : 'New product'}
-      submitLabel={editing ? 'Save changes' : 'Add product'}
-      canSubmit={valid && dirty}
-      loading={pending}
-      error={bannerMsg}
-      onSubmit={submit}
-      onClose={onClose}
-      paused={paused}
-    >
-      {/* Step 1: the book. Fixed (shown, not editable) when editing: moving a product between books is not allowed. */}
-      <CategoryBookChoice
-        label="1. Business book *"
-        value={book}
-        onChange={setBook}
-        disabled={editing || (lockBook && defaultBook !== undefined)}
-        hint={editing ? 'The book of an existing product cannot be changed.' : 'Choose Shop or Telecom first. Then only categories of that book are offered.'}
-      />
-      {/* Step 2: the category, limited to the chosen book. */}
-      <div>
-        <SelectField
-          label="2. Category *"
-          value={categoryId}
-          onChange={(e) => { setCategoryId(e.target.value); setServerErr(null); }}
-          disabled={book === ''}
-          error={fieldErr('categoryId')}
-          hint={book === '' ? 'Choose the business book first.' : editing ? `Only ${BOOK_LABEL[product.book]} categories can be chosen.` : undefined}
-        >
-          <option value="">{book === '' ? 'Choose the book first…' : 'Choose a category…'}</option>
-          {currentMissing && product && <option value={String(product.categoryId)}>{product.categoryName} (inactive)</option>}
-          {options.map((c) => (
-            <option key={c.id} value={String(c.id)}>{c.name}</option>
-          ))}
-          {!editing && book !== '' && <option value={NEW_CATEGORY}>+ Create new category…</option>}
-        </SelectField>
-        {cats.isError && (
-          <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-red-600">
-            Could not load categories.
-            <Button variant="ghost" className="!min-h-8 !px-2" onClick={() => void cats.refetch()}>Retry</Button>
-          </p>
+    <>
+      <FormDialog
+        title={editing ? `Edit product: ${product.name}` : 'New product'}
+        submitLabel={editing ? 'Save changes' : 'Add product'}
+        canSubmit={valid && dirty}
+        loading={pending}
+        error={bannerMsg}
+        onSubmit={submit}
+        onClose={onClose}
+        paused={paused || confirmingOff}
+      >
+        {/* Step 1: the book. Fixed (shown, not editable) when editing: moving a product between books is not allowed. */}
+        <CategoryBookChoice
+          label="1. Business book *"
+          value={book}
+          onChange={setBook}
+          disabled={editing || (lockBook && defaultBook !== undefined)}
+          hint={editing ? 'The book of an existing product cannot be changed.' : 'Choose Shop or Telecom first. Then only categories of that book are offered.'}
+        />
+        {/* Step 2: the category, limited to the chosen book. */}
+        <div>
+          <SelectField
+            label="2. Category *"
+            value={categoryId}
+            onChange={(e) => { setCategoryId(e.target.value); setServerErr(null); }}
+            disabled={book === ''}
+            error={fieldErr('categoryId')}
+            hint={book === '' ? 'Choose the business book first.' : editing ? `Only ${BOOK_LABEL[product.book]} categories can be chosen.` : undefined}
+          >
+            <option value="">{book === '' ? 'Choose the book first…' : 'Choose a category…'}</option>
+            {currentMissing && product && <option value={String(product.categoryId)}>{product.categoryName} (inactive)</option>}
+            {options.map((c) => (
+              <option key={c.id} value={String(c.id)}>{c.name}</option>
+            ))}
+            {!editing && book !== '' && <option value={NEW_CATEGORY}>+ Create new category…</option>}
+          </SelectField>
+          {cats.isError && (
+            <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-red-600">
+              Could not load categories.
+              <Button variant="ghost" className="!min-h-8 !px-2" onClick={() => void cats.refetch()}>Retry</Button>
+            </p>
+          )}
+          {book !== '' && cats.isSuccess && options.length === 0 && !creatingCategory && (
+            <p className="mt-1 text-xs text-slate-500">There is no active {BOOK_LABEL[book]} category yet. Choose “+ Create new category…”.</p>
+          )}
+        </div>
+        {creatingCategory && book !== '' && (
+          <div className="rounded-lg border border-brand-200 bg-brand-50 p-3">
+            <TextField
+              label={`New ${BOOK_LABEL[book]} category name *`}
+              value={newCategoryName}
+              onChange={(e) => { setNewCategoryName(e.target.value); setServerErr(null); }}
+              error={fieldErr('newCategory') ?? (categoryClash && serverErr ? serverErr.message : undefined)}
+              hint={`The new category is added to the ${BOOK_LABEL[book]} book together with this product.`}
+              maxLength={CATEGORY_NAME_MAX + 20}
+              autoComplete="off"
+            />
+            {existingCategory && (
+              <Button
+                variant="secondary"
+                className="mt-2"
+                onClick={() => { setCategoryId(String(existingCategory.id)); setNewCategoryName(''); setServerErr(null); }}
+              >
+                Use the existing category “{existingCategory.name}”
+              </Button>
+            )}
+          </div>
         )}
-        {book !== '' && cats.isSuccess && options.length === 0 && !creatingCategory && (
-          <p className="mt-1 text-xs text-slate-500">There is no active {BOOK_LABEL[book]} category yet. Choose “+ Create new category…”.</p>
+        {/* Step 3: the details. */}
+        <TextField label="3. Product name *" value={name} onChange={(e) => setName(e.target.value)} error={fieldErr('name')} maxLength={200} autoComplete="off" />
+        {productClash && (
+          <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            {clashProduct ? (
+              <>
+                <p>
+                  A product named “{clashProduct.name}” already exists ({BOOK_LABEL[clashProduct.book]} book, category {clashProduct.categoryName}
+                  {!clashProduct.active ? ', currently inactive' : ''}). Use it instead of creating a duplicate.
+                </p>
+                {onUseExisting && clashProduct.active && clashProduct.kind === 'stock' && (defaultBook === undefined || clashProduct.book === defaultBook) && (
+                  <Button variant="secondary" className="mt-2" onClick={() => { onUseExisting(clashProduct); onClose(); }}>
+                    Use the existing product “{clashProduct.name}”
+                  </Button>
+                )}
+                {!clashProduct.active && <p className="mt-1">Reactivate it in Products &gt; Products, or choose another name.</p>}
+                {defaultBook !== undefined && clashProduct.book !== defaultBook && (
+                  <p className="mt-1">It belongs to the {BOOK_LABEL[clashProduct.book]} book, so it cannot be used here. Choose a different name.</p>
+                )}
+              </>
+            ) : (
+              <p>A product with this name already exists. Search for it in the product list instead of creating it again, or choose another name.</p>
+            )}
+          </div>
         )}
-      </div>
-      {creatingCategory && book !== '' && (
-        <div className="rounded-lg border border-brand-200 bg-brand-50 p-3">
-          <TextField
-            label={`New ${BOOK_LABEL[book]} category name *`}
-            value={newCategoryName}
-            onChange={(e) => { setNewCategoryName(e.target.value); setServerErr(null); }}
-            error={fieldErr('newCategory') ?? (categoryClash && serverErr ? serverErr.message : undefined)}
-            hint={`The new category is added to the ${BOOK_LABEL[book]} book together with this product.`}
-            maxLength={CATEGORY_NAME_MAX + 20}
-            autoComplete="off"
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField label="Code" value={code} onChange={(e) => setCode(e.target.value)} error={fieldErr('code')} hint="Optional. Must be unique." autoComplete="off" />
+          <SelectField
+            label="Kind *"
+            value={kind}
+            onChange={(e) => {
+              const k = e.target.value as ProductKind;
+              setKind(k);
+              // Services hold no stock, so their reorder level is forced to 0.
+              if (k === 'service') setReorder('0');
+            }}
+            disabled={editing || !isService}
+            error={fieldErr('kind')}
+            hint={editing ? 'Kind cannot be changed after the product is created.' : 'Services are managed under Services → Service types.'}
+          >
+            <option value="stock">Stock item</option>
+            {(editing || isService) && <option value="service">Service</option>}
+          </SelectField>
+        </div>
+        <div>
+          <label htmlFor="product-desc" className="mb-1 block text-sm font-medium text-slate-700">Description</label>
+          <textarea
+            id="product-desc"
+            rows={2}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className={inputClass(fieldErr('description'))}
           />
-          {existingCategory && (
-            <Button
-              variant="secondary"
-              className="mt-2"
-              onClick={() => { setCategoryId(String(existingCategory.id)); setNewCategoryName(''); setServerErr(null); }}
-            >
-              Use the existing category “{existingCategory.name}”
-            </Button>
-          )}
+          {fieldErr('description') && <p className="mt-1 text-sm text-red-600">{fieldErr('description')}</p>}
         </div>
-      )}
-      {/* Step 3: the details. */}
-      <TextField label="3. Product name *" value={name} onChange={(e) => setName(e.target.value)} error={fieldErr('name')} maxLength={200} autoComplete="off" />
-      {productClash && (
-        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          {clashProduct ? (
-            <>
-              <p>
-                A product named “{clashProduct.name}” already exists ({BOOK_LABEL[clashProduct.book]} book, category {clashProduct.categoryName}
-                {!clashProduct.active ? ', currently inactive' : ''}). Use it instead of creating a duplicate.
-              </p>
-              {onUseExisting && clashProduct.active && clashProduct.kind === 'stock' && (defaultBook === undefined || clashProduct.book === defaultBook) && (
-                <Button variant="secondary" className="mt-2" onClick={() => { onUseExisting(clashProduct); onClose(); }}>
-                  Use the existing product “{clashProduct.name}”
-                </Button>
-              )}
-              {!clashProduct.active && <p className="mt-1">Reactivate it in Products &gt; Products, or choose another name.</p>}
-              {defaultBook !== undefined && clashProduct.book !== defaultBook && (
-                <p className="mt-1">It belongs to the {BOOK_LABEL[clashProduct.book]} book, so it cannot be used here. Choose a different name.</p>
-              )}
-            </>
-          ) : (
-            <p>A product with this name already exists. Search for it in the product list instead of creating it again, or choose another name.</p>
-          )}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <MoneyInput label="Selling price (Rs.) *" value={sell} onChange={setSell} error={fieldErr('sellPriceCents')} />
+          <MoneyInput label="Minimum selling price (Rs.) *" value={min} onChange={setMin} error={fieldErr('minPriceCents')} />
+          <TextField
+            label="Reorder level"
+            inputMode="numeric"
+            value={isService ? '0' : reorder}
+            onChange={(e) => setReorder(e.target.value)}
+            disabled={isService}
+            error={fieldErr('reorderLevel')}
+            hint={isService ? 'Services do not hold stock.' : undefined}
+          />
         </div>
-      )}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField label="Code" value={code} onChange={(e) => setCode(e.target.value)} error={fieldErr('code')} hint="Optional. Must be unique." autoComplete="off" />
-        <SelectField
-          label="Kind *"
-          value={kind}
-          onChange={(e) => {
-            const k = e.target.value as ProductKind;
-            setKind(k);
-            // Services hold no stock, so their reorder level is forced to 0.
-            if (k === 'service') setReorder('0');
-          }}
-          disabled={editing}
-          error={fieldErr('kind')}
-          hint={editing ? 'Kind cannot be changed after the product is created.' : undefined}
-        >
-          <option value="stock">Stock item</option>
-          <option value="service">Service</option>
-        </SelectField>
-      </div>
-      <div>
-        <label htmlFor="product-desc" className="mb-1 block text-sm font-medium text-slate-700">Description</label>
-        <textarea
-          id="product-desc"
-          rows={2}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          className={inputClass(fieldErr('description'))}
-        />
-        {fieldErr('description') && <p className="mt-1 text-sm text-red-600">{fieldErr('description')}</p>}
-      </div>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <MoneyInput label="Selling price (Rs.) *" value={sell} onChange={setSell} error={fieldErr('sellPriceCents')} />
-        <MoneyInput label="Minimum selling price (Rs.) *" value={min} onChange={setMin} error={fieldErr('minPriceCents')} />
-        <TextField
-          label="Reorder level"
-          inputMode="numeric"
-          value={isService ? '0' : reorder}
-          onChange={(e) => setReorder(e.target.value)}
-          disabled={isService}
-          error={fieldErr('reorderLevel')}
-          hint={isService ? 'Services do not hold stock.' : undefined}
-        />
-      </div>
-      {editing && (
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <input type="checkbox" className={CHECKBOX_CLASS} checked={active} onChange={(e) => setActive(e.target.checked)} />
-          Active
-        </label>
-      )}
-    </FormDialog>
+        {editing && (
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" className={CHECKBOX_CLASS} checked={active} onChange={(e) => setActive(e.target.checked)} />
+            Active
+          </label>
+        )}
+      </FormDialog>
+      <ConfirmDialog
+        open={confirmingOff}
+        title="Deactivate product with stock?"
+        confirmLabel="Confirm"
+        loading={update.isPending}
+        onConfirm={submit}
+        onClose={() => setConfirmingOff(false)}
+      >
+        {product?.qtyOnHand} units are still in stock; they stay valued but cannot be sold or purchased until you reactivate the product.
+      </ConfirmDialog>
+    </>
   );
 }
