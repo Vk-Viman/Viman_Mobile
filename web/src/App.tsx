@@ -8,7 +8,7 @@
  * Sidebar entries that are not built yet (`built: false` in layout/navItems.ts) get a "Coming soon" placeholder
  * automatically, so the menu and the routes can never disagree. Unknown addresses redirect to the Dashboard.
  */
-import { Navigate, Route, Routes } from 'react-router';
+import { Navigate, Route, Routes, useParams } from 'react-router';
 import { AppLayout } from './layout/AppLayout';
 import { NAV_ITEMS } from './layout/navItems';
 import { ComingSoon } from './pages/ComingSoon';
@@ -64,6 +64,12 @@ import { ManualTab } from './pages/opening-stock/ManualTab';
 import { ImportTab } from './pages/opening-stock/ImportTab';
 
 /** Root component: declares every route. Renders no markup of its own. */
+/** Old "/printing" links (bookmarks, history) keep working after the screen was renamed to Services (2026-11-13). */
+function PrintingRedirect() {
+  const rest = useParams()['*'] ?? '';
+  return <Navigate to={rest ? `/services/${rest}` : '/services'} replace />;
+}
+
 export function App() {
   return (
     <Routes>
@@ -116,7 +122,7 @@ export function App() {
           <Route path="ezcash" element={<EzCashTab />} />
           <Route path="topups" element={<TopupsTab />} />
         </Route>
-        <Route path="printing/*" element={<Navigate to="/services" replace />} />
+        <Route path="printing/*" element={<PrintingRedirect />} />
         <Route path="services" element={<PrintingPage />}>
           <Route index element={<PrintSalesTab />} />
           <Route path="types" element={<ServiceTypesTab />} />

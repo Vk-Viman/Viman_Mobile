@@ -40,5 +40,5 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/drawings', label: 'Drawings', icon: HandCoins, phase: 9, description: 'Owner drawings, capital introduced into the business, and transfers between cash books.', built: true },
   { to: '/ice-cream', label: 'Ice Cream', icon: IceCreamCone, phase: 10, description: 'Daily ice cream entries, payments, fund moves and the cost, electricity and profit funds.', built: true },
   { to: '/reports', label: 'Reports', icon: BarChart3, phase: 11, description: 'Profit and loss, cash and stock reports by segment and period.', built: true },
-  { to: '/settings', label: 'Settings', icon: Settings, phase: 1, description: 'Shop details, commission rates, backups and the audit log. Print prices are under Printing.', built: true },
+  { to: '/settings', label: 'Settings', icon: Settings, phase: 1, description: 'Shop details, commission rates, backups and the audit log. Print and service prices are under Services.', built: true },
 ];
