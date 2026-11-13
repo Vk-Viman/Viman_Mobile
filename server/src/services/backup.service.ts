@@ -247,14 +247,16 @@ export function refusalError(code: string, message: string, failures: Validation
 
 /**
  * Full validation of the candidate file (after the structural gates): opens it read-only and runs every check of
- * `validateDatabase`. Nothing is written to the candidate; the trial copy lives in a temp folder that is removed.
+ * `validateDatabase`. Nothing is written to the candidate's data; the trial copy lives in a temp folder that is removed.
  *
  * @throws AppError 422 RESTORE_INVALID listing the failed checks.
  */
 function validateCandidate(candidate: string): void {
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(candidate, { readOnly: true });
+    // Read-write on purpose: the candidate is our own temporary copy, and some SQLite checks (CHECK constraints)
+    // only run on a writable connection. Validation itself never writes to it.
+    db = new DatabaseSync(candidate);
   } catch {
     throw new AppError(422, 'RESTORE_INVALID_FILE', 'This file is not a Viman Mobile database.');
   }

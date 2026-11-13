@@ -236,6 +236,14 @@ export function validateDatabase(conn: DatabaseSync, options: ValidationOptions 
     const upgradeFailures = withUpgradedCopy(conn, options, (copy) => {
       upgraded = true;
       checks.push({ code: 'trial_upgrade', status: 'passed' });
+      // Second full integrity pass on the writable trial copy: SQLite verifies CHECK constraints (e.g. a damaged JSON
+      // text in the audit log) reliably only on a read-write connection, so a read-only candidate could hide them.
+      const again = checkIntegrity(copy);
+      if (again.length) {
+        const o = checks.find((c) => c.code === 'integrity_check');
+        if (o) o.status = 'failed';
+        failures.push(...again);
+      }
       for (const inv of INVARIANT_CHECKS) run(inv.code, () => inv.run(copy, now));
     });
     if (!upgraded) {
