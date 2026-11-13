@@ -7,7 +7,8 @@
  * figures (R7: reports follow the business date; R1: only `status = 'posted'` business rows, never reversal rows).
  *
  * LINE-TO-SOURCE MAPPING (BUSINESS_RULES 1-6, 11, C4, C5, C13; API_CONTRACTS Wave 4 line definitions):
- *  - Goods / card revenue  = posted `sales` of the book (+ `sale_items`) by sale date, minus `sales_returns` by RETURN date (R5).
+ *  - Goods / card revenue  = posted `sales` of the book (+ `sale_items`) by sale date, minus POSTED `sales_returns` by RETURN date (R5);
+ *                            a voided return (R-VR) is never read, so its period looks as if it had never been recorded.
  *  - Cost of sales         = sale_items.cogs_cents (automatic) - sales_returns.cogs_reversed_cents, plus the C13 extra
  *                            cost sale_items.extra_cost_cents - sales_returns.extra_cost_reversed_cents.
  *  - Service revenue/cost  = posted `print_sales` (R12); `printing_supplies` are never read (variance report only).
@@ -18,6 +19,7 @@
  *        'stocktake_loss'  (value_delta < 0)  -> stocktake losses;  'stocktake_gain' (value_delta > 0) -> stocktake gains
  *        'adjustment'      (value-only)       -> residual sweeps of purchase returns/voids (R4)
  *        purchase refund gain (R4) = refunds + voided purchase totals - value removed by 'purchase_return'/'purchase_void' movements
+ *        sales-return void gain (R-VR 3) = value restored by a voided return - value its void took out = sum of its 'sale_return' movements
  *      (a damaged sales return writes NO stock movement, only its loss row at the original AUTOMATIC cost - the C13 extra cost is
  *      reversed with the revenue, not lost - so it is counted exactly once, section 4; a manual loss also writes a 'loss' movement,
  *      which is deliberately NOT read here, so it is never counted twice).
@@ -57,7 +59,7 @@ export function salesByPeriod(conn: DatabaseSync, periods: readonly Period[], bo
   const returns = sumByPeriod(conn, periods,
     `SELECT r.business_date AS d, SUM(r.refund_cents) AS rev, SUM(r.cogs_reversed_cents) AS cogs, SUM(r.extra_cost_reversed_cents) AS extra
        FROM sales_returns r JOIN sales s ON s.id = r.sale_id
-      WHERE s.book = ? AND s.status = 'posted' AND r.business_date BETWEEN ? AND ?
+      WHERE s.book = ? AND s.status = 'posted' AND r.status = 'posted' AND r.business_date BETWEEN ? AND ?
       GROUP BY r.business_date`, [book, from, to], ['rev', 'cogs', 'extra'] as const);
   return periods.map((_, i) => {
     const s = sales[i]!;
@@ -108,6 +110,11 @@ export interface AdjustmentFigures {
   residualSweepsCents: number;
   /** R4: cash refunded by the supplier above the stock value removed (a GAIN, shown positive; it REDUCES the net adjustment cost). */
   purchaseRefundGainCents: number;
+  /**
+   * R-VR 3: stock value the return restored minus the value the void of that return actually took out again (a GAIN when positive,
+   * shown positive; it REDUCES the net adjustment cost, exactly like the purchase refund gain). Lands in the RETURN's period.
+   */
+  salesReturnVoidGainCents: number;
   netCents: number;
 }
 
@@ -144,6 +151,14 @@ export function adjustmentsByPeriod(conn: DatabaseSync, periods: readonly Period
        FROM stock_movements m JOIN products p ON p.id = m.product_id
       WHERE p.book = ? AND m.type IN ('purchase_return','purchase_void') AND m.business_date BETWEEN ? AND ?
       GROUP BY m.business_date`, [book, from, to], ['v'] as const);
+  // R-VR 3: for every VOID sales return, the sum of its 'sale_return' movements = value restored (+) + value removed again (-) = the gain.
+  // Both rows carry the return's business date. The residual sweep of a void ('adjustment') is already inside `sweeps`, not here.
+  const voidGain = sumByPeriod(conn, periods,
+    `SELECT m.business_date AS d, SUM(m.value_delta_cents) AS v
+       FROM stock_movements m JOIN products p ON p.id = m.product_id JOIN sales_returns r ON r.id = m.ref_id
+      WHERE p.book = ? AND m.type = 'sale_return' AND m.ref_table = 'sales_returns' AND r.status = 'void'
+        AND m.business_date BETWEEN ? AND ?
+      GROUP BY m.business_date`, [book, from, to], ['v'] as const);
   const v = (type: string, i: number): number => moves.get(type)?.[i]?.v ?? 0;
   return periods.map((_, i) => {
     // A loss removes value (negative delta) = a cost; a gain adds value (positive delta) = a credit.
@@ -153,10 +168,12 @@ export function adjustmentsByPeriod(conn: DatabaseSync, periods: readonly Period
     const sweeps = neg(v('adjustment', i));
     const damagedReturn = lossRows.get('damaged_return')?.[i]?.c ?? 0;
     const refundGain = refunds[i]!.c + voided[i]!.c + removed[i]!.v;
+    const returnVoidGain = voidGain[i]!.v;
     return {
       lossesCents: losses, damagedReturnLossesCents: damagedReturn, stocktakeLossesCents: stocktakeLosses,
       stocktakeGainsCents: gains, residualSweepsCents: sweeps, purchaseRefundGainCents: refundGain,
-      netCents: losses + damagedReturn + stocktakeLosses + sweeps - gains - refundGain,
+      salesReturnVoidGainCents: returnVoidGain,
+      netCents: losses + damagedReturn + stocktakeLosses + sweeps - gains - refundGain - returnVoidGain,
     };
   });
 }

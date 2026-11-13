@@ -73,7 +73,7 @@ export function salesReport(conn: DatabaseSync, q: SalesQuery): SalesReport {
     `SELECT ${periodKeySql('r.business_date', q.granularity)} AS k, s.book AS book, COUNT(*) AS n,
             SUM(r.refund_cents) AS rev, SUM(r.cogs_reversed_cents) AS cogs, SUM(r.extra_cost_reversed_cents) AS extra
        FROM sales_returns r JOIN sales s ON s.id = r.sale_id
-      WHERE s.status = 'posted' AND r.business_date BETWEEN ? AND ?${bookSql} GROUP BY k, s.book`,
+      WHERE s.status = 'posted' AND r.status = 'posted' AND r.business_date BETWEEN ? AND ?${bookSql} GROUP BY k, s.book`,
   ).all(...args) as unknown as SqlRow[]) {
     const c = cell(String(r.k), r.book as StockBook);
     c.returnCount = num(r.n); c.returnsCents = num(r.rev); c.costAutoCents -= num(r.cogs); c.costExtraCents -= num(r.extra);

@@ -503,7 +503,7 @@ export async function shopIdentity(s: { app: FastifyInstance; ctx: AppContext })
   const supplies = -cash(['printing_supplies']);
   const svcCost = n1(ctx, "SELECT COALESCE(SUM(cogs_cents),0) FROM print_sales WHERE status='posted'");
   const extra = n1(ctx, "SELECT COALESCE(SUM(si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id = si.sale_id WHERE x.status='posted' AND x.book='shop'")
-    - n1(ctx, "SELECT COALESCE(SUM(r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id = r.sale_id WHERE x.book='shop'");
+    - n1(ctx, "SELECT COALESCE(SUM(r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id = r.sale_id WHERE x.book='shop' AND r.status='posted'");
   const ledgerProfit = equity - inflows + drawings + supplies - svcCost - extra;
   const first = rows(ctx, 'SELECT MIN(d) d FROM (SELECT MIN(business_date) d FROM cash_entries UNION ALL SELECT MIN(business_date) FROM stock_movements)')[0]!.d as string | null;
   const rep = first ? (await get(s.app, `/reports/pnl/shop?from=${first}&to=${todayColombo()}&granularity=month`)).body.totals.netProfitCents as number : 0;
@@ -527,9 +527,9 @@ export function segNetFromTables(ctx: AppContext, book: 'shop' | 'telecom', from
     ? n1(ctx, `SELECT COALESCE(SUM(commission_cents),0) FROM reload_sales WHERE status='posted' AND ${w('business_date')}`) + n1(ctx, `SELECT COALESCE(SUM(commission_cents),0) FROM ezcash_sales WHERE status='posted' AND ${w('business_date')}`)
     : n1(ctx, `SELECT COALESCE(SUM(revenue_cents - cogs_cents),0) FROM print_sales WHERE status='posted' AND ${w('business_date')}`);
   const rev = n1(ctx, `SELECT COALESCE(SUM(si.revenue_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='${book}' AND ${w('x.business_date')}`)
-    - n1(ctx, `SELECT COALESCE(SUM(r.refund_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='${book}' AND ${w('r.business_date')}`);
+    - n1(ctx, `SELECT COALESCE(SUM(r.refund_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='${book}' AND r.status='posted' AND ${w('r.business_date')}`);
   const cost = n1(ctx, `SELECT COALESCE(SUM(si.cogs_cents + si.extra_cost_cents),0) FROM sale_items si JOIN sales x ON x.id=si.sale_id WHERE x.status='posted' AND x.book='${book}' AND ${w('x.business_date')}`)
-    - n1(ctx, `SELECT COALESCE(SUM(r.cogs_reversed_cents + r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='${book}' AND ${w('r.business_date')}`);
+    - n1(ctx, `SELECT COALESCE(SUM(r.cogs_reversed_cents + r.extra_cost_reversed_cents),0) FROM sales_returns r JOIN sales x ON x.id=r.sale_id WHERE x.book='${book}' AND r.status='posted' AND ${w('r.business_date')}`);
   const exp = n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM expenses WHERE status='posted' AND book='${book}' AND ${w('business_date')}`);
   const adj = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('loss','stocktake_gain','stocktake_loss','adjustment') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`)
     + n1(ctx, `SELECT COALESCE(SUM(cost_cents),0) FROM stock_losses WHERE status='posted' AND source='damaged_return' AND book='${book}' AND ${w('business_date')}`);
@@ -538,7 +538,10 @@ export function segNetFromTables(ctx: AppContext, book: 'shop' | 'telecom', from
   // minus the stock value removed by the purchase_return / purchase_void movements (the residual sweep is in `adj` already).
   const refunds = n1(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book='${book}' AND (type='purchase_refund' OR (type='purchase_payment' AND reverses_entry_id IS NOT NULL)) AND ${w('business_date')}`);
   const removed = -n1(ctx, `SELECT COALESCE(SUM(value_delta_cents),0) FROM stock_movements WHERE type IN ('purchase_return','purchase_void') AND ${w('business_date')} AND product_id IN (SELECT id FROM products WHERE book='${book}')`);
-  return comm + (rev - cost) - exp - adj + os + (refunds - removed);
+  // R-VR 3 (sales-return void gain): value a voided return restored minus the value its void took out = sum of the 'sale_return' movements of void returns.
+  const voidGain = n1(ctx, `SELECT COALESCE(SUM(m.value_delta_cents),0) FROM stock_movements m JOIN sales_returns r ON r.id = m.ref_id
+    WHERE m.type='sale_return' AND m.ref_table='sales_returns' AND r.status='void' AND ${w('m.business_date')} AND m.product_id IN (SELECT id FROM products WHERE book='${book}')`);
+  return comm + (rev - cost) - exp - adj + os + (refunds - removed) + voidGain;
 }
 
 /** Row count of every table: a cheap "did anything get written?" fingerprint. */
