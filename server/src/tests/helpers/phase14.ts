@@ -646,11 +646,20 @@ export class Simulation {
     for (let i = 0; i < 12; i++) {
       const d = daysAgo(this.int(0, 14));
       if (minDate && d < minDate) continue;
-      if (!this.isClosed(books, d)) return d;
+      if (!this.blocked(books, d)) return d; // open for writing: not closed and not before a closed day (section 8 ordering)
     }
     return null;
   }
   isClosed(books: Book[], d: string): boolean { return books.some((b) => this.closed.has(`${b}|${d}`)); }
+  /**
+   * Closed-day rules for a write dated `d` touching `books` (BUSINESS_RULES section 8, written independently of the server):
+   * DAY_CLOSED when `d` is closed for any of them (it wins), BACKDATE_BEFORE_CLOSED_DAY when a LATER day is closed for any of them, else null.
+   */
+  blocked(books: Book[], d: string): 'DAY_CLOSED' | 'BACKDATE_BEFORE_CLOSED_DAY' | null {
+    if (this.isClosed(books, d)) return 'DAY_CLOSED';
+    for (const k of this.closed) { const [b, day] = k.split('|'); if (books.includes(b as Book) && (day as string) > d) return 'BACKDATE_BEFORE_CLOSED_DAY'; }
+    return null;
+  }
   bookOf(pid: number): Book { return this.telP.includes(pid) ? 'telecom' : 'shop'; }
 
   // ---------- model ----------
@@ -909,10 +918,10 @@ export class Simulation {
     if (!cands.length) return;
     const rec = this.pick(cands);
     const before = countsAll(this.s.ctx);
-    const closed = this.isClosed(rec.books, rec.date);
+    const closed = this.blocked(rec.books, rec.date);
     const r = await post(this.s.app, rec.voidUrl!, { reason: 'sim void' });
     this.stats.byKind[`void:${rec.kind}`] = (this.stats.byKind[`void:${rec.kind}`] ?? 0) + 1;
-    if (closed) return this.refuse(`void ${rec.kind}`, r, 409, 'DAY_CLOSED', before);
+    if (closed) return this.refuse(`void ${rec.kind}`, r, 409, closed, before);
     if (rec.kind === 'sale' && rec.hasReturns) return this.refuse('void sale', r, 409, 'HAS_RETURNS', before);
     if (rec.kind === 'purchase') {
       const pur = rec.pur!;
@@ -1083,7 +1092,8 @@ export class Simulation {
     const S = this.int(1, 80000); const C = this.int(0, S); const E = this.int(0, S - C); const share = S - C - E;
     const before = countsAll(this.s.ctx);
     const r = await put(this.s.app, `/icecream/days/${rec.dayDate}`, { salesCents: S, costAllocCents: C, electricityAllocCents: E, clientRef: ref() });
-    if (this.isClosed(['icecream'], rec.date)) return this.refuse('ice day replace', r, 409, 'DAY_CLOSED', before);
+    const blockedDay = this.blocked(['icecream'], rec.date);
+    if (blockedDay) return this.refuse('ice day replace', r, 409, blockedDay, before);
     // D2 judged on the FINAL state (old entry removed, new one in)
     const old = rec.ice as { C: number; E: number; share: number };
     const next = { ChM: this.ice.ChM - old.C + C, ChE: this.ice.ChE - old.E + E, SeM: this.ice.SeM, SeE: this.ice.SeE, rel: this.ice.rel };
@@ -1197,7 +1207,8 @@ export class Simulation {
     const cands = this.recs.filter((r) => r.voided && r.voidUrl && r.kind !== 'iceday'); if (!cands.length) return;
     const rec = this.pick(cands); const before = countsAll(this.s.ctx);
     const r = await post(this.s.app, rec.voidUrl!, { reason: 'again' });
-    if (this.isClosed(rec.books, rec.date)) return this.refuse('double void', r, 409, 'DAY_CLOSED', before);
+    const blockedVoid = this.blocked(rec.books, rec.date);
+    if (blockedVoid) return this.refuse('double void', r, 409, blockedVoid, before);
     await this.refuse(`double void ${rec.kind}`, r, 409, 'ALREADY_VOID', before);
   }
 
