@@ -243,9 +243,9 @@ function perCashBook(book: Book): Op[] {
       void: (fx, c) => capVoid(fx.s, c.body.item.id),
     },
     {
-      // Always 1,000 cents above the balance as of its date, so the adjustment (a cash entry) is never zero.
+      // Always 1,000 cents above the balance as of its date (or 0 when the balance is negative), so the adjustment (a cash entry) is never zero.
       key: `cash count with adjustment (${book})`, books: [book],
-      create: (fx, d) => countNew(fx.s, book, balAsOf(fx.s, book, d) + 1000, { businessDate: d, note: 'drawer over', ...fund }),
+      create: (fx, d) => { const b = balAsOf(fx.s, book, d); return countNew(fx.s, book, b >= 0 ? b + 1000 : 0, { businessDate: d, note: 'drawer differs', ...fund }); },
       void: (fx, c) => countVoid(fx.s, c.body.item.id),
     },
   ];
