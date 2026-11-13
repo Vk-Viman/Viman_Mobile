@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase } from './helpers/inventory.ts';
 import { buildWorld19 } from './helpers/phase19h.ts';
-import { damagedCopy, trialFolders } from './helpers/phase22rs.ts';
+import { damagedCopy } from './helpers/phase22rs.ts';
 import { createBackup } from '../services/backup.service.ts';
 import { CHECK_CODES, validateDatabase } from '../services/database-validation.ts';
 import type { ValidationResult } from '../services/database-validation.ts';
@@ -77,13 +77,21 @@ describe('a valid database', () => {
   });
 
   it('is fast enough (a few seconds on the audit world) and leaves no temporary folder behind', () => {
-    const before = trialFolders(tmpdir());
-    const t0 = Date.now();
-    expect(verdict(base).ok).toBe(true);
-    const ms = Date.now() - t0;
-    console.log(`validation of the audit world: ${ms} ms (first run ${worldMs} ms, ${Math.round(readFileSync(base).length / 1024)} KB)`);
-    expect(ms).toBeLessThan(5000);
-    expect(trialFolders(tmpdir())).toEqual(before);
+    // own temp folder (other test files run in parallel and also use the OS temp folder)
+    const mine = mkdtempSync(join(tmpdir(), 'viman-p22t-'));
+    try {
+      const t0 = Date.now();
+      const db = new DatabaseSync(base);
+      try { expect(validateDatabase(db, { tempDir: mine }).ok).toBe(true); } finally { db.close(); }
+      const ms = Date.now() - t0;
+      console.log(`validation of the audit world: ${ms} ms (first run ${worldMs} ms, ${Math.round(readFileSync(base).length / 1024)} KB)`);
+      expect(ms).toBeLessThan(5000);
+      expect(readdirSync(mine)).toEqual([]);
+      // a failing validation cleans up as well
+      const bad = new DatabaseSync(damaged((d) => d.exec('DROP INDEX idx_sales_returns_status')));
+      try { expect(validateDatabase(bad, { tempDir: mine }).ok).toBe(false); } finally { bad.close(); }
+      expect(readdirSync(mine)).toEqual([]);
+    } finally { rmSync(mine, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
   });
 
   it('does not change the candidate file at all', () => {

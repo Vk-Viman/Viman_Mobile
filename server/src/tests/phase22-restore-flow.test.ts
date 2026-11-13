@@ -18,7 +18,7 @@ import { buildWorld19 } from './helpers/phase19h.ts';
 import { buildMultipart } from './helpers/multipart.ts';
 import type { Part } from './helpers/multipart.ts';
 import { diffSnapshots, snapshotAll } from './helpers/phase14.ts';
-import { damagedCopy, diffExceptRefusalAudit, hashFile, refusalRows, strayTempFiles, trialFolders } from './helpers/phase22rs.ts';
+import { damagedCopy, diffExceptRefusalAudit, hashFile, refusalRows, strayTempFiles } from './helpers/phase22rs.ts';
 import { distinctBackup, putFolder } from './helpers/phase19bk.ts';
 import { createBackup } from '../services/backup.service.ts';
 import { externalCopyIdle } from '../services/external-backup.service.ts';
@@ -86,7 +86,6 @@ describe('a refusal (stock cache edited in the file)', () => {
     const safetyBefore = safetyCopies();
     const rowsBefore = refusalRows(s.ctx).length;
     const sumBefore = sumExpenses();
-    const trialsBefore = trialFolders(tmpdir());
     const r = await upload(s.app, readFileSync(bad), 'bad-stock.db');
     expect(r.statusCode).toBe(422);
     expect(diffExceptRefusalAudit(before, s.ctx)).toEqual([]);
@@ -95,7 +94,7 @@ describe('a refusal (stock cache edited in the file)', () => {
     expect(sumExpenses()).toBe(sumBefore);
     expect(safetyCopies()).toEqual(safetyBefore); // validation comes BEFORE the safety backup
     expect(strayTempFiles(s.ctx.dataDir)).toEqual([]);
-    expect(trialFolders(tmpdir())).toEqual(trialsBefore);
+    // (the trial-copy folder is proven removed in phase22-restore-validation.test.ts with a private temp folder; other test files share the OS temp folder)
     expect(s.ctx.isRestoring).toBe(false);
   });
 
