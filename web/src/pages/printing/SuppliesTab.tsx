@@ -1,5 +1,5 @@
 /**
- * SuppliesTab (route "/printing/supplies"): paper and toner purchases for the print shop.
+ * SuppliesTab (route "/services/supplies"): paper and toner purchases for the print shop.
  *
  * A supplies purchase is a CASH-OUT of the Shop cash book and has NO effect on profit (R12): profit only ever
  * charges the standard cost of each page sold. The later variance report compares that standard cost with what was

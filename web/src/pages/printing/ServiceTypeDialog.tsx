@@ -1,5 +1,5 @@
 /**
- * ServiceTypeDialog: add a print service type, or edit an existing one (name, price, standard cost, active).
+ * ServiceTypeDialog: add a service type (printing, photocopying or any other service), or edit an existing one (name, price, standard cost, active).
  * API: POST /print-service-types (new) or PUT /print-service-types/:id (edit) via api/printing.ts.
  * The code (capital letters, digits, underscore; 2-20 characters) is chosen once and can never be changed later.
  * Money is typed in rupees and converted to integer cents with rupeesToCents(); the server re-validates everything.
@@ -73,12 +73,13 @@ export function ServiceTypeDialog({ editing, onClose }: { editing: PrintServiceT
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           autoComplete="off"
           spellCheck={false}
-          hint="Capital letters, digits and underscore, 2-20 characters (for example POSTER_A3). It can never be changed."
+          hint="Capital letters, digits and underscore, 2-20 characters (for example POSTER_A3 or LAMINATION). It can never be changed."
           error={fieldError(err, 'code') ?? (showErrors && !codeOk ? 'Use 2-20 capital letters, digits or underscores.' : undefined)}
         />
       )}
       <TextField
         label="Name"
+        hint="Any service you offer, for example Phone setup or Lamination. Give it its own price and standard cost."
         value={name}
         maxLength={MAX_NAME}
         onChange={(e) => setName(e.target.value)}
@@ -86,13 +87,13 @@ export function ServiceTypeDialog({ editing, onClose }: { editing: PrintServiceT
         error={fieldError(err, 'name') ?? (showErrors && !nameOk ? 'Enter a name.' : undefined)}
       />
       <MoneyInput
-        label="Price per page (Rs.)"
+        label="Price per unit (Rs.)"
         value={price}
         onChange={setPrice}
         error={fieldError(err, 'priceCents') ?? (showErrors && !priceOk ? moneyHint : undefined)}
       />
       <MoneyInput
-        label="Standard cost per page (Rs.)"
+        label="Standard cost per unit (Rs.)"
         value={cost}
         onChange={setCost}
         error={fieldError(err, 'costCents') ?? (showErrors && !costOk ? moneyHint : undefined)}

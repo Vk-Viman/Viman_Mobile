@@ -1,5 +1,5 @@
 /**
- * PrintSalesTab (route "/printing"): quick print / photocopy sales, period totals and the sales history.
+ * PrintSalesTab (route "/services"): quick print / photocopy sales, period totals and the sales history.
  *
  * Top: the quick-entry panel (QuickEntry.tsx). Below: a history with filters (dates, service, status), paging and
  * "Void", plus the period totals (revenue, standard cost, gross profit) of the POSTED sales that match the filters.
