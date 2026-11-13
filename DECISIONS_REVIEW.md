@@ -1,6 +1,6 @@
 # Review of the 14 implementation decisions (BUSINESS_RULES.md §13A)
 
-Status: **REVIEW ONLY. Nothing here is approved and no behaviour has been changed.** Each decision stays "awaiting owner confirmation" in `BUSINESS_RULES.md` §13A until the owner decides. Every statement about current behaviour was checked against the code (migrations 001–014, services, routes, screens).
+Status: **Reviewed and DECIDED by the owner on 2026-11-13** (see BUSINESS_RULES.md §13A and the implementation report). The text below is the original review. Each decision stays "awaiting owner confirmation" in `BUSINESS_RULES.md` §13A until the owner decides. Every statement about current behaviour was checked against the code (migrations 001–014, services, routes, screens).
 
 Format per decision: **Current** behaviour · **Example** from daily operation · **If retained** · **Risk** · **Recommendation** · **If you choose differently** (development needed).
 
