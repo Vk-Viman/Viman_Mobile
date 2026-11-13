@@ -3,7 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../../app.ts';
@@ -107,6 +107,17 @@ export async function lightInvariants(s: { app: FastifyInstance; ctx: AppContext
   for (const b of api.books) {
     const sum = conn.prepare('SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ?').get(b.book) as { t: number };
     expect(b.balanceCents, `cash book ${b.book}`).toBe(Number(sum.t));
+  }
+}
+
+/** env.cleanup() plus the folders the tests renamed away (-away, -unplugged, -gone, -pulled), so no temp folder is left behind. */
+export async function cleanAll(env: TestEnv): Promise<void> {
+  const dirs = [...env.dirs];
+  await env.cleanup();
+  for (const d of dirs) {
+    for (const suffix of ['-away', '-unplugged', '-gone', '-pulled']) {
+      rmSync(`${d}${suffix}`, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   }
 }
 

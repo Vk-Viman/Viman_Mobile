@@ -3,6 +3,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { renameSync } from 'node:fs';
 import { TestEnv } from './helpers/tmp.ts';
+import { cleanAll } from './helpers/phase19bk.ts';
 import { call, get } from './helpers/catalog.ts';
 import {
   allowWrite, appWithUsb, copyNow, denyWrite, distinctBackup, errno, extStatus, logAll, oursIn, putFolder, sqlAll,
@@ -11,7 +12,7 @@ import { externalCopyIdle, runExternalCopyOnce } from '../services/external-back
 import { externalHooks, resetExternalHooks } from '../services/external-backup-hooks.ts';
 
 const env = new TestEnv();
-afterEach(async () => { resetExternalHooks(); await env.cleanup(); });
+afterEach(async () => { resetExternalHooks(); await cleanAll(env); });
 
 const T0 = Date.parse('2026-05-01T10:00:00.000Z');
 const DAY = 86_400_000;

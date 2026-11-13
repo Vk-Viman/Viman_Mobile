@@ -9,6 +9,7 @@ import { createServer } from 'node:net';
 import { readdirSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { TestEnv } from './helpers/tmp.ts';
+import { cleanAll } from './helpers/phase19bk.ts';
 import { OURS_RE, oursIn, sha256File, sleep } from './helpers/phase19bk.ts';
 
 const env = new TestEnv();
@@ -22,7 +23,7 @@ afterEach(async () => {
     }
   }
   await sleep(200); // Windows releases the database file lock a moment after the process exits
-  await env.cleanup();
+  await cleanAll(env);
 });
 
 const INDEX = resolve(import.meta.dirname, '../index.ts');

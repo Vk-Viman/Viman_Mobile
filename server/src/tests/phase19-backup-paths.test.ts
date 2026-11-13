@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync, utimesSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { TestEnv } from './helpers/tmp.ts';
+import { cleanAll } from './helpers/phase19bk.ts';
 import { call, get } from './helpers/catalog.ts';
 import {
   appWithUsb, copyNow, distinctBackup, extStatus, logAll, makeJunction, oursIn, putFolder, sha256File, sqlAll,
@@ -14,7 +15,7 @@ import { externalCopyIdle, runExternalCopyOnce } from '../services/external-back
 import { externalHooks, resetExternalHooks } from '../services/external-backup-hooks.ts';
 
 const env = new TestEnv();
-afterEach(async () => { resetExternalHooks(); await env.cleanup(); });
+afterEach(async () => { resetExternalHooks(); await cleanAll(env); });
 
 const code = (r: { status: number; body: any }): string => (r.status === 200 ? 'ACCEPTED' : r.body.error.code);
 

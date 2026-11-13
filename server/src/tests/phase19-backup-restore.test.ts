@@ -6,6 +6,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, truncat
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { TestEnv } from './helpers/tmp.ts';
+import { cleanAll } from './helpers/phase19bk.ts';
 import { apiBase, buy, daysAgo } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
 import { get, post } from './helpers/catalog.ts';
@@ -21,7 +22,7 @@ import { externalCopyIdle, runExternalCopyOnce, startExternalCopyTimer } from '.
 import { loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
 
 const env = new TestEnv();
-afterEach(async () => { await env.cleanup(); });
+afterEach(async () => { await cleanAll(env); });
 
 const upload = (app: FastifyInstance, content: Buffer, name: string) => {
   const { payload, headers } = buildMultipart([{ name: 'confirm', value: 'RESTORE' }, { name: 'file', filename: name, content }]);

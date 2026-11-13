@@ -6,6 +6,7 @@ import { existsSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { TestEnv } from './helpers/tmp.ts';
+import { cleanAll } from './helpers/phase19bk.ts';
 import { apiBase, buy, mkProduct } from './helpers/inventory.ts';
 import { expNew } from './helpers/phase8.ts';
 import { cl, sellOk } from './helpers/phase5.ts';
@@ -19,7 +20,7 @@ import { externalHooks, resetExternalHooks } from '../services/external-backup-h
 import type { AppContext } from '../app.ts';
 
 const env = new TestEnv();
-afterEach(async () => { resetExternalHooks(); await env.cleanup(); });
+afterEach(async () => { resetExternalHooks(); await cleanAll(env); });
 
 /** Everything the shop does day to day must keep working whatever the drive is doing. */
 async function shopCarriesOn(b: { app: any; ctx: AppContext }): Promise<{ manualName: string }> {
