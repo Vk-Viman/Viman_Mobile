@@ -86,7 +86,7 @@ Services screen and menu; `/printing` redirects to `/services` — PASS. Void-re
 | L5 | Low/Info | By design: restore replaces the whole database (older backup reopens days closed after it); a void gain/sweep lands in the return's period; "newest return" is judged per sale line | — | — |
 
 ## 8. Final run on the proposed tree
-Server typecheck clean; web typecheck clean; production build OK. Complete server test suite: see the result recorded in the delivery message (run on branch `feature/final-audit`, which contains all passing audit tests and no failing reproduction). The seven failing reproductions (11 tests) are on `audit/defect-reproductions`.
+Server typecheck clean; web typecheck clean; production build OK. **Complete server test suite on `feature/final-audit`: 124 files, 2,371 tests passed, 0 failed, 0 skipped** (1,981 before the audit plus about 390 new audit tests; 3 min 39 s). The branch contains all passing audit tests and no failing reproduction. The seven failing reproductions (11 tests) are on `audit/defect-reproductions`.
 
 ## 9. Remaining limitations
 Real USB drive not tested; opening the app from a real phone and the Windows Firewall step not tested; mapped network drives and real cloud clients not tested; the 10-minute copy timer was not observed firing by itself in a long-running process; the web app has no automated UI tests (covered by typecheck, build and browser passes); single user and no login by design.
