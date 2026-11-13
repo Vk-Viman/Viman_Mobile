@@ -181,7 +181,8 @@ describe('restore FROM an external copy (upload of the file on the USB drive)', 
     const row = s.ctx.database.conn.prepare('PRAGMA integrity_check').get() as Record<string, string>;
     expect(Object.values(row)[0]).toBe('ok');
     console.log('flipped-byte restore verdicts (status: count):', JSON.stringify(verdicts));
-  });
+    // M7: every restore now runs the full validation (about 1 s each), so 40 of them need more than the default 20 s
+  }, 180000);
 });
 
 describe('restore after the external folder setting has changed', () => {
