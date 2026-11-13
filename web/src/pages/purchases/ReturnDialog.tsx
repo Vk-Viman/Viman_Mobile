@@ -9,6 +9,7 @@
  *  - The refund equals the original purchase cost of the returned units; the server calculates it.
  */
 import { useState } from 'react';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { FormDialog } from '../../components/FormDialog';
 import { TextField } from '../../components/TextField';
 import { useCreatePurchaseReturn } from '../../api/purchases';
@@ -79,6 +80,7 @@ export function ReturnDialog({ purchase, onClose }: { purchase: Purchase; onClos
       <p className="text-sm text-slate-600">
         The refund equals the purchase cost of the returned units and is paid back into the {BOOK_LABEL[purchase.book]} cash book.
       </p>
+      <div>
       <TextField
         label="Return date"
         type="date"
@@ -89,6 +91,8 @@ export function ReturnDialog({ purchase, onClose }: { purchase: Purchase; onClos
         hint={`Between ${purchase.businessDate} (purchase date) and today.`}
         error={fe.businessDate ?? (date && !dateOk ? 'Pick a date from the purchase date up to today.' : undefined)}
       />
+      <BackdatedNotice date={effDate} today={today} />
+      </div>
       <div className="space-y-3">
         {purchase.items.map((it) => {
           const rem = remaining(it);

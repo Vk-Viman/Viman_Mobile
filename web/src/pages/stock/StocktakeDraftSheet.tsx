@@ -13,6 +13,7 @@
  * (error UNIT_COST_REQUIRED if missing).
  */
 import { useMemo, useState } from 'react';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -23,6 +24,7 @@ import { TextField, inputClass } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { ApiError } from '../../api/client';
+import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useProducts } from '../../api/catalog';
 import { useCompleteStocktake, useUpdateStocktake, useVoidStocktake } from '../../api/stock';
 import { errorBanner } from '../../lib/errors';
@@ -47,6 +49,7 @@ interface Row { productId: number; code: string | null; name: string; system: nu
 /** @param st the draft stocktake. The parent keys this component by stocktake id so a different sheet starts fresh. */
 export function DraftSheet({ st }: { st: Stocktake }) {
   const toast = useToast();
+  const { today } = useBusinessDate();
   const update = useUpdateStocktake();
   const complete = useCompleteStocktake();
   const cancelMut = useVoidStocktake();
@@ -200,10 +203,12 @@ export function DraftSheet({ st }: { st: Stocktake }) {
   return (
     <>
       <SheetHeader st={st} />
+      <BackdatedNotice date={st.businessDate} today={today} />
       <Card>
         <p className="mb-4 text-sm text-slate-600">
           Enter the quantity you counted for each product. Leave a row empty if you did not count it — it will not change. System quantities are live and may change while you count.
         </p>
+        <p className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">Complete the stocktake immediately after counting, when the shop is quiet, so sales made in between do not show up as differences.</p>
         <TextField label="Notes (optional)" value={notes} maxLength={MAX_NOTES} onChange={(e) => setNotes(e.target.value)} autoComplete="off" className="mb-4 max-w-xl" />
         {banner && !confirming && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{banner}</p>}
 
@@ -302,6 +307,7 @@ export function DraftSheet({ st }: { st: Stocktake }) {
       >
         <p>Differences will be posted to stock as stocktake gains/losses at the average cost; this cannot be edited afterwards, only voided.</p>
         <p>{counted} product(s) counted. Products you left empty are not changed.</p>
+        <p className="rounded-lg bg-blue-50 p-3 text-blue-900">Complete the stocktake immediately after counting, when the shop is quiet, so sales made in between do not show up as differences.</p>
       </ConfirmDialog>
 
       {cancelling && (

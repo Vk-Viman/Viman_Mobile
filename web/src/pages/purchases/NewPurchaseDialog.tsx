@@ -14,6 +14,7 @@
  */
 import { useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { CategoryProductPicker } from '../../components/CategoryProductPicker';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { FormDialog } from '../../components/FormDialog';
@@ -153,7 +154,10 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       >
         {/* Bill header: date (max = today), supplier, bill number, notes */}
         <div className="grid gap-3 sm:grid-cols-2">
-          <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fe.businessDate} />
+          <div>
+            <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fe.businessDate} />
+            <BackdatedNotice date={effDate} today={today} />
+          </div>
           <SelectField label="Supplier (optional)" value={supplierId} onChange={(e) => setSupplierId(e.target.value)} error={fe.supplierId}>
             <option value="">No supplier</option>
             {(suppliers.data?.items ?? []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}

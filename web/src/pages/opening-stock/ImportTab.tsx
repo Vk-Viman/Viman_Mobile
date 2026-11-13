@@ -13,6 +13,7 @@
  */
 import { useRef, useState } from 'react';
 import { Download } from 'lucide-react';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -148,8 +149,11 @@ export function ImportTab() {
                   />
                   {fileError && <p role="alert" className="mt-1 text-sm text-red-600">{fileError}</p>}
                 </div>
-                <TextField label="Date" type="date" value={effDate} max={today || undefined}
-                  onChange={(e) => { setDate(e.target.value); resetPreview(); }} error={dateError} hint="Usually the day you start using the system. Not later than today." />
+                <div>
+                  <TextField label="Date" type="date" value={effDate} max={today || undefined}
+                    onChange={(e) => { setDate(e.target.value); resetPreview(); }} error={dateError} hint="Usually the day you start using the system. Not later than today." />
+                  <BackdatedNotice date={effDate} today={today} />
+                </div>
               </div>
             </li>
             <li>

@@ -13,6 +13,7 @@
 import { useState } from 'react';
 import { FormDialog } from '../../components/FormDialog';
 import { SelectField } from '../../components/SelectField';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useCreateDrawing, useCreateStockLoss } from '../../api/stock';
@@ -89,7 +90,10 @@ export function StockOutDialog({ mode, onClose }: { mode: 'loss' | 'use'; onClos
           Stock taken for your own use is recorded at cost as an owner drawing. It is not a sale and not a stock loss.
         </p>
       )}
-      <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(err, 'businessDate')} />
+      <div>
+        <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(err, 'businessDate')} />
+        <BackdatedNotice date={effDate} today={today} />
+      </div>
       <PickCategoryProduct value={selected} onChange={setSelected} error={fieldError(err, 'productId') ?? (showErrors && !productId ? 'Choose a product.' : undefined)} />
       <TextField
         label="Quantity"

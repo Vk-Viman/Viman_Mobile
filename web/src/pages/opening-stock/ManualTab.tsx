@@ -20,6 +20,7 @@ import { CategoryProductPicker } from '../../components/CategoryProductPicker';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Money } from '../../components/Money';
 import { SelectField } from '../../components/SelectField';
+import { BackdatedNotice } from '../../components/BackdatedNotice';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
@@ -129,8 +130,11 @@ function ManualForm({ onSaved }: { onSaved: () => void }) {
         onSubmit={(e) => { e.preventDefault(); if (canSubmit) setConfirming(true); }}
       >
         <div className="grid gap-3 sm:grid-cols-2">
-          <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fe.businessDate}
-            hint="Usually the day you start using the system. Not later than today." />
+          <div>
+            <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fe.businessDate}
+              hint="Usually the day you start using the system. Not later than today." />
+            <BackdatedNotice date={effDate} today={today} />
+          </div>
           <TextField label="Notes (optional)" value={notes} maxLength={MAX_NOTES} onChange={(e) => setNotes(e.target.value)} error={fe.notes} autoComplete="off" />
         </div>
         <p className="text-xs text-slate-500">
