@@ -312,12 +312,13 @@ describe('Phase 8 seeded random sequence vs an independent model', () => {
   it('seed 20261111: 420 mixed operations (expenses, supplies, sales, reloads, top-ups, purchases, openings, counts, closings, reopens, voids, duplicates)', async () => {
     const st = await run(20261111, 420);
     // the run really exercised the closed-day rule, closings, reopens, over/short counts, voids, duplicates and the opening-balance guard
-    expect(st.accepted).toBeGreaterThan(150);
+    // thresholds lowered for the closed-day ordering rule (migration 016): backdated writes before a closed day are now refused (and the model checks every refusal: 278 here vs 10 required), so fewer writes are accepted
+    expect(st.accepted).toBeGreaterThan(50);
     expect(st.closedRejections).toBeGreaterThan(10);
     expect(st.closings).toBeGreaterThan(15);
     expect(st.reopens).toBeGreaterThan(3);
-    expect(st.nonZeroCounts).toBeGreaterThan(10);
-    expect(st.voids).toBeGreaterThan(10);
+    expect(st.nonZeroCounts).toBeGreaterThan(5);
+    expect(st.voids).toBeGreaterThan(5);
     expect(st.openingExists).toBeGreaterThan(3);
     expect(st.duplicates).toBeGreaterThan(2);
   }, 180000);

@@ -286,6 +286,6 @@ describe('closed-day ordering - randomized sequences vs an independent model', (
   it('a longer run (seed 99): 600 operations, with more closings in the mix of dates', async () => {
     const st = await run(99, 600);
     expect(st.backdate + st.dayClosed).toBeGreaterThan(30);
-    expect(st.closeNoCountAfterLater + st.closeVarianceRefused).toBeGreaterThanOrEqual(0);
+    expect(st.closeNoCountAfterLater + st.closeVarianceRefused).toBeGreaterThan(5);
   }, 240000);
 });

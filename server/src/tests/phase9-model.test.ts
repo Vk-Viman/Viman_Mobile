@@ -248,8 +248,9 @@ describe('Phase 9 randomized model check', () => {
   it.each([20261109, 7, 424242])('seed %i: 300 operations match the independent model at every step', async (seed) => {
     const st = await run(seed, 300);
     // the run must really have exercised everything it claims to test
-    expect(st.created).toBeGreaterThan(70);
-    expect(st.transfers).toBeGreaterThan(30);
+    // thresholds lowered for the closed-day ordering rule (migration 016): backdated writes before a closed day are now refused (the model checks every refusal), so fewer writes are accepted
+    expect(st.created).toBeGreaterThan(40);
+    expect(st.transfers).toBeGreaterThan(10);
     expect(st.voids).toBeGreaterThan(15);
     expect(st.closedRefused).toBeGreaterThan(0);
     expect(st.closings).toBeGreaterThan(5);
