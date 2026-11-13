@@ -139,7 +139,7 @@ if (entries !== null) {
   for (const n of entries.filter((x) => !NAME_RE.test(x) && !TEMP_RE.test(x)).sort()) {
     let kind = 'file';
     try { if (statSync(join(folder, n)).isDirectory()) kind = 'folder'; } catch { /* ignore */ }
-    if (/^viman-/i.test(n)) warn(`${kind} "${n}" looks like a backup but does not match the naming pattern; the system ignores it and never prunes it`);
+    if (/^viman/i.test(n)) warn(`${kind} "${n}" looks like a backup but does not match the naming pattern; the system ignores it and never prunes it`);
     else warn(`${kind} "${n}" is not one of the system's backup files (left alone)`);
   }
 }
