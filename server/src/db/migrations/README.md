@@ -300,3 +300,25 @@ Tables `backup_settings` (at most one row, `id = 1`, created when a folder is fi
 **How the service uses it (in ONE transaction):** status update (the database lowers the counters and voids the loss) -> per resalable line a `sale_return` movement with negative quantity/value dated like the return (value removed = value restored, limited to the pool value, R4; if the pool then holds no units but value, a value-only `adjustment` sweep is written first) -> the refund reversal cash entry (+refund, same book and type, the return's original business date, `reverses_entry_id` = the original refund row) -> audit row. Reports read `status = 'posted'` returns only; the value difference (restored - removed) is the Stock adjustments component `salesReturnVoidGainCents`, taken from the net `sale_return` movements of void returns (no new column or table).
 
 **Upgrade / rollback:** existing returns become `posted` with no void data; no row is lost. Forward-only; the automatic start-up backup taken before the migration is the way back.
+
+## 019_closed_day_db_protection.sql - closed days enforced in the database for every business-date table (audit finding M1)
+**Why:** until now only `cash_entries` and the Ice Cream day / payment / fund-move tables refused a row dated on or before a closed day. Every other table relied on the service layer alone, so direct SQL could change profit or stock of a closed period without a cash trace. Forward-only: no earlier migration is edited and no earlier trigger is dropped or changed.
+
+**The one rule** (same SQL logic as `trg_cash_entries_day_closed`, migration 016), per book the row touches: a closed day of that book on the row's date aborts `DAY_CLOSED`; otherwise a closed day later than the row's date aborts `BACKDATE_BEFORE_CLOSED_DAY`. Closed = `reopened_at IS NULL OR closed_at > reopened_at` (a reopened day does not count). The probe uses the `(book, business_date)` unique index of `daily_closings` and runs only when such a day exists (WHEN clause). Reversal rows copy the original date and so follow the same rule; the services still check first and `mapCashAbort` maps the aborts to the same 409 codes.
+
+**Protected (38 triggers, `trg_<table>_day_closed` = BEFORE INSERT, `trg_<table>_day_closed_void` = BEFORE UPDATE OF status posted -> void):**
+- own `book` column: `sales`, `purchases`, `expenses`, `capital_entries`, `owner_drawings`, `stock_losses` (insert + void flip each)
+- `stock_movements` (insert only; book = the product's book; every type, so reversals and every flow's stock effect are judged)
+- telecom book: `reload_sales`, `ezcash_sales`, `telecom_topups`; shop book: `print_sales`, `printing_supplies` (insert + void flip)
+- `cash_transfers` (insert + void flip; BOTH books, DAY_CLOSED of either beats BACKDATE)
+- `sales_returns` (book of the sale; insert + void flip), `purchase_returns` (book of the purchase; insert)
+- Ice Cream: `icecream_fund_entries` (insert), `icecream_sales` (a line is judged on its daily entry's date, insert), `icecream_payments` (void flip, which 016 lacked)
+- `cash_counts` (insert + void flip): a count with a difference posts a cash adjustment and follows the full rule; a matching count (difference 0) posts nothing, so only its exact day is protected (BUSINESS_RULES section 8)
+- `stocktakes`: a draft posts nothing and stays allowed; judged on insert as `completed`, on `draft -> completed` and on `completed -> void` (trg `_day_closed`, `_day_closed_complete`, `_day_closed_void`), by the stocktake's book
+- `opening_stock_batches`: lines are `stock_movements` (judged exactly by product book). The header has no book at insert time, so it is refused only when BOTH product books (shop, telecom) are blocked for its date; the void flip is exact (books of the batch's own movements).
+
+**Deliberately exempt:** `import_runs` / `import_issues` (audit of previews and refused imports; no money or stock), `audit_logs` and `external_backup_log` (append-only logs), `daily_closings` itself, line tables without a date of their own (`sale_items`, `purchase_items`, `*_return_items`, `stocktake_items`; protected through their header and movements), catalog and settings. The closing operation's own count adjustment (dated on the day being closed, written before the closing row exists) is unaffected.
+
+**Known residual:** a raw `opening_stock_batches` header dated before a day closed in only ONE product book is accepted (it could still describe the other book); it carries no stock or money, and any line for the closed book is refused by the movement trigger.
+
+**Upgrade / rollback:** only triggers are added, no row is touched; forward-only (the start-up backup is the way back).

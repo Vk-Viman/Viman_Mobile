@@ -158,16 +158,16 @@ describe('M1: cash_transfers touch BOTH books (every direction)', () => {
     expect([at(E()), at(C()), at(L())]).toEqual(['ok', 'ok', 'ok']);
     const t = await closeBooks(s, [third], C());
     expect([at(E()), at(C()), at(L())], 'only the unrelated third book closed').toEqual(['ok', 'ok', 'ok']);
-    must(await reopenNew(s, t[third].id, 'x'));
+    must(await reopenNew(s, t[third].id, 'reopen test'));
     // the FROM book alone
     const f = await closeBooks(s, [from], C());
     expect(at(E())).toContain(BACK); expect(at(C())).toContain(DAY); expect(at(L())).toBe('ok');
-    must(await reopenNew(s, f[from].id, 'x'));
+    must(await reopenNew(s, f[from].id, 'reopen test'));
     expect([at(E()), at(C()), at(L())], 'reopened').toEqual(['ok', 'ok', 'ok']);
     // the TO book alone
     const g = await closeBooks(s, [to], C());
     expect(at(E())).toContain(BACK); expect(at(C())).toContain(DAY); expect(at(L())).toBe('ok');
-    must(await reopenNew(s, g[to].id, 'x'));
+    must(await reopenNew(s, g[to].id, 'reopen test'));
     // both closed: re-close both (same rows)
     expect((await closeNew(s, from, C())).status).toBe(201);
     expect((await closeNew(s, to, C())).status).toBe(201);
@@ -201,7 +201,7 @@ describe('M1: cash counts without a difference post nothing: only their exact da
     const nz = (d: string) => probe(w, () => run(w, "INSERT INTO cash_counts (book, fund, business_date, expected_cents, counted_cents, difference_cents, note, client_ref) VALUES (?, ?, ?, 0, 5, 5, 'x', ?)", book, book === 'icecream' ? 'cost' : null, d, ref()));
     expect(nz(E())).toContain(BACK);
     expect(nz(C())).toContain(DAY);
-    must(await reopenNew(s, cl[book].id, 'x'));
+    must(await reopenNew(s, cl[book].id, 'reopen test'));
     expect(probe(w, () => zero(w, book, C()))).toBe('ok');
     expect(nz(E())).toBe('ok');
   });
@@ -227,9 +227,9 @@ describe('M1: opening_stock_batches (header with its lines as stock movements)',
     expect(at(C())).toContain(DAY);
     expect(at(L())).toBe('ok');
     expect(mv(w.telP, E())).toContain(BACK);
-    must(await reopenNew(s, te.telecom.id, 'x'));
+    must(await reopenNew(s, te.telecom.id, 'reopen test'));
     expect([at(E()), at(C()), at(L())], 'only Shop closed again').toEqual(['ok', 'ok', 'ok']);
-    must(await reopenNew(s, sh.shop.id, 'x'));
+    must(await reopenNew(s, sh.shop.id, 'reopen test'));
     expect([at(E()), at(C())]).toEqual(['ok', 'ok']);
     expect((await closeNew(s, 'shop', C())).status).toBe(201);
     expect((await closeNew(s, 'telecom', C())).status).toBe(201);

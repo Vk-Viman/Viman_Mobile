@@ -89,7 +89,7 @@ describe('M1: raw void flip of a record dated E / C, per voidable table', () => 
     const other = BOOKS3.find((b) => !op.books.includes(b))!;
     const oc = await closeBooks(s, [other], C());
     expect(both(), `${table}: ${other} closed`).toEqual(['ok', 'ok']);
-    must(await reopenNew(s, oc[other].id, 'x'));
+    must(await reopenNew(s, oc[other].id, 'reopen test'));
 
     // own books closed on C
     const own = await closeBooks(s, books, C());
@@ -118,7 +118,7 @@ describe('M1: void flips with their own rules', () => {
     const flip = (id: number) => probe(fx, () => conn.prepare(`UPDATE cash_counts SET ${VOID_SET} WHERE id = ?`).run(id));
     expect(flip(idE)).toBe('ok');
     expect(flip(idC)).toContain(DAY);
-    must(await reopenNew(s, cl.shop.id, 'x'));
+    must(await reopenNew(s, cl.shop.id, 'reopen test'));
     expect(flip(idC)).toBe('ok');
   });
 
@@ -135,7 +135,7 @@ describe('M1: void flips with their own rules', () => {
     expect(voidDraft(dC.id)).toBe('ok');
     expect(complete(dE.id)).toContain(BACK);
     expect(complete(dC.id)).toContain(DAY);
-    must(await reopenNew(s, cl.shop.id, 'x'));
+    must(await reopenNew(s, cl.shop.id, 'reopen test'));
     expect(complete(dE.id)).toBe('ok');
     expect(complete(dC.id)).toBe('ok');
   });
@@ -155,7 +155,7 @@ describe('M1: void flips with their own rules', () => {
       const cl = await closeBooks(s, [book], C());
       expect(flip(idE), `${book} closed`).toContain(BACK);
       expect(flip(idC), `${book} closed`).toContain(DAY);
-      must(await reopenNew(s, cl[book].id, 'x'));
+      must(await reopenNew(s, cl[book].id, 'reopen test'));
     }
     const ic = await closeBooks(s, ['icecream'], C());
     expect([flip(idE), flip(idC)], 'Ice Cream closed: unrelated').toEqual(['ok', 'ok']);
