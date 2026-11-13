@@ -34,6 +34,7 @@ import {
 import type {
   PurchaseBook, PurchaseHeaderRow, PurchaseReturnRow, PurchaseStatus,
 } from '../repositories/purchases.repo.ts';
+import { findUnreversedMovement } from '../repositories/stock-movements.repo.ts';
 import { getSupplier } from '../repositories/suppliers.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
@@ -325,9 +326,13 @@ export function voidPurchase(ctx: AppContext, id: number, body: { reason: string
     }
 
     for (const line of before.items) {
+      // Migration 020: every removal names the exact purchase movement it cancels (one reversal per original).
+      const original = findUnreversedMovement(conn, 'purchases', id, line.productId, line.units);
+      if (!original) throw new Error(`Purchase #${id} has no stock movement to reverse for product #${line.productId}`);
       issueStockCapped(conn, {
         productId: line.productId, businessDate: before.businessDate, type: 'purchase_void', qty: line.units,
         maxValueCents: line.lineTotalCents, refTable: 'purchases', refId: id, reason: `Void of purchase #${id}`,
+        reversesMovementId: original.id,
       });
     }
 

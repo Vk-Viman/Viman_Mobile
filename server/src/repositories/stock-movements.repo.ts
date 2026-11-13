@@ -49,12 +49,29 @@ function map(r: Raw): MovementRow {
 export function insertMovement(conn: DatabaseSync, m: {
   productId: number; businessDate: string; type: MovementType; qtyDelta: number; valueDeltaCents: number;
   unitCostCents: number | null; refTable: string | null; refId: number | null; reason: string;
+  /** Migration 020: the original movement this row reverses (void paths only); at most one reversal per original. */
+  reversesMovementId?: number | null;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(m.productId, m.businessDate, m.type, m.qtyDelta, m.valueDeltaCents, m.unitCostCents, m.refTable, m.refId, m.reason);
+    `INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason, reverses_movement_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(m.productId, m.businessDate, m.type, m.qtyDelta, m.valueDeltaCents, m.unitCostCents, m.refTable, m.refId, m.reason,
+    m.reversesMovementId ?? null);
   return Number(res.lastInsertRowid);
+}
+
+/**
+ * The oldest ORIGINAL movement of a record (not itself a reversal) for one product and quantity that has no reversal yet.
+ * Void paths use it to link each reversal row to the exact row it cancels (migration 020), also for records posted before
+ * the link column existed. `qty` is the signed quantity of the original (positive for an inflow).
+ */
+export function findUnreversedMovement(conn: DatabaseSync, refTable: string, refId: number, productId: number, qty: number): MovementRow | undefined {
+  const r = conn.prepare(
+    `${SELECT} WHERE ref_table = ? AND ref_id = ? AND product_id = ? AND qty_delta = ? AND reverses_movement_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM stock_movements x WHERE x.reverses_movement_id = stock_movements.id)
+      ORDER BY id ASC LIMIT 1`,
+  ).get(refTable, refId, productId, qty) as unknown as Raw | undefined;
+  return r ? map(r) : undefined;
 }
 
 /** One movement by id, or undefined. */
