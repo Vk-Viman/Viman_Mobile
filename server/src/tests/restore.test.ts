@@ -7,7 +7,7 @@
 // backups folder.
 // Organised as: restore by name, older-version backup, restore by upload, rollback on failure, restore in progress.
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -356,17 +356,26 @@ describe('restore by upload', () => {
   });
 });
 
-// If the restore fails after the files were swapped (here: migration checksum error), the previous data must be put back.
+// If the restore fails after the files were swapped, the previous data must be put back.
+// M7: the old way of provoking this (a backup whose migration checksum was edited) is now refused BEFORE the swap by the
+// validation (422 RESTORE_INVALID, see the first test below), so the post-swap failure is provoked differently: the first
+// re-opening of the database after the swap fails (vi.spyOn on the real connection holder), the real rollback then runs.
 describe('restore rollback (RESTORE_FAILED)', () => {
-  /** A backup that passes validation but whose checksum row makes migrate() fail after the swap. */
-  async function tamperedSetup() {
+  /** A valid backup; the first `reopen()` after the swap throws once, so the swap has already happened when the restore fails. */
+  async function failingSetup() {
     const s = await setup();
-    const tampered = createBackup(s.ctx, 'manual', new Date('2026-03-02T00:00:00Z'));
-    const path = join(s.dataDir, 'backups', tampered.name);
-    const db = new DatabaseSync(path);
-    try { db.exec("UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 1"); } finally { db.close(); }
-    return { ...s, tampered, tamperedPath: path };
+    const good = createBackup(s.ctx, 'manual', new Date('2026-03-02T00:00:00Z'));
+    const path = join(s.dataDir, 'backups', good.name);
+    const realReopen = s.ctx.database.reopen.bind(s.ctx.database);
+    let calls = 0;
+    vi.spyOn(s.ctx.database, 'reopen').mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) throw new Error('simulated failure right after the swap');
+      realReopen();
+    });
+    return { ...s, tampered: good, tamperedPath: path };
   }
+  afterEach(() => { vi.restoreAllMocks(); });
 
   async function expectRolledBack(app: FastifyInstance, dataDir: string, res: { statusCode: number; json(): { error: { code: string } } }) {
     expect(res.statusCode).toBe(500);
@@ -381,15 +390,30 @@ describe('restore rollback (RESTORE_FAILED)', () => {
     expect((await app.inject({ method: 'GET', url: '/api/v1/health' })).statusCode).toBe(200);
   }
 
+  it('a backup with an edited migration checksum is refused BEFORE anything is touched (422 RESTORE_INVALID, no safety copy)', async () => {
+    const s = await setup();
+    const tampered = createBackup(s.ctx, 'manual', new Date('2026-03-02T00:00:00Z'));
+    const path = join(s.dataDir, 'backups', tampered.name);
+    const db = new DatabaseSync(path);
+    try { db.exec("UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 1"); } finally { db.close(); }
+    const res = await restoreJson(s.app, { name: tampered.name, confirm: 'RESTORE' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('RESTORE_INVALID');
+    expect(res.json().error.failures.map((f: { code: string }) => f.code)).toContain('migration_records');
+    expect((await getSettings(s.app)).rates).toEqual({ reloadCommissionBp: 222, ezcashCommissionBp: 22 });
+    expect(leftovers(s.dataDir)).toEqual([]);
+    expect(readdirSync(join(s.dataDir, 'backups')).filter((f) => f.includes('pre-restore'))).toEqual([]);
+  });
+
   it('named restore: 500 RESTORE_FAILED, previous data put back', async () => {
-    const { app, ctx, dataDir, tampered } = await tamperedSetup();
+    const { app, ctx, dataDir, tampered } = await failingSetup();
     const res = await restoreJson(app, { name: tampered.name, confirm: 'RESTORE' });
     expect(ctx.isRestoring).toBe(false);
     await expectRolledBack(app, dataDir, res);
   });
 
   it('upload restore: 500 RESTORE_FAILED, previous data put back', async () => {
-    const { app, ctx, dataDir, tamperedPath } = await tamperedSetup();
+    const { app, ctx, dataDir, tamperedPath } = await failingSetup();
     const res = await restoreUpload(app, [
       { name: 'confirm', value: 'RESTORE' },
       { name: 'file', filename: 'tampered.db', content: readFileSync(tamperedPath) },
@@ -399,7 +423,7 @@ describe('restore rollback (RESTORE_FAILED)', () => {
   });
 
   it('the safety backup from a failed restore holds the pre-restore values', async () => {
-    const { app, dataDir, tampered } = await tamperedSetup();
+    const { app, dataDir, tampered } = await failingSetup();
     await restoreJson(app, { name: tampered.name, confirm: 'RESTORE' });
     const safety = readdirSync(join(dataDir, 'backups')).find((f) => f.includes('pre-restore'))!;
     const db = new DatabaseSync(join(dataDir, 'backups', safety), { readOnly: true });

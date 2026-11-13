@@ -18,6 +18,7 @@ import { assertGlobalInvariants, buildWorld14, countsAll, diffSnapshots, must, r
 import type { World14 } from './helpers/phase14.ts';
 import { cl, sellOk } from './helpers/phase5.ts';
 import { expNew } from './helpers/phase8.ts';
+import { diffExceptRefusalAudit } from './helpers/phase22rs.ts';
 import { dayOk, payOk } from './helpers/phase10.ts';
 
 const env = new TestEnv();
@@ -146,8 +147,9 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     return { bytes: readFileSync(path), path };
   }
   async function expectIntact(s: ApiBase, before: Record<string, string>, figs: string): Promise<void> {
-    // a refused restore writes nothing (an audit row for the refusal is not expected either)
-    const changed = diffSnapshots(before, snapshotAll(s.ctx));
+    // M7: a refused restore writes nothing except ONE audit row per refusal (entity backup, action restore_refused);
+    // every other table is identical (previously this asserted that not even an audit row was written).
+    const changed = diffExceptRefusalAudit(before, s.ctx);
     expect(changed, `tables changed by a refused restore: ${changed.join(',')}`).toEqual([]);
     expect(await figures(s)).toBe(figs);
     await assertGlobalInvariants(s);
@@ -202,7 +204,7 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     const noMigrations = make('d.db', (db) => { db.exec('DROP TABLE schema_migrations'); });
     for (const [label, content, codes] of [
       ['required table missing', noTables, ['RESTORE_SCHEMA_MISSING']], ['newer schema', newer, ['RESTORE_SCHEMA_TOO_NEW']],
-      ['tampered checksum', tampered, ['RESTORE_FAILED', 'RESTORE_INVALID_FILE', 'RESTORE_SCHEMA_MISSING']], ['no schema_migrations', noMigrations, ['RESTORE_SCHEMA_MISSING']],
+      ['tampered checksum', tampered, ['RESTORE_INVALID', 'RESTORE_FAILED', 'RESTORE_INVALID_FILE', 'RESTORE_SCHEMA_MISSING']], ['no schema_migrations', noMigrations, ['RESTORE_SCHEMA_MISSING']],
     ] as Array<[string, Buffer, string[]]>) {
       const r = await upload(s.app, content);
       expect(codes, `${label}: ${r.statusCode} ${r.body.slice(0, 250)}`).toContain(r.json().error.code);
@@ -242,7 +244,7 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     await must(await expNew(s, { businessDate: daysAgo(0), book: 'shop', category: 'other', amountCents: 100 }), 'works after restore');
   });
 
-  it('GAP probe: a database whose stock cache disagrees with its movements restores (the restore checks integrity, not business consistency) but is then FLAGGED by the reconciliation', async () => {
+  it('a database whose stock cache disagrees with its movements is REFUSED (M7: the restore now checks business consistency), the live data is untouched', async () => {
     const s = await apiBase(await env.build());
     await buildWorld14(s);
     const { bytes } = await goodBackup(s);
@@ -251,14 +253,14 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     const db = new DatabaseSync(p);
     db.exec('UPDATE products SET qty_on_hand = qty_on_hand + 1 WHERE id = 1');
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); db.close();
+    const before = snapshotAll(s.ctx);
     const r = await upload(s.app, readFileSync(p), 's.db');
-    // either the restore refuses an inconsistent file (best), or it accepts it and the reconciliation must not say "ok"
-    if (r.statusCode === 200) {
-      const rec = (await get(s.app, '/inventory/reconciliation')).body;
-      expect(rec.ok, 'an inconsistent restore must be visible in the reconciliation').toBe(false);
-      const dash = (await get(s.app, '/dashboard')).body;
-      expect(JSON.stringify(dash.warnings) + JSON.stringify(dash.stock), 'dashboard shows the mismatch').toMatch(/STOCK_CACHE_MISMATCH|mismatch/i);
-    } else expect([400, 422]).toContain(r.statusCode);
+    // before M7 this file was accepted and only flagged afterwards by the reconciliation (characterisation of the gap)
+    expect(r.statusCode, r.body).toBe(422);
+    expect(r.json().error.code).toBe('RESTORE_INVALID');
+    expect(r.json().error.failures.map((f: { code: string }) => f.code)).toContain('stock_reconciliation');
+    expect(diffExceptRefusalAudit(before, s.ctx)).toEqual([]);
+    await assertGlobalInvariants(s);
   });
 });
 

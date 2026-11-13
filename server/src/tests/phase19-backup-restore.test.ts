@@ -18,6 +18,8 @@ import type { World14 } from './helpers/phase14.ts';
 import {
   copyNow, distinctBackup, extStatus, lightInvariants, logAll, oursIn, putFolder, sha256File, sleep,
 } from './helpers/phase19bk.ts';
+import { diffExceptRefusalAudit } from './helpers/phase22rs.ts';
+import { validateDatabase } from '../services/database-validation.ts';
 import { externalCopyIdle, runExternalCopyOnce, startExternalCopyTimer } from '../services/external-backup.service.ts';
 import { loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
 
@@ -139,7 +141,8 @@ describe('restore FROM an external copy (upload of the file on the USB drive)', 
       expect(r.json().error?.code, label).toMatch(/RESTORE_|VALIDATION_ERROR/);
       expect(r.json().error?.message, label).not.toMatch(/node:|at .*\.ts/);
       expect((await snapshotFigures(s)).text, label).toBe(figs);
-      expect(diffSnapshots(tables, snapshotAll(s.ctx)), label).toEqual([]); // not even an audit row
+      // M7: only the audit row of the refusal itself (restore_refused) may be new; every other table is byte-for-byte the same
+      expect(diffExceptRefusalAudit(tables, s.ctx), label).toEqual([]);
     }
     // no safety copy was made for a refused file, no candidate/upload temp file is left
     expect(readdirSync(s.ctx.backupsDir).filter((n) => /pre-restore/.test(n)).length).toBe(safetyBefore);
@@ -164,7 +167,13 @@ describe('restore FROM an external copy (upload of the file on the USB drive)', 
       bad[off] = bad[off]! ^ 0xff;
       const r = await upload(s.app, bad, name);
       verdicts[r.statusCode] = (verdicts[r.statusCode] ?? 0) + 1;
-      expect([200, 422, 500], `offset ${off}: ${r.body}`).toContain(r.statusCode);
+      // M7: the restore never crashes (no 500). A flip that breaks integrity, a foreign key, the schema or the books is REFUSED (422);
+      // a flip inside a free-text column (a name, a note) leaves a perfectly consistent database and CANNOT be detected, so it is accepted.
+      expect([200, 422], `offset ${off}: ${r.body}`).toContain(r.statusCode);
+      if (r.statusCode === 422) expect(r.json().error.code, `offset ${off}`).toMatch(/^RESTORE_/);
+      // whatever was accepted must be a database that passes the complete validation (no inconsistent file may be live)
+      const v = validateDatabase(s.ctx.database.conn);
+      expect(v.failures, `offset ${off}: live database after the verdict`).toEqual([]);
       const q = (await get(s.app, '/dashboard')).status;
       expect(q, `offset ${off}`).toBe(200);
     }
