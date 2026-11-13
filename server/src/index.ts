@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { buildApp } from './app.ts';
 import { cleanupStaleTempFiles, createBackup, newestBackupNames } from './services/backup.service.ts';
+import { externalCopyIdle, scheduleExternalCopy, startExternalCopyTimer } from './services/external-backup.service.ts';
 
 const DEFAULT_PORT = 4300;
 /** How many recent backups are listed in the "database is damaged" recovery message. */
@@ -142,6 +143,11 @@ try {
   console.warn('Warning: could not create the startup backup:', err instanceof Error ? err.message : err);
 }
 
+// External backup copy (USB drive): started in the background and never awaited. A missing or failing drive is only
+// logged and shown as a warning; the 10-minute timer is unref'd and copies when the drive appears later.
+if (startupBackup) scheduleExternalCopy(ctx);
+const stopExternalTimer = startExternalCopyTimer(ctx);
+
 // Step 5 - tell the owner where the shop is running.
 console.log(`Viman Mobile Shop running at http://localhost:${port}`);
 console.log(`Data folder: ${ctx.dataDir}`);
@@ -153,7 +159,10 @@ let closing = false;
 async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
+  stopExternalTimer();
   try {
+    // Let a copy that is already running finish (bounded), so a half-written temporary file is not left on the drive.
+    await Promise.race([externalCopyIdle(ctx), new Promise((r) => setTimeout(r, 5000))]);
     await app.close();
   } finally {
     process.exit(0);

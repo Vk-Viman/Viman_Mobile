@@ -7,6 +7,9 @@
  *   GET  /backups           list backups, newest first
  *   POST /backups           make a manual backup now (201)
  *   POST /backups/restore   restore from a named backup (JSON body) or an uploaded file (multipart form)
+ *   GET  /backups/external        external backup folder: status, warning, list of external copies
+ *   PUT  /backups/external        set or clear ({ folder: string | null }) the external folder (validated, audited)
+ *   POST /backups/external/copy   copy start-up/manual backups to the external folder now
  *
  * A restore replaces ALL shop data, so it must be confirmed explicitly: the request must carry the word
  * "RESTORE" (error RESTORE_CONFIRM_REQUIRED otherwise), which protects against an accidental click or a script.
@@ -21,6 +24,9 @@ import { FILE_TOO_LARGE_MESSAGE } from '../lib/limits.ts';
 import {
   BACKUP_NAME_RE, createBackup, listBackups, restoreFromFile,
 } from '../services/backup.service.ts';
+import {
+  copyExternalNow, getExternalStatus, scheduleExternalCopy, setExternalFolder,
+} from '../services/external-backup.service.ts';
 
 /** The exact word the owner must send to confirm a restore. */
 const RESTORE_CONFIRM_WORD = 'RESTORE';
@@ -36,8 +42,27 @@ export function registerBackupRoutes(app: FastifyInstance, ctx: AppContext): voi
 
   app.post('/backups', async (_request, reply) => {
     const item = createBackup(ctx, 'manual');
+    // Copy to the external folder (if one is set) in the background: the answer never waits for, or depends on, the drive.
+    scheduleExternalCopy(ctx);
     return reply.code(201).send({ item });
   });
+
+  // ---- External backup folder (API_CONTRACTS "Approved-decisions contract" part C) ----
+  app.get('/backups/external', async () => getExternalStatus(ctx));
+
+  app.put('/backups/external', {
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false, required: ['folder'],
+        properties: { folder: { type: ['string', 'null'], maxLength: 1000 } },
+      },
+    },
+  }, async (request) => {
+    const { folder } = request.body as { folder: string | null };
+    return setExternalFolder(ctx, folder);
+  });
+
+  app.post('/backups/external/copy', async () => copyExternalNow(ctx));
 
   app.post('/backups/restore', async (request) => {
     // Variant 1: the owner uploads a backup file (multipart form: field "file" + field "confirm").

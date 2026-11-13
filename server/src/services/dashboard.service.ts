@@ -23,6 +23,8 @@ import type { CashBook, IceFund } from '../repositories/cash-entries.repo.ts';
 import { loadFacts } from '../repositories/icecream.repo.ts';
 import { AppError } from '../lib/errors.ts';
 import { listBackups } from './backup.service.ts';
+import { EXTERNAL_STALE_DAYS, externalDashboardWarning, externalSummary } from './external-backup-status.ts';
+import type { ExternalSummary } from './external-backup-status.ts';
 import { negativeBalanceWarning } from './cash-warnings.ts';
 import { addDays, monthStart, monthStartMonthsBack } from './dashboard-dates.ts';
 import { closingsBlock } from './dashboard-closings.ts';
@@ -87,7 +89,7 @@ export interface DashboardResponse {
     warnings: IceWarning[];
   };
   closings: ClosingsBlock;
-  backup: { latestAt: string | null; ageHours: number | null; status: 'ok' | 'stale' | 'none' };
+  backup: { latestAt: string | null; ageHours: number | null; status: 'ok' | 'stale' | 'none'; external: ExternalSummary };
   series: {
     daily: Array<{ date: string; salesCents: number; profitCents: number }>;
     monthly: Array<{ month: string; shopCents: number; telecomCents: number; icecreamCents: number; combinedCents: number }>;
@@ -111,7 +113,7 @@ export const DASHBOARD_DEFINITIONS: Record<string, string> = {
   stock: 'Stock value is the value of stock on hand at the dashboard date (from the stock movements). The low-stock list is the live list of products at or below their minimum.',
   excessCost: 'Excess cost = money actually spent beyond what was set aside in the daily allocations. Official profit is not reduced automatically; the "profit after excess cost" line shows what it would be.',
   closings: 'Days not yet closed = the 7 days before the dashboard date, from the book\'s first entry onward, that have no active daily closing.',
-  backup: `Backup age is measured from the real current time. Status is "stale" after ${BACKUP_STALE_HOURS} hours and "none" when there is no backup.`,
+  backup: `Backup age is measured from the real current time. Status is "stale" after ${BACKUP_STALE_HOURS} hours and "none" when there is no backup. "external" is the status of the copy on the external backup folder (USB drive): "stale" means no successful copy for ${EXTERNAL_STALE_DAYS} days or more.`,
   seriesDaily: `Daily series = the last ${DAILY_SERIES_DAYS} days ending on the dashboard date (days without records are zero). Profit is the combined recognized profit.`,
   seriesMonthly: `Monthly series = the last ${MONTHLY_SERIES_MONTHS} calendar months ending with the dashboard date's month (the last month runs only up to the dashboard date).`,
   topProducts: `Top products = the ${TOP_PRODUCTS} stock products (Shop goods and scratch cards) with the highest gross profit this month, net of returns.`,
@@ -132,10 +134,11 @@ export function resolveAsOf(raw: string | undefined, now: Date = new Date()): st
 }
 
 function backupBlock(ctx: AppContext, now: Date): DashboardResponse['backup'] {
+  const external = externalSummary(ctx.database.conn, now);
   const latest = listBackups(ctx)[0];
-  if (!latest) return { latestAt: null, ageHours: null, status: 'none' };
+  if (!latest) return { latestAt: null, ageHours: null, status: 'none', external };
   const ageHours = Math.max(0, Math.round(((now.getTime() - new Date(latest.createdAt).getTime()) / 3_600_000) * 10) / 10);
-  return { latestAt: latest.createdAt, ageHours, status: ageHours > BACKUP_STALE_HOURS ? 'stale' : 'ok' };
+  return { latestAt: latest.createdAt, ageHours, status: ageHours > BACKUP_STALE_HOURS ? 'stale' : 'ok', external };
 }
 
 /**
@@ -187,6 +190,9 @@ export function buildDashboard(ctx: AppContext, asOf: string, now: Date = new Da
     const warnings: DashboardWarning[] = [];
     for (const b of books) if (b.balanceCents < 0) warnings.push(negativeBalanceWarning(b.book, b.balanceCents));
     warnings.push(...ice.warnings, ...stockWarnings);
+    const backup = backupBlock(ctx, now);
+    const externalWarning = externalDashboardWarning(backup.external);
+    if (externalWarning) warnings.push(externalWarning);
 
     return {
       asOf,
@@ -209,7 +215,7 @@ export function buildDashboard(ctx: AppContext, asOf: string, now: Date = new Da
         warnings: ice.warnings,
       },
       closings: closingsBlock(conn, asOf),
-      backup: backupBlock(ctx, now),
+      backup,
       series: {
         daily: dailyPeriods.map((p, i) => ({ date: p.from, salesCents: daily[i]!.combined.salesCents, profitCents: daily[i]!.combined.profitCents })),
         monthly: monthlyPeriods.map((p, i) => ({

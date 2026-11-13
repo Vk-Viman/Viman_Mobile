@@ -12,6 +12,9 @@ import { ZERO_TILE, dash, datesEndingOn, dbSnapshot } from './helpers/phase12.ts
 import { buildDashboard, BACKUP_STALE_HOURS } from '../services/dashboard.service.ts';
 import { createBackup } from '../services/backup.service.ts';
 
+/** The external-backup part of the dashboard backup block when no external folder is configured (migration 018). */
+const NO_EXTERNAL = { status: 'not_configured', lastSuccessAt: null, daysSinceSuccess: null, warning: expect.any(String) };
+
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
 const fresh = async (): Promise<ApiBase> => apiBase(await env.build());
@@ -190,10 +193,10 @@ describe('backup block', () => {
     expect(ok.ageHours).toBeLessThan(1);
     // fixed clocks through the service: exactly 5 hours, 48 hours (still ok) and 48.1 hours (stale) after the file time
     const at = new Date(info.createdAt).getTime();
-    expect(buildDashboard(s.ctx, '2025-05-10', new Date(at + 5 * 3600000)).backup).toEqual({ latestAt: info.createdAt, ageHours: 5, status: 'ok' });
+    expect(buildDashboard(s.ctx, '2025-05-10', new Date(at + 5 * 3600000)).backup).toEqual({ latestAt: info.createdAt, ageHours: 5, status: 'ok', external: NO_EXTERNAL });
     expect(buildDashboard(s.ctx, '2025-05-10', new Date(at + BACKUP_STALE_HOURS * 3600000)).backup.status).toBe('ok');
     const stale = buildDashboard(s.ctx, '2025-05-10', new Date(at + (BACKUP_STALE_HOURS + 0.1) * 3600000)).backup;
-    expect(stale).toEqual({ latestAt: info.createdAt, ageHours: 48.1, status: 'stale' });
+    expect(stale).toEqual({ latestAt: info.createdAt, ageHours: 48.1, status: 'stale', external: NO_EXTERNAL });
   });
 
   it('the newest of several backups is the one reported', async () => {
