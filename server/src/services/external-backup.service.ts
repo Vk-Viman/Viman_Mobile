@@ -39,6 +39,8 @@ const TEMP_RE = /^\.viman-copy-[0-9a-f]+\.tmp$/;
 const STALE_TEMP_MS = 3_600_000;
 /** Identical consecutive automatic failures are logged at most once per this long (keeps the log small). */
 const FAILURE_LOG_GAP_MS = 3_600_000;
+/** How long the Settings screen waits for the folder write probe. */
+export const PROBE_TIMEOUT_MS = 3000;
 /** The timer period. */
 export const EXTERNAL_TIMER_MS = 10 * 60 * 1000;
 
@@ -103,7 +105,13 @@ export function listExternalCopies(folder: string | null): ExternalCopyInfo[] {
 export async function getExternalStatus(ctx: AppContext, probe = true): Promise<ExternalStatusResponse> {
   const core = computeExternalStatus(ctx.database.conn, externalNow());
   let writable: boolean | null = null;
-  if (core.configured && core.folderAvailable && probe) writable = (await probeWritable(core.folder as string)) === null;
+  if (core.configured && core.folderAvailable && probe) {
+    // A drive that hangs must not hang the Settings screen: give the probe a few seconds, then report "unknown".
+    const verdict = await Promise.race([
+      probeWritable(core.folder as string), new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), PROBE_TIMEOUT_MS).unref()),
+    ]);
+    writable = verdict === 'timeout' ? null : verdict === null;
+  }
   return { ...core, writable, copies: core.folderAvailable ? listExternalCopies(core.folder) : [] };
 }
 
@@ -237,9 +245,6 @@ async function performCopy(ctx: AppContext, trigger: CopyTrigger): Promise<Exter
         }
         if (identical !== null) {
           result.skipped.push({ name: src.name, reason: 'already_present' });
-          if (trigger === 'manual') {
-            logRow(ctx, { sourceName: src.name, targetName: identical, status: 'skipped', sizeBytes: data.length, sha256: sha, createdAt: nowIso() });
-          }
           continue;
         }
         const finalName = existing.has(src.name) ? uniqueName(base, existing) : src.name;
@@ -256,11 +261,13 @@ async function performCopy(ctx: AppContext, trigger: CopyTrigger): Promise<Exter
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         result.failed.push({ name: src.name, error: msg });
-        logFailure(ctx, trigger, src.name, msg);
+        // Failures are logged after the loop, so the newest log row of a run that had any failure is a failure.
         // A full, read-only or removed drive will fail every remaining file the same way: stop here.
         if (!isFolder(folder)) break;
       }
     }
+
+    for (const f of result.failed) logFailure(ctx, trigger, f.name, f.error);
 
     // Retention: only our own backup names, only beyond the newest 30.
     for (const name of ourNames(folder).slice(KEEP_EXTERNAL)) {

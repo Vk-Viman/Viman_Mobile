@@ -41,7 +41,10 @@ export function getBackupSettings(conn: DatabaseSync): { externalDir: string | n
 
 /** Sets (or clears with null) the external folder and stamps `updated_at`. */
 export function setBackupDir(conn: DatabaseSync, dir: string | null, nowIso: string): void {
-  conn.prepare('UPDATE backup_settings SET external_dir = ?, updated_at = ? WHERE id = 1').run(dir, nowIso);
+  conn.prepare(
+    `INSERT INTO backup_settings (id, external_dir, updated_at) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET external_dir = excluded.external_dir, updated_at = excluded.updated_at`,
+  ).run(dir, nowIso);
 }
 
 /** Appends one log row. */

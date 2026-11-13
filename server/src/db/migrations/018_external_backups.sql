@@ -7,14 +7,13 @@
 -- (the `settings` table keys are CHECK-restricted and are not used).
 
 -- ---------------------------------------------------------------------------------------------
--- backup_settings: exactly one row (id = 1). external_dir NULL = no external folder configured.
+-- backup_settings: at most one row (id = 1), created the first time a folder is set. external_dir NULL = no external folder configured.
 -- ---------------------------------------------------------------------------------------------
 CREATE TABLE backup_settings (
   id           INTEGER PRIMARY KEY CHECK (id = 1),
   external_dir TEXT CHECK (external_dir IS NULL OR length(external_dir) BETWEEN 1 AND 1000),
   updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
-INSERT INTO backup_settings (id, external_dir) VALUES (1, NULL);
 
 CREATE TRIGGER trg_backup_settings_no_delete
 BEFORE DELETE ON backup_settings
