@@ -87,7 +87,7 @@ describe('migration 015 on a database that already holds data', () => {
     // ---- start the app on it: migration 015 runs on real data
     const b2 = await env.build({ dataDir });
     const s2 = await apiBase(b2);
-    expect(rows(s2.ctx, 'SELECT version FROM schema_migrations ORDER BY version').map((r) => Number(r.version))).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
+    expect(rows(s2.ctx, 'SELECT version FROM schema_migrations ORDER BY version').map((r) => Number(r.version))).toEqual(loadMigrations().map((m) => m.version));
 
     // every category: id, name, book, is_default, active and both timestamps unchanged; every product link unchanged; counts unchanged
     expect(rows(s2.ctx, 'SELECT id, name, book, is_default, active, created_at, updated_at FROM categories ORDER BY id')).toEqual(catsBefore);
@@ -142,7 +142,7 @@ describe('migration 015 on a database that already holds data', () => {
     const catsBefore = all(db, 'SELECT * FROM categories ORDER BY id');
     const prodsBefore = all(db, 'SELECT * FROM products ORDER BY id');
     const seqBefore = all(db, "SELECT seq FROM sqlite_sequence WHERE name = 'categories'")[0]!.seq;
-    expect(migrate(db).applied).toEqual(['015_category_per_book.sql']);
+    expect(migrate(db).applied).toEqual(loadMigrations().filter((m) => m.version >= 15).map((m) => m.name)); // 015 and every later migration
     expect(all(db, 'SELECT * FROM categories ORDER BY id')).toEqual(catsBefore);
     expect(all(db, 'SELECT * FROM products ORDER BY id')).toEqual(prodsBefore);
     expect(all(db, "SELECT seq FROM sqlite_sequence WHERE name = 'categories'")[0]!.seq).toBe(seqBefore);

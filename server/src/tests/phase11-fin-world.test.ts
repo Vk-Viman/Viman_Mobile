@@ -57,7 +57,7 @@ function shopFig(o: {
     expenses: { totalCents: o.expTotal ?? 0, byCategory: cats(o.exp) },
     adjustments: {
       lossesCents: o.loss ?? 0, damagedReturnLossesCents: o.dmg ?? 0, stocktakeLossesCents: o.stl ?? 0, stocktakeGainsCents: o.stg ?? 0,
-      residualSweepsCents: o.sweep ?? 0, purchaseRefundGainCents: 0, netCents: o.adj ?? 0,
+      residualSweepsCents: o.sweep ?? 0, purchaseRefundGainCents: 0, salesReturnVoidGainCents: 0, netCents: o.adj ?? 0,
     },
     cashOverShortCents: o.os ?? 0, netProfitCents: o.net,
   };
@@ -209,7 +209,7 @@ function telFig(o: {
     },
     grossProfitCents: o.gross,
     expenses: { totalCents: o.expTotal ?? 0, byCategory: cats(o.exp) },
-    adjustments: { lossesCents: o.loss ?? 0, damagedReturnLossesCents: 0, stocktakeLossesCents: o.stl ?? 0, stocktakeGainsCents: 0, residualSweepsCents: 0, purchaseRefundGainCents: 0, netCents: o.adj ?? 0 },
+    adjustments: { lossesCents: o.loss ?? 0, damagedReturnLossesCents: 0, stocktakeLossesCents: o.stl ?? 0, stocktakeGainsCents: 0, residualSweepsCents: 0, purchaseRefundGainCents: 0, salesReturnVoidGainCents: 0, netCents: o.adj ?? 0 },
     cashOverShortCents: o.os ?? 0, netProfitCents: o.net,
     memo: { providerTopupsCents: o.prov ?? 0, walletTopupsCents: o.wallet ?? 0 },
   };

@@ -71,8 +71,8 @@ BEGIN
 END;
 
 -- ---------------------------------------------------------------------------------------------
--- 3. sale_items.returned_qty: it may go DOWN only to exactly the quantity of the lines of posted returns (i.e. as part of a
---    return void). Everything else is frozen exactly as in migration 006.
+-- 3. sale_items.returned_qty: it may go DOWN only to exactly the quantity of the lines of posted returns AND only for a line that has a
+--    voided return (i.e. as part of a return void). Everything else is frozen exactly as in migration 006.
 -- ---------------------------------------------------------------------------------------------
 DROP TRIGGER trg_sale_items_immutable;
 CREATE TRIGGER trg_sale_items_immutable
@@ -89,10 +89,13 @@ WHEN NEW.id IS NOT OLD.id
   OR NEW.revenue_cents IS NOT OLD.revenue_cents
   OR NEW.cogs_cents IS NOT OLD.cogs_cents
   OR (NEW.returned_qty < OLD.returned_qty
-      AND NEW.returned_qty IS NOT (
-        SELECT COALESCE(SUM(ri.qty), 0)
-          FROM sales_return_items ri JOIN sales_returns r ON r.id = ri.sales_return_id
-         WHERE ri.sale_item_id = OLD.id AND r.status = 'posted'))
+      AND (NEW.returned_qty IS NOT (
+             SELECT COALESCE(SUM(ri.qty), 0)
+               FROM sales_return_items ri JOIN sales_returns r ON r.id = ri.sales_return_id
+              WHERE ri.sale_item_id = OLD.id AND r.status = 'posted')
+           OR NOT EXISTS (
+             SELECT 1 FROM sales_return_items ri JOIN sales_returns r ON r.id = ri.sales_return_id
+              WHERE ri.sale_item_id = OLD.id AND r.status = 'void')))
 BEGIN
   SELECT RAISE(ABORT, 'SALE_ITEM_IMMUTABLE');
 END;

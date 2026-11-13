@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { loadMigrations } from '../db/migrate.ts';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase, buy, daysAgo, ref } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
@@ -232,7 +233,7 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     db.close();
     const r = await upload(s.app, readFileSync(p), 'old.db');
     expect(r.statusCode, r.body).toBe(200);
-    expect(r.json().schemaVersion).toBe(15);
+    expect(r.json().schemaVersion).toBe(Math.max(...loadMigrations().map((m) => m.version)));
     const prods = (await get(s.app, '/products')).body.items as any[];
     expect(prods.map((x) => [x.name, x.qtyOnHand, x.stockValueCents])).toEqual([['Old product', 3, 3000]]);
     // the world's records are gone (replaced), the old file's data is live, the new tables exist and are empty
