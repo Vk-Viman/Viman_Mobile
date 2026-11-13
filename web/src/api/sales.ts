@@ -2,7 +2,7 @@
  * API hooks for sales: the POS (create sale), sales history, voids and sales returns.
  *
  * Used by the Sales screens (pages/sales/*).
- * Endpoints: /sales, /sales/:id, /sales/:id/void, /sales/:id/returns (see API_CONTRACTS.md "Phase 5";
+ * Endpoints: /sales, /sales/:id, /sales/:id/void, /sales/:id/returns, /sales/:id/returns/:returnId/void (see API_CONTRACTS.md "Phase 5";
  * business rules §4, R5/C5, R13, R-FD, R-RD in BUSINESS_RULES.md).
  *
  * Money is integer cents everywhere. The server is authoritative for totals, COGS, profit and refunds; the web
@@ -13,12 +13,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost } from './client';
 import { AUDIT_LOGS_KEY } from './auditLogs';
+import { CASHBOOKS_KEY } from './cashbooks';
 import { catalogKeys } from './catalog';
 import { purchaseKeys } from './purchases';
 import { stockKeys } from './stock';
 import { qs } from './queryString';
 import type {
-  SaleCreate, SaleCreateResult, SaleList, SaleOne, SaleQuery, SaleReturnCreate, SaleReturnResult, SaleVoidBody, SaleVoidResult,
+  SaleCreate, SaleCreateResult, SaleList, SaleOne, SaleQuery, SaleReturnCreate, SaleReturnResult, SaleReturnVoidResult, SaleVoidBody, SaleVoidResult,
 } from '../types/api';
 
 /** Root query key of every sales cache (list and detail). */
@@ -37,6 +38,7 @@ function invalidateAll(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: stockKeys.losses });
   void qc.invalidateQueries({ queryKey: purchaseKeys.reconciliation });
   void qc.invalidateQueries({ queryKey: AUDIT_LOGS_KEY });
+  void qc.invalidateQueries({ queryKey: CASHBOOKS_KEY });
 }
 
 /** GET /sales (filters and paging in `query`); the response also carries totals over all matching posted sales. */
@@ -79,6 +81,19 @@ export function useCreateSaleReturn() {
   return useMutation({
     mutationFn: ({ id, body }: { id: number; body: SaleReturnCreate }) =>
       apiPost<SaleReturnResult>(`/sales/${id}/returns`, body),
+    onSuccess: () => invalidateAll(qc),
+  });
+}
+
+/**
+ * POST /sales/:id/returns/:returnId/void (rule R-VR): take a return back. The stock leaves again, the refund comes back into the
+ * cash book, revenue and cost stand again. Same invalidation as any sale write (lists, stock, cash books, audit log).
+ */
+export function useVoidSaleReturn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId, returnId, body }: { saleId: number; returnId: number; body: SaleVoidBody }) =>
+      apiPost<SaleReturnVoidResult>(`/sales/${saleId}/returns/${returnId}/void`, body),
     onSuccess: () => invalidateAll(qc),
   });
 }

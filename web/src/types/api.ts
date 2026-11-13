@@ -457,6 +457,10 @@ export interface SaleReturn {
   note: string;
   clientRef: string;
   items: SaleReturnItem[];
+  /** 'void' once the return was taken back (rule R-VR); a void return stays listed but no longer counts anywhere. */
+  status: PostedStatus;
+  voidedAt: string | null;
+  voidReason: string | null;
 }
 export interface Sale {
   id: number;
@@ -517,3 +521,5 @@ export interface SaleReturnCreate {
   clientRef: string;
 }
 export interface SaleReturnResult { item: SaleReturn; sale: Sale; warnings?: CashWarning[] }
+/** POST /sales/:saleId/returns/:returnId/void (R-VR): the voided return, the updated sale and the shared cash warnings. */
+export interface SaleReturnVoidResult { item: SaleReturn; sale: Sale; warnings: CashWarning[] }
