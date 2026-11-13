@@ -76,6 +76,22 @@ export function makeJunction(link: string, target: string): void {
   execFileSync('cmd', ['/c', 'mklink', '/J', link, target], { stdio: 'pipe' });
 }
 
+let expSeq = 0;
+/**
+ * A manual backup whose CONTENT differs from every earlier one (an expense is posted first), so that two backups taken in the same
+ * second are really different files. Returns the backup's name.
+ */
+export async function distinctBackup(b: { app: FastifyInstance }): Promise<string> {
+  const e = await call(b.app, 'POST', '/expenses', {
+    businessDate: new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10), book: 'shop', category: 'rent',
+    amountCents: 1000 + (expSeq++), description: 'audit marker', clientRef: `p19-${Date.now()}-${expSeq}-${Math.random().toString(36).slice(2, 8)}`,
+  });
+  if (e.status !== 201) throw new Error(`distinctBackup: expense failed ${JSON.stringify(e.body)}`);
+  const m = await call(b.app, 'POST', '/backups');
+  if (m.status !== 201) throw new Error(`distinctBackup: backup failed ${JSON.stringify(m.body)}`);
+  return m.body.item.name as string;
+}
+
 /** The verification script (repository scripts folder). */
 export const SCRIPT = resolve(import.meta.dirname, '../../../../scripts/verify-external-backup.mjs');
 /** Runs the script and returns its exit code and output. */
