@@ -23,6 +23,8 @@ import { AppError } from '../lib/errors.ts';
 import { backupStamp } from '../lib/dates.ts';
 import { currentVersion, latestVersion, migrate, REQUIRED_TABLES } from '../db/migrate.ts';
 import { logAudit } from './audit.service.ts';
+import { validateDatabase } from './database-validation.ts';
+import type { ValidationFailure } from './database-validation.ts';
 
 /** Why a backup was made: at start-up, by the owner, or automatically just before a restore. */
 export type BackupReason = 'startup' | 'manual' | 'pre-restore';
@@ -227,6 +229,65 @@ export function validateDatabaseFile(filePath: string): { schemaVersion: number 
   }
 }
 
+/** Check name reported for each structural gate of `validateDatabaseFile`. */
+const STRUCTURAL_CHECK: Record<string, string> = {
+  RESTORE_INVALID_FILE: 'not_a_database', RESTORE_INTEGRITY_FAILED: 'integrity_check',
+  RESTORE_SCHEMA_MISSING: 'required_tables', RESTORE_SCHEMA_TOO_NEW: 'schema_version',
+};
+
+/** How many failed checks the refusal answer lists (the rest is only counted in `totalFailures`). */
+export const MAX_REFUSAL_FAILURES = 10;
+
+/** Builds the 422 answer for a candidate that failed validation: a plain sentence plus the failures (max 10 shown). */
+export function refusalError(code: string, message: string, failures: ValidationFailure[]): AppError {
+  return new AppError(422, code, message, undefined, {
+    failures: failures.slice(0, MAX_REFUSAL_FAILURES), totalFailures: failures.length,
+  });
+}
+
+/**
+ * Full validation of the candidate file (after the structural gates): opens it read-only and runs every check of
+ * `validateDatabase`. Nothing is written to the candidate; the trial copy lives in a temp folder that is removed.
+ *
+ * @throws AppError 422 RESTORE_INVALID listing the failed checks.
+ */
+function validateCandidate(candidate: string): void {
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(candidate, { readOnly: true });
+  } catch {
+    throw new AppError(422, 'RESTORE_INVALID_FILE', 'This file is not a Viman Mobile database.');
+  }
+  let result;
+  try {
+    result = validateDatabase(db);
+  } finally {
+    try { db.close(); } catch { /* ignore */ }
+  }
+  if (!result.ok) {
+    throw refusalError('RESTORE_INVALID',
+      'This backup was not restored because it failed its safety checks. Your current data was not changed.',
+      result.failures);
+  }
+}
+
+/**
+ * Records a refused restore in the audit log of the LIVE database. Never throws: an audit problem must not turn
+ * a clean refusal into a different error.
+ */
+function recordRefusal(ctx: AppContext, label: string, err: AppError): void {
+  try {
+    const failures = (err.extra?.failures as ValidationFailure[] | undefined) ?? [];
+    const codes = failures.length ? [...new Set(failures.map((f) => f.code))] : [err.code];
+    ctx.database.tx((conn) => {
+      logAudit(conn, 'backup', label, 'restore_refused', null,
+        { file: label, errorCode: err.code, failedChecks: codes, totalFailures: failures.length || 1 });
+    });
+  } catch (auditErr) {
+    console.error('Could not record the refused restore in the audit log:', auditErr);
+  }
+}
+
 /** Removes the `-wal` / `-shm` side files of a database file (they belong to the OLD file and must not outlive it). */
 function removeSidecars(dbPath: string): void {
   rmSync(`${dbPath}-wal`, { force: true });
@@ -236,7 +297,10 @@ function removeSidecars(dbPath: string): void {
 /**
  * Replaces the live database with the contents of `sourcePath` (a backup or an uploaded file).
  *
- * Sequence: copy to a candidate file next to the live DB -> validate it (live DB untouched if it fails) ->
+ * Sequence: copy to a candidate file next to the live DB -> structural check (`validateDatabaseFile`) -> full
+ * validation on a temporary copy (`validateDatabase`, finding M7: integrity, foreign keys, migration records,
+ * schema objects, trial upgrade, business invariants) - a refusal changes nothing in the live data except one audit
+ * row `backup/restore_refused` ->
  * safety backup of the current data -> close, remove stale `-wal`/`-shm`, atomic rename over `viman.db` ->
  * reopen -> migrate (an older backup is upgraded to this version) -> audit entry. If anything fails after the
  * swap began, the safety backup is copied back and the owner sees "nothing was lost".
@@ -263,8 +327,22 @@ export function restoreFromFile(
       throw new AppError(500, 'RESTORE_FAILED', `Could not read the backup file: ${errMsg(err)}`);
     }
 
-    // The live database is untouched if validation fails.
-    validateDatabaseFile(candidate);
+    // The live database is untouched if validation fails (a refusal only adds one audit row).
+    try {
+      try {
+        validateDatabaseFile(candidate);
+      } catch (err) {
+        // Same answer shape as the full validation: the structural gates also list their one failure.
+        if (err instanceof AppError && err.extra === undefined) {
+          throw refusalError(err.code, err.message, [{ code: STRUCTURAL_CHECK[err.code] ?? 'file_check', message: err.message }]);
+        }
+        throw err;
+      }
+      validateCandidate(candidate);
+    } catch (err) {
+      if (err instanceof AppError && err.statusCode === 422) recordRefusal(ctx, label, err);
+      throw err;
+    }
 
     const safety = createBackup(ctx, 'pre-restore');
 
