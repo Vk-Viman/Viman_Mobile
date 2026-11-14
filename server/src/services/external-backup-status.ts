@@ -60,7 +60,7 @@ function warningFor(
     case 'drive_missing':
       return `Drive not found: the external backup drive or folder (${folder}) cannot be found. Plug the drive in; backups are then copied automatically. Shop work is not affected.`;
     case 'failed':
-      return `The last copy to the external backup folder failed: ${lastError ?? 'unknown problem'}. Your local backups are safe and shop work is not affected.`;
+      return `The last copy to the external backup folder failed: ${(lastError ?? 'unknown problem').replace(/\.+$/, '')}. Your local backups are safe and shop work is not affected.`;
     case 'stale': {
       const how = neverSynced
         ? `Overdue: no synchronization with the external folder has been confirmed since it was set up ${days} day${days === 1 ? '' : 's'} ago`
