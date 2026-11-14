@@ -11,6 +11,7 @@ import { call, get } from './helpers/catalog.ts';
 import {
   allowWrite, appWithUsb, cleanAll, copyNow, denyWrite, distinctBackup, errno, extStatus, localBackups, logAll, oursIn, putFolder, sqlAll,
 } from './helpers/phase19bk.ts';
+import { buildDashboard, resolveAsOf } from '../services/dashboard.service.ts';
 import { externalCopyIdle, runExternalCopyOnce } from '../services/external-backup.service.ts';
 import { externalHooks, resetExternalHooks } from '../services/external-backup-hooks.ts';
 import { SAME_DISK_WARNING, plainFsError, sameVolume } from '../services/external-backup-validate.ts';
@@ -22,10 +23,13 @@ afterEach(async () => { resetExternalHooks(); await cleanAll(env); });
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
-const T0 = Date.parse('2026-06-01T08:00:00.000Z');
+/** Baseline = the real now: the dashboard reads the real clock for the age of a backup (the status endpoint reads the injected one). */
+const T0 = Date.now() - 60_000;
 let clock = T0;
 const setClock = (ms: number): void => { clock = ms; externalHooks.now = () => new Date(clock); };
 const stateRows = (s: { ctx: any }): any[] => sqlAll(s.ctx, 'SELECT * FROM external_backup_state');
+/** The dashboard at the injected instant (the HTTP route reads the real clock for backup ages). */
+const dashAt = (s: { ctx: any }): any => buildDashboard(s.ctx, resolveAsOf(undefined, new Date(clock)), new Date(clock));
 const failedRows = (s: { ctx: any }): any[] => logAll(s.ctx).filter((l) => l.status === 'failed');
 const full = (): void => { externalHooks.writeTemp = async () => { throw errno('ENOSPC'); }; };
 
@@ -37,7 +41,7 @@ describe('M5: a run that finds everything on the drive is a successful synchroni
     await externalCopyIdle(s.ctx);
     setClock(T0 + 8 * DAY);
     expect((await extStatus(s.app)).status).toBe('stale');
-    let dash = (await get(s.app, '/dashboard')).body;
+    let dash = dashAt(s);
     expect(dash.warnings.map((w: any) => w.code)).toContain('EXTERNAL_BACKUP_STALE');
     const r = await copyNow(s.app);
     expect(r.body.copied).toEqual([]);
@@ -47,7 +51,7 @@ describe('M5: a run that finds everything on the drive is a successful synchroni
     expect(st).toMatchObject({ status: 'ok', warning: null, daysSinceSuccess: 0, consecutiveFailures: 0 });
     expect(st.lastSuccessAt).toBe(new Date(T0 + 8 * DAY).toISOString()); // the confirmed synchronization
     expect(st.lastCopyAt).toBe(new Date(T0).toISOString()); // the file itself was copied 8 days ago
-    dash = (await get(s.app, '/dashboard')).body;
+    dash = dashAt(s);
     expect(dash.backup.external).toEqual({ status: 'ok', lastSuccessAt: new Date(T0 + 8 * DAY).toISOString(), daysSinceSuccess: 0, warning: null });
     expect(dash.warnings.filter((w: any) => /^EXTERNAL_BACKUP/.test(w.code))).toEqual([]);
     // the append-only log did not get a row for the pure synchronization
@@ -88,7 +92,6 @@ describe('M5: a run that finds everything on the drive is a successful synchroni
   it('no backup at all to copy but the drive is fine: still synchronized', async () => {
     setClock(T0);
     const s = await appWithUsb(env);
-    for (const n of readdirSync(s.ctx.backupsDir)) if (/^viman-/.test(n)) { /* leave local files alone */ }
     const r = await runExternalCopyOnce(s.ctx, 'manual');
     expect(r.failed).toEqual([]);
     expect(r.status).toBe('ok');
@@ -165,7 +168,7 @@ describe('M5: status for every state (injected clock)', () => {
     const s = await appWithUsb(env);
     await distinctBackup(s);
     await externalCopyIdle(s.ctx);
-    const codes = async () => ((await get(s.app, '/dashboard')).body.warnings as any[]).map((w) => w.code).filter((c) => /^EXTERNAL_BACKUP/.test(c));
+    const codes = async () => (dashAt(s).warnings as any[]).map((w) => w.code).filter((c) => /^EXTERNAL_BACKUP/.test(c));
     expect(await codes()).toEqual([]);
     renameSync(s.usb, `${s.usb}-away`);
     expect(await codes()).toEqual(['EXTERNAL_BACKUP_DRIVE_MISSING']);
@@ -328,8 +331,9 @@ describe('M5/L3: the status belongs to the folder; setting a folder synchronizes
     await distinctBackup(s);
     await externalCopyIdle(s.ctx);
     setClock(T0 + 10 * DAY);
-    full();
     const B = env.newDir('viman-usbB21-');
+    // (a "full" writeTemp hook would also make the folder probe fail, so the damage is injected after the write instead)
+    externalHooks.afterWrite = async () => { throw errno('EIO'); };
     await call(s.app, 'PUT', '/backups/external', { folder: B });
     await externalCopyIdle(s.ctx);
     let st = await extStatus(s.app);
@@ -456,7 +460,7 @@ describe('Low findings in these files', () => {
     const put = await call(s.app, 'PUT', '/backups/external', { folder: env.newDir('viman-usb21-') });
     expect(put.status).toBe(200);
     expect(put.body.diskWarning).toBe(SAME_DISK_WARNING);
-    const dash = (await get(s.app, '/dashboard')).body;
+    const dash = dashAt(s);
     expect(Object.keys(dash.backup.external).sort()).toEqual(['daysSinceSuccess', 'lastSuccessAt', 'status', 'warning']);
   });
 });
