@@ -59,6 +59,11 @@ Each item below was checked in the code.
 - **Stocktake expected quantity at count time** (BUSINESS_RULES §13A decision 4): record the expected quantity when each line is counted and adjust for movements since, so a stocktake can safely run while the shop is trading. Until then: complete the stocktake immediately after counting, when the shop is quiet.
 - **POS service lines** (decision 7): not planned; services use Services → Service types.
 
+### Awaiting owner approval (designs only, nothing built)
+- Correct-this-entry (void + replacement in one action): `PROPOSAL_TRANSACTION_CORRECTION.md`.
+- Sales discounts (per-item, whole-bill, fixed, percentage, limits): `PROPOSAL_SALES_DISCOUNTS.md`.
+- Real USB drive verification: `USB_VERIFICATION_CHECKLIST.md` (not yet performed).
+
 ### Hardening pass M1-M7 (owner-approved and DONE 2026-11-14)
 - M1 closed days enforced by database triggers on every business-date table (migration 019); M2/M3/M4/L2 void-needs-reversal, return reversal caps, one refund and one restock set per return, `schema_migrations` and `INSERT OR REPLACE` guards (migration 020); M5/M6 accurate external-backup status and bounded failure log (migration 021); M7 restore validation before the live database is touched (`database-validation.ts`). Details: migrations README, API_CONTRACTS "Hardening contract".
 - Still open from the audit: L1/L3 (letter-case clash on the drive, cloud-name rule false positives such as a folder called Boxes). Restore cannot detect a consistent change inside free-text columns.

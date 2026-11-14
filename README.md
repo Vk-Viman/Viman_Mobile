@@ -313,7 +313,7 @@ flowchart TD
 A backup is made automatically **every time the program starts** and whenever you press **Backup now**. The newest 30 start-up and manual backups are kept. Before any restore a safety copy is made; the newest 10 safety copies are kept. The program does **not** make a new local backup on a timer while it keeps running all day: if you leave it open for days, press **Backup now** at closing time. The Dashboard warns when the newest backup is more than 48 hours old.
 
 ### Restore
-**Settings → Backups**: choose a backup in the list (**Restore**) or **Restore from file...**, and type `RESTORE` to confirm. A safety backup of the current data is taken first; the file is checked (valid Viman database, SQLite integrity check, not from a newer version of the program); then it replaces the live data. If anything fails after that point the previous data is put back automatically. An older backup is upgraded to the current version after the restore. Anything entered after the backup was made is not in it. The restore is recorded in the Audit log.
+**Settings → Backups**: choose a backup in the list (**Restore**) or **Restore from file...**, and type `RESTORE` to confirm. A safety backup of the current data is taken first. The file is then checked on a temporary copy, **before your live data is touched**: it must be a valid Viman database, pass the SQLite integrity and foreign-key checks, have the expected tables, indexes and migration records, not come from a newer version of the program, and its stock, cash-book and Ice Cream fund figures must agree with their own history. If any check fails the restore is **refused** with a plain-language list of the problems (code `RESTORE_INVALID`), your current data is not changed, and the refusal is recorded in the Audit log. If everything passes the file replaces the live data; if anything fails after that point the previous data is put back automatically. A restored file also brings back the settings it was saved with (for example the external backup folder). One limit: a change inside a free-text column (a note or a name) that leaves all figures consistent cannot be detected. An older backup is upgraded to the current version after the restore. Anything entered after the backup was made is not in it. The restore is recorded in the Audit log.
 
 ### External backups (USB drive)
 All automatic backups live on the same PC, so a failed disk or a theft would take the data **and** every backup with it. Keep copies on a USB drive:
@@ -321,7 +321,7 @@ All automatic backups live on the same PC, so a failed disk or a theft would tak
 1. Plug in a USB drive and note its letter (for example `E:`). Create a folder on it, such as `E:\VimanBackups`.
 2. Go to **Settings → Backups → External backup folder**, type the folder path and press **Save**. Press **Copy backup now** to test it.
 3. From then on every start-up and manual backup is copied there automatically whenever the drive is plugged in (the system also checks every 10 minutes). Each copy is checked by size and checksum (SHA-256), existing files are never overwritten, and the newest 30 copies are kept. Only files this system created are ever removed from that folder.
-4. If the drive is unplugged the shop keeps working normally; you only see a warning on the Settings page and the Dashboard. The Dashboard also warns if **no successful copy has been made for 7 days**.
+4. If the drive is unplugged the shop keeps working normally; you only see a warning on the Settings page and the Dashboard. The status is one of: **Synchronized** (every start-up and manual backup is on the drive, including when nothing new had to be copied), **Not set up**, **Drive not found**, **Last copy failed**, or **Overdue** (no confirmed synchronization for 7 days or more). Pressing **Copy backup now** with the drive plugged in and everything already copied clears an Overdue warning. While a drive stays missing or full, repeated identical failures are counted rather than logged each time (the Settings page shows how many times and since when).
 
 **Rotation and off-site storage (recommended procedure).** Use two USB drives, A and B. Keep A plugged in during the week. Every Friday after closing, press **Copy backup now**, wait for "copied", then swap: take A home or to another safe place (**off-site**), and plug in B. Next Friday swap back. This way one verified copy is always away from the shop, and a fire, theft or ransomware at the shop cannot destroy every copy. Label the drives with the date of the last swap. Once a month restore the newest external copy into a test folder (or ask for help) to be sure it opens.
 
@@ -332,12 +332,12 @@ All automatic backups live on the same PC, so a failed disk or a theft would tak
 2. Open the folder in File Explorer: a backup file with a recent date and a size similar to the one in `data\backups` should be there.
 3. Unplug the drive. Keep working: you should see only a warning, no errors. Plug it back in (same drive letter) and press **Copy backup now** again.
 4. Confirm the new file appears and the Dashboard warning is gone.
-5. Optionally restore that copy on a test copy of the project and check your figures.
+5. Optionally restore that copy into a **separate test data folder and port** (never the live database) and check your figures. The step-by-step procedure is in [`USB_VERIFICATION_CHECKLIST.md`](USB_VERIFICATION_CHECKLIST.md).
 6. **Automatic check (recommended):** with the drive plugged in, run this in a Command Prompt in the project folder (it only reads, it never changes anything):
    ```
-   node scriptserify-external-backup.mjs E:VimanBackups
+   node scripts\verify-external-backup.mjs E:\VimanBackups
    ```
-   It compares every copy on the drive with the backup of the same name in `dataackups` (SHA-256), checks that each copy opens as a valid database, flags leftover temporary files and files that do not belong, and asks the running program for its external-backup status. Exit code 0 means everything passed. Options: `--data <data folder>` and `--port <port>`.
+   It compares every copy on the drive with the backup of the same name in `data\backups` (SHA-256), checks that each copy opens as a valid database, flags leftover temporary files and files that do not belong, and asks the running program for its external-backup status. Exit code 0 means everything passed. Options: `--data <data folder>` and `--port <port>`.
 
 ### After a power cut or a damaged database
 The database is written with full durability, so a power cut normally loses nothing that was already saved. If the file is damaged the system refuses to start (so nothing is written on top of it) and prints these steps in the black window:
@@ -366,7 +366,8 @@ Anything entered after that backup must be re-entered.
 | **"Node.js 24 or newer is required"** | Node.js is missing or too old | Install Node.js 24 LTS from https://nodejs.org, then start again |
 | **The build failed** | Screens could not be built | Open a terminal in this folder, run `npm run build`, read the error. If the first-time install failed, check the internet |
 | **"The shop database is damaged"** | Possible after a power cut or disk fault; the system refuses to start | Follow [After a power cut or a damaged database](#after-a-power-cut-or-a-damaged-database) |
-| **Restore rejected** | The file is not a valid Viman database, failed the integrity check, or is from a newer version | Your current data is not changed. Pick a different backup |
+| **Restore rejected** (`RESTORE_INVALID`, `RESTORE_INTEGRITY_FAILED`, `RESTORE_INVALID_FILE`) | The file is not a valid Viman database, is damaged, is from a newer version, or its stock, cash or Ice Cream fund figures do not agree with its own history | Your current data is not changed and the reasons are listed on screen and in the Audit log. Pick a different backup |
+| **Backup status: Drive not found / Last copy failed / Overdue** | The USB folder cannot be reached, the copy failed (full or read-only drive), or nothing was confirmed on the drive for 7 days | Plug the drive in (check its letter), press **Copy backup now**; the status returns to Synchronized |
 | `DAY_CLOSED` ("That day is closed...") | The date you chose is a closed day for that cash book | Cash Books → **Reopen day** (a reason is required), make the entry, close the day again |
 | `BACKDATE_BEFORE_CLOSED_DAY` | A later day is already closed for that book; an earlier-dated entry would change a closed day | Reopen the later closed day first, or use a date after it |
 | `FUTURE_DATE_NOT_ALLOWED` | Records cannot be dated after today | Choose today or an earlier date |
@@ -444,7 +445,7 @@ Size guide: **S** = about a day, **M** = a few days, **L** = a week or more (rou
 | Barcode label printing | A scanner can type codes into the POS search, but labels cannot be printed |
 | Customer credit or layaway | Cash only, by design |
 | Supplier credit or payables | Every purchase is paid in cash |
-| Editing a saved record in place | By design: void and re-enter |
+| Editing a saved record in place | By design: void and re-enter. A one-step "correct this entry" (void + replacement) is only a design proposal: [`PROPOSAL_TRANSACTION_CORRECTION.md`](PROPOSAL_TRANSACTION_CORRECTION.md), not approved or built |
 | Stocktake with expected quantity at count time | Approved future enhancement; today complete it right after counting |
 | Service lines in the POS | Deferred by decision; use Services |
 | Void of a purchase return | No such function exists |
@@ -453,7 +454,7 @@ Size guide: **S** = about a day, **M** = a few days, **L** = a week or more (rou
 | Windows installer, auto-start with Windows, tray icon, auto-update | The launcher is a `.bat` file |
 | Other languages (Sinhala, Tamil), dark mode | English, light only |
 | Multi-shop or multi-PC | One PC, one user |
-| Tax/VAT, discounts and promotions | Not modelled |
+| Tax/VAT, discounts and promotions | Not modelled. A discount design is only a proposal: [`PROPOSAL_SALES_DISCOUNTS.md`](PROPOSAL_SALES_DISCOUNTS.md), not approved or built (today the price can be typed per line) |
 | Importing historical data | Fresh start by design |
 
 ### 10.2 Recommended before real daily use
@@ -559,7 +560,7 @@ Environment variables (read by `server/src/index.ts`): `VIMAN_DATA_DIR` (default
 ### Testing approach and last known results
 Vitest, one fresh temporary data folder per test, through the real API. Layers: database tests (constraints, triggers), API tests (status and error codes, idempotency, voids, date rules, closed days), seeded random model checks against an independent BigInt model, invariant tests (stock cache = movements; fund total = Ice Cream cash book), hand-calculated report scenarios, performance checks, and the Ice Cream worked example replayed step by step. `tests/finance/` holds independent expected-value vectors. The web app has no test runner: it is checked by `npm run typecheck`, `npm run build` and manual browser passes.
 
-Last recorded result (pull request #13): **102 test files, 1,981 tests, 0 skipped**; server and web typecheck clean; web build OK. This README did not re-run them.
+Last recorded result (main after pull request #15, 2026-11-14): **139 test files, 2,628 tests passing, 0 skipped**; server and web typecheck clean; web build OK.
 
 ### Documents
 | File | What it holds |
@@ -572,6 +573,8 @@ Last recorded result (pull request #13): **102 test files, 1,981 tests, 0 skippe
 | `TASKS.md` | Phase checklist and known limitations |
 | `IMPLEMENTATION_STATUS.md`, `AGENT_WORK_LOG.md` | History of how each phase was built and verified |
 | `DECISIONS_REVIEW.md`, `DOC_REVIEW_FINDINGS.md` | Owner decision review and documentation review findings |
+| `USB_VERIFICATION_CHECKLIST.md` | Manual procedure and sign-off table for testing external backups and restore with a real USB drive (not yet performed) |
+| `PROPOSAL_TRANSACTION_CORRECTION.md`, `PROPOSAL_SALES_DISCOUNTS.md` | Design proposals awaiting owner approval (nothing built) |
 
 ### How it was built
 The system was built in phases by several AI agents working in parallel, each in its own git worktree with exclusive files, with an orchestrator owning the shared documents and integration, and independent review and QA passes against hand-calculated figures. New rules go to the owner first and are recorded in `BUSINESS_RULES.md` before code follows.
@@ -580,6 +583,6 @@ The system was built in phases by several AI agents working in parallel, each in
 
 ## 12. Project status
 
-All planned phases (1 to 14) are built, including category management and the 14 approved implementation decisions (closed-day ordering protection, void of a sales return, external backups, Services rename, backdated-entry warnings). The last merged change is pull request #13. Known limitations are listed in `TASKS.md`. A final report to the owner and a complete launcher-based browser pass of every screen on a clean database are the open items recorded in `TASKS.md`.
+All planned phases (1 to 14) are built, including category management and the 14 approved implementation decisions (closed-day ordering protection, void of a sales return, external backups, Services rename, backdated-entry warnings). The seven Medium findings of the final independent audit were fixed in the hardening pass (pull request #15: database-level closed-day protection, void-needs-reversal, duplicate-return protection, accurate external backup status and bounded failure log, restore validation). Real USB drive verification has **not** been performed yet: see [`USB_VERIFICATION_CHECKLIST.md`](USB_VERIFICATION_CHECKLIST.md). Known limitations are listed in `TASKS.md`.
 
 No license file exists in this repository.
