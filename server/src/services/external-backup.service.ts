@@ -80,11 +80,11 @@ const nowIso = (): string => externalNow().toISOString();
 
 /** `viman-STAMP-reason` without suffix and extension: files with the same base are "the same backup". */
 function baseOf(name: string): string {
-  return name.replace(/(-\d+)?\.db$/, '');
+  return name.replace(/(-\d+)?\.db$/i, '');
 }
 /** Sort key: stamp, then the "-n" number (none = 1). */
 function orderKey(name: string): [string, number] {
-  const m = /-(\d+)\.db$/.exec(name);
+  const m = /-(\d+)\.db$/i.exec(name);
   return [name.slice(6, 21), m ? Number(m[1]) : 1];
 }
 /** Newest first. */
@@ -242,7 +242,9 @@ function takenNames(folder: string): Set<string> {
  * Records one finished run: the state row of the folder and, only for changes, rows in the append-only log
  * (a failure once per error text and source file per 24 hours; the first success after failures). Never throws.
  */
-function recordRun(ctx: AppContext, folder: string, runAt: string, failures: RunFailure[], result: ExternalCopyResult): void {
+function recordRun(
+  ctx: AppContext, folder: string, runAt: string, failures: RunFailure[], result: ExternalCopyResult, trigger: CopyTrigger,
+): void {
   try {
     ctx.database.tx((conn) => {
       // The folder was switched while this run was going on: its result belongs to nobody any more.
@@ -250,13 +252,19 @@ function recordRun(ctx: AppContext, folder: string, runAt: string, failures: Run
       const since = new Date(new Date(runAt).getTime() - FAILURE_LOG_GAP_MS).toISOString();
       let failureLogged = false;
       for (const f of failures) {
+        // The 10-minute timer finding the USB drive simply absent is the normal "drive not plugged in" situation: it is counted in the
+        // state row (and shown live as "Drive not found") but not appended to the log; the first manual / post-backup run logs it.
+        if (trigger === 'timer' && f.code === 'DRIVE_MISSING') continue;
         if (failureLoggedSince(conn, f.source, f.message, since)) continue;
         insertExternalLog(conn, { sourceName: f.source, targetName: null, status: 'failed', error: f.message, createdAt: runAt });
         failureLogged = true;
       }
-      const wasFailing = (getExternalState(conn, folder)?.consecutiveFailures ?? 0) > 0;
+      const before = getExternalState(conn, folder);
+      // A recovery row only closes a failure series that has a failed row in the log.
+      const wasLogged = (before?.consecutiveFailures ?? 0) > 0 && before?.lastFailureLoggedAt != null
+        && before.firstFailureAt != null && before.lastFailureLoggedAt >= before.firstFailureAt;
       const synced = failures.length === 0;
-      if (synced && wasFailing && result.copied.length === 0 && result.skipped.length > 0) {
+      if (synced && wasLogged && result.copied.length === 0 && result.skipped.length > 0) {
         // Recovery with nothing new to copy: one row says the drive is fine again (copied files wrote their own rows).
         insertExternalLog(conn, { sourceName: null, targetName: result.skipped[0]!.name, status: 'skipped', createdAt: runAt });
       }
@@ -268,8 +276,8 @@ function recordRun(ctx: AppContext, folder: string, runAt: string, failures: Run
   } catch { /* the database may be closing; the state is recomputed by the next run */ }
 }
 
-/** One copy run. Never throws. `_trigger` is only informational: every kind of run is recorded the same way. */
-async function performCopy(ctx: AppContext, _trigger: CopyTrigger): Promise<ExternalCopyResult> {
+/** One copy run. Never throws. */
+async function performCopy(ctx: AppContext, trigger: CopyTrigger): Promise<ExternalCopyResult> {
   const runAt = nowIso();
   const result: ExternalCopyResult = { copied: [], skipped: [], failed: [], pruned: [], status: 'ok', warning: null };
   const failures: RunFailure[] = [];
@@ -350,7 +358,7 @@ async function performCopy(ctx: AppContext, _trigger: CopyTrigger): Promise<Exte
   } catch (err) {
     fail(null, kindOf(err), plainFsError(err));
   }
-  if (folder !== null) recordRun(ctx, folder, runAt, failures, result);
+  if (folder !== null) recordRun(ctx, folder, runAt, failures, result, trigger);
   return finish();
 }
 

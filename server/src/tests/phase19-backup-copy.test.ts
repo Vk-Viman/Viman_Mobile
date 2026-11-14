@@ -169,7 +169,7 @@ describe('duplicate and look-alike names (REAL file system)', () => {
     expect(readFileSync(join(s.usb, n!, 'precious.txt'), 'utf8')).toBe('keep me');
   });
 
-  it('CASE differences on NTFS: a file with the same name in other letter case is the SAME file; it is never overwritten (OBSERVATION: it blocks that one backup with a message that does not name the cause)', async () => {
+  it('CASE differences on NTFS: a file with the same name in other letter case is the SAME file; it is never overwritten (CHANGED by hardening L1: the backup now gets a new unique name instead of failing for ever)', async () => {
     const s = await appWithUsb(env);
     const [n] = localBackups(s.ctx, 1);
     const upper = n!.toUpperCase().replace('.DB', '.db').replace('VIMAN', 'VIMAN');
@@ -178,12 +178,12 @@ describe('duplicate and look-alike names (REAL file system)', () => {
     expect(names).toEqual([upper]);
     const r = await copyNow(s.app);
     expect(r.status).toBe(200);
-    expect(r.body.copied).toEqual([]);
     expect(readFileSync(join(s.usb, upper), 'utf8')).toBe('a different file with upper-case letters'); // never overwritten
-    expect(readdirSync(s.usb)).toEqual([upper]); // no temp file left
-    expect(r.body.failed).toHaveLength(1);
-    expect(r.body.failed[0].error).toMatch(/already|appeared|nothing was overwritten/i);
-    expect(r.body.status).toBe('failed');
+    // was: copied [] and one failure "A file with that name appeared ..." on every run; now: written under a new unique name
+    expect(r.body.failed).toEqual([]);
+    expect(r.body.copied.map((c: any) => c.name)).toEqual([n!.replace('.db', '-2.db')]);
+    expect(readdirSync(s.usb).sort()).toEqual([upper, n!.replace('.db', '-2.db')].sort()); // no temp file left
+    expect(r.body.status).toBe('ok');
   });
 
   it('the identical content in other letter case is also not overwritten and not duplicated', async () => {

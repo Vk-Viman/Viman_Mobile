@@ -63,7 +63,7 @@ function warningFor(
       return `The last copy to the external backup folder failed: ${lastError ?? 'unknown problem'}. Your local backups are safe and shop work is not affected.`;
     case 'stale': {
       const how = neverSynced
-        ? `Overdue: the external folder was set up ${days} day${days === 1 ? '' : 's'} ago and no synchronization has been confirmed yet`
+        ? `Overdue: no synchronization with the external folder has been confirmed since it was set up ${days} day${days === 1 ? '' : 's'} ago`
         : `Overdue: no confirmed synchronization with the external folder for ${days} day${days === 1 ? '' : 's'}`;
       return `${how}. Check that the drive is connected, then use "Copy backup now" in Settings > Backups. Shop work is not affected.`;
     }

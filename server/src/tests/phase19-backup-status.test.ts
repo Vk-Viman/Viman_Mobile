@@ -83,7 +83,7 @@ describe('seven-day stale boundary (injected clock)', () => {
     expect(st.warning).toMatch(/The last attempt failed: The external drive is full/);
   });
 
-  it('the seven days count from the LAST success of any folder: after switching to a new folder an old success still decides (OBSERVATION)', async () => {
+  it('the seven days count per FOLDER (hardening M5/L3 changed the old OBSERVATION): after switching to a new folder the old success does not decide', async () => {
     setClock(T0);
     const s = await appWithUsb(env);
     await distinctBackup(s);
@@ -91,9 +91,11 @@ describe('seven-day stale boundary (injected clock)', () => {
     setClock(T0 + 10 * DAY);
     const B = env.newDir('viman-usbB-');
     expect((await putFolder(s.app, B)).status).toBe(200);
-    // the new folder has never received anything, yet is "stale" at once because the last success (folder A) was 10 days ago
+    // CHANGED by hardening M5 (L3): the status follows the new folder. It starts "ok" with no success yet (it used to be "stale" at once
+    // because the last success of folder A was 10 days ago); its own seven days start when it was set.
     const st = await extStatus(s.app);
-    expect(st.status).toBe('stale');
+    expect(st.status).toBe('ok');
+    expect(st.lastSuccessAt).toBeNull();
     // ... and the opposite: 1 day after a success in A, a brand-new empty folder B reads "ok" although it holds no backup yet
     setClock(T0 + 11 * DAY);
     const s2 = await appWithUsb(env);

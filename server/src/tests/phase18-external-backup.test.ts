@@ -761,7 +761,7 @@ describe('migration 018 on a populated database', () => {
     db.exec("INSERT INTO suppliers (name, phone) VALUES ('Alpha', '0771'), ('Beta', '0772')");
     db.exec("INSERT INTO audit_logs (entity, entity_id, action, after_json) VALUES ('settings', 'rates', 'update', '{\"a\":1}')");
     const dump = (): string => {
-      const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('backup_settings','external_backup_log','schema_migrations') ORDER BY name").all() as any[]).map((r) => r.name);
+      const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('backup_settings','external_backup_log','external_backup_state','schema_migrations') ORDER BY name").all() as any[]).map((r) => r.name);
       return JSON.stringify(names.map((n) => [n, db.prepare(`SELECT * FROM "${n}" ORDER BY rowid`).all()]));
     };
     const before = dump();
