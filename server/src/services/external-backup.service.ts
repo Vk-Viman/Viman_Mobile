@@ -148,7 +148,7 @@ export async function setExternalFolder(ctx: AppContext, folder: string | null):
     logAudit(conn, 'backup_settings', '1', 'update', { folder: before }, { folder: next });
   });
   // A newly set folder is synchronized at once, in the background (never awaited: the answer does not depend on the drive).
-  if (changed && next !== null) void runExternalCopyOnce(ctx, 'auto');
+  if (changed && next !== null && !externalHooks.noSyncOnSet) void runExternalCopyOnce(ctx, 'auto');
   return getExternalStatus(ctx, false);
 }
 

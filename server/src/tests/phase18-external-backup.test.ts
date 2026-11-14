@@ -33,7 +33,12 @@ afterEach(async () => {
 
 const DAY = 86_400_000;
 const sha = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
-const putFolder = (app: FastifyInstance, folder: unknown) => call(app, 'PUT', '/backups/external', { folder });
+// Sets the folder without the immediate synchronization added by hardening M5 (covered in phase21-external-sync.test.ts):
+// these tests set up a still-empty drive and then drive every copy themselves.
+const putFolder = async (app: FastifyInstance, folder: unknown) => {
+  externalHooks.noSyncOnSet = true;
+  try { return await call(app, 'PUT', '/backups/external', { folder }); } finally { delete externalHooks.noSyncOnSet; }
+};
 const status = async (app: FastifyInstance) => (await get(app, '/backups/external')).body;
 const sqlRows = (ctx: AppContext, q: string, ...p: any[]): any[] => ctx.database.conn.prepare(q).all(...p) as any[];
 const logRows = (ctx: AppContext) => sqlRows(ctx, 'SELECT * FROM external_backup_log ORDER BY id');
