@@ -7,7 +7,7 @@ import { TestEnv } from './helpers/tmp.ts';
 import { apiBase, ref } from './helpers/inventory.ts';
 import { closeNew } from './helpers/phase8.ts';
 import { C, E, L, allOps, closeBooks, fixture, fullSnapshot, must } from './helpers/phase19cd.ts';
-import { migrate } from '../db/migrate.ts';
+import { migrate, latestVersion } from '../db/migrate.ts';
 import { openDatabase } from '../db/db.ts';
 
 const env = new TestEnv();
@@ -55,6 +55,8 @@ describe('M1: migration 019 on a populated database', () => {
     conn.exec('PRAGMA foreign_keys = OFF'); // only to be able to drop and replay in this copy; no data is touched
     // turn this 019 database into a faithful 018 one: drop the 38 triggers and forget the migration
     for (const name of Object.keys(NEW_TRIGGERS)) conn.exec(`DROP TRIGGER ${name}`);
+    // migration 020 (M2) guards schema_migrations against DELETE; this test only simulates a pre-019 database on its own copy, so the guard is lifted here
+    conn.exec('DROP TRIGGER trg_schema_migrations_no_delete');
     conn.exec('DELETE FROM schema_migrations WHERE version = 19');
     conn.exec('PRAGMA foreign_keys = ON');
     const beforeMaster = master(conn);
@@ -65,7 +67,7 @@ describe('M1: migration 019 on a populated database', () => {
 
     const res = migrate(conn);
     expect(res.applied).toEqual(['019_closed_day_db_protection.sql']);
-    expect(res.version).toBe(19);
+    expect(res.version).toBe(latestVersion()); // 020 and 021 (later workstreams) were already recorded; only 019 was re-applied
 
     const afterMaster = master(conn);
     const beforeByName = new Map(beforeMaster.map((m) => [`${m.type}:${m.name}`, m]));

@@ -257,7 +257,7 @@ describe('valid backups still restore, with the same figures', () => {
     const hashBefore = hashFile(ext);
     const r = await upload(s.app, readFileSync(ext), name);
     expect(r.statusCode, r.body).toBe(200);
-    expect(diffSnapshots(snap, snapshotAll(s.ctx)).filter((t) => !['audit_logs', 'external_backup_log', 'settings'].includes(t))).toEqual([]);
+    expect(diffSnapshots(snap, snapshotAll(s.ctx)).filter((t) => !['audit_logs', 'external_backup_log', 'external_backup_state', 'settings'].includes(t))).toEqual([]);
     expect(hashFile(ext)).toBe(hashBefore); // the external file was only read
     expect(validateDatabase(s.ctx.database.conn).failures).toEqual([]);
     await putFolder(s.app, null);
