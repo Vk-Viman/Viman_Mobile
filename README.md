@@ -489,7 +489,9 @@ Size guide: **S** = about a day, **M** = a few days, **L** = a week or more (rou
 
 ---
 
-### 10.4 Hardening backlog from the final independent audit (2026-11-13)
+### 10.4 Hardening backlog from the final independent audit (2026-11-13) - Medium items resolved 2026-11-14
+> The seven Medium items below (M1-M7) were fixed in the hardening pass (migrations 019-021 and restore validation). Only the two Low rows about the drive and free-text edits remain as limitations.
+
 The audit found **no Critical or High** problem and no historical record changed. It listed these smaller items, none reachable through the normal screens except where noted; they are proposals, not yet scheduled (details in `AUDIT_REPORT_2026-11-13.md`):
 
 | Priority | Item | Size |
