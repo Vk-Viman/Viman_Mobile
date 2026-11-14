@@ -130,16 +130,13 @@ describe('the one allowed change: a return can go posted -> void, and only with 
     const c = s.ctx.database.conn;
     c.exec('SAVEPOINT p19flip');
     try {
-      // Migration 019 (M1): a flip inside a closed period is now refused by the database itself; this test is about the
-      // trigger-managed effects, so the closings are reopened inside the rolled-back savepoint first (when any apply).
-      const flipSql = `UPDATE sales_returns SET status = 'void', voided_at = '2025-09-19T00:00:00.000Z', void_reason = 'raw flip' WHERE id = ${target!.id}`;
-      try {
-        c.exec(flipSql);
-      } catch (e) {
-        expect((e as Error).message).toMatch(/DAY_CLOSED|BACKDATE_BEFORE_CLOSED_DAY/);
-        c.exec("UPDATE daily_closings SET reopened_at = '2999-01-01T00:00:00.000Z', reopen_reason = 'test only' WHERE reopened_at IS NULL OR closed_at > reopened_at");
-        c.exec(flipSql);
-      }
+      // Migration 019 (M1) + 020 (M2): the flip needs the reversal rows first (a damaged return has a refund entry and no stock movement); the
+      // world has closed days, whose rule applies to those reversal rows, so the days are reopened inside this rolled-back savepoint
+      c.exec("UPDATE daily_closings SET reopened_at = '2999-01-01T00:00:00.000Z', reopen_reason = 'test' WHERE reopened_at IS NULL OR closed_at > reopened_at");
+      c.exec(`INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, reverses_entry_id)
+        SELECT book, business_date, type, -amount_cents, fund, ref_table, ref_id, id FROM cash_entries
+         WHERE ref_table = 'sales_returns' AND ref_id = ${target!.id} AND reverses_entry_id IS NULL AND amount_cents <> 0`);
+      c.exec(`UPDATE sales_returns SET status = 'void', voided_at = '2025-09-19T00:00:00.000Z', void_reason = 'raw flip' WHERE id = ${target!.id}`);
       expect(returnedQtyProblems(s.ctx), 'returned_qty after flip').toEqual([]);
       expect(n1(s.ctx, "SELECT COUNT(*) FROM stock_losses WHERE status = 'posted'")).toBeLessThan(lossesBefore);
       expect(n1(s.ctx, `SELECT COUNT(*) FROM stock_losses WHERE sales_return_id = ${target!.id} AND status = 'posted'`)).toBe(0);

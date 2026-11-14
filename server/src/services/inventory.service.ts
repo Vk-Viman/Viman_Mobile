@@ -135,6 +135,8 @@ export function issueStock(conn: DatabaseSync, p: {
 export function issueStockCapped(conn: DatabaseSync, p: {
   productId: number; businessDate: string; type: 'purchase_return' | 'purchase_void'; qty: number;
   maxValueCents: number; refTable: string | null; refId: number | null; reason: string;
+  /** Void path: the original (purchase) movement this removal cancels (migration 020 link); omitted for returns. */
+  reversesMovementId?: number | null;
 }): { movementId: number; valueRemovedCents: number; sweepMovementId: number | null; sweptCents: number } {
   assertInt(p.qty, 'qty', 1);
   assertInt(p.maxValueCents, 'maxValueCents', 0);
@@ -154,7 +156,7 @@ export function issueStockCapped(conn: DatabaseSync, p: {
   const movementId = insertMovement(conn, {
     productId: p.productId, businessDate: p.businessDate, type: p.type,
     qtyDelta: -p.qty, valueDeltaCents: -valueRemovedCents, unitCostCents: mulDivRound(valueRemovedCents, 1, p.qty),
-    refTable: p.refTable, refId: p.refId, reason: p.reason,
+    refTable: p.refTable, refId: p.refId, reason: p.reason, reversesMovementId: p.reversesMovementId ?? null,
   });
   return { movementId, valueRemovedCents, sweepMovementId, sweptCents };
 }
@@ -282,7 +284,7 @@ export function reverseMovements(conn: DatabaseSync, movementIds: number[], reas
     }
     created.push(insertMovement(conn, {
       productId: m.productId, businessDate: m.businessDate, type: m.type, qtyDelta, valueDeltaCents,
-      unitCostCents: m.unitCostCents, refTable: m.refTable, refId: m.refId, reason,
+      unitCostCents: m.unitCostCents, refTable: m.refTable, refId: m.refId, reason, reversesMovementId: m.id,
     }));
   }
   return created;

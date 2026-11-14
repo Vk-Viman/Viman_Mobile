@@ -128,7 +128,15 @@ describe('database protection: raw void flip (status posted -> void) of a record
     const flip = (id: number) => probe(w.fx, () => run(w, `UPDATE ${t} SET status = 'void', voided_at = '2026-01-01T00:00:00.000Z', void_reason = 'raw' WHERE id = ?`, id));
     const e = flip(w.recs[t]!.E);
     const c = flip(w.recs[t]!.C);
-    if (PROTECTED.has(t)) {
+    // Migration 020 (M2): a record that has cash / stock / fund rows can no longer be flipped without its reversal rows at all
+    // (VOID_WITHOUT_REVERSAL answers before the closed-day triggers); a record without ledger rows still meets the rules below.
+    const ledger = (id: number) => Number((conn(w).prepare(`SELECT (SELECT COUNT(*) FROM cash_entries WHERE ref_table = '${t}' AND ref_id = ?)
+      + (SELECT COUNT(*) FROM stock_movements WHERE ref_table = '${t}' AND ref_id = ?)
+      + (SELECT COUNT(*) FROM icecream_fund_entries WHERE ref_table = '${t}' AND ref_id = ?) AS n`).get(id, id, id) as any).n);
+    if (ledger(w.recs[t]!.E) > 0 && ledger(w.recs[t]!.C) > 0) {
+      expect(e).toContain('VOID_WITHOUT_REVERSAL');
+      expect(c).toContain('VOID_WITHOUT_REVERSAL');
+    } else if (PROTECTED.has(t)) {
       expect(e).toContain('BACKDATE_BEFORE_CLOSED_DAY');
       expect(c).toContain('DAY_CLOSED');
     } else {
@@ -140,9 +148,13 @@ describe('database protection: raw void flip (status posted -> void) of a record
 describe('database protection: reversal rows, other books, reopen / re-close', () => {
   it('a raw reversal cash row copying a closed date is refused exactly like any cash row', async () => {
     const w = await world();
-    const orig = conn(w).prepare("SELECT id FROM cash_entries WHERE book = 'shop' AND business_date = ? LIMIT 1").get(E()) as unknown as { id: number };
-    expect(orig).toBeTruthy();
-    const rev = (d: string) => probe(w.fx, () => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents, reverses_entry_id) VALUES ('shop', ?, 'capital', -1, ?)", d, orig.id));
+    // (migration 020: a row that claims to reverse another must mirror its amount, book, fund AND date, so each probe reverses an original
+    // dated like the reversal; the original dated L is written first, L being open)
+    run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents) VALUES ('shop', ?, 'capital', 500)", L());
+    const origOn = (d: string) => conn(w).prepare("SELECT id, type, amount_cents FROM cash_entries WHERE book = 'shop' AND business_date = ? AND reverses_entry_id IS NULL AND amount_cents <> 0 AND NOT EXISTS (SELECT 1 FROM cash_entries r WHERE r.reverses_entry_id = cash_entries.id) LIMIT 1").get(d) as unknown as { id: number; type: string; amount_cents: number };
+    expect(origOn(E())).toBeTruthy();
+    expect(origOn(C())).toBeTruthy();
+    const rev = (d: string) => { const o = origOn(d); return probe(w.fx, () => run(w, `INSERT INTO cash_entries (book, business_date, type, amount_cents, reverses_entry_id) VALUES ('shop', ?, '${o.type}', ?, ?)`, d, -o.amount_cents, o.id)); };
     expect(rev(E())).toContain('BACKDATE_BEFORE_CLOSED_DAY');
     expect(rev(C())).toContain('DAY_CLOSED');
     expect(rev(L())).toBe('ok');

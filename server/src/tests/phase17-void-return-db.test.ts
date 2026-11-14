@@ -16,7 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { currentVersion, latestVersion, loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
-import { receiveStock } from '../services/inventory.service.ts';
+import { issueStock, receiveStock } from '../services/inventory.service.ts';
 import { TestEnv } from './helpers/tmp.ts';
 import { memDb, msgOf, pool, scalar, sqlProduct, today } from './helpers/inventory.ts';
 import { sqlReturn, sqlReturnItem, sqlSale, sqlSaleItem } from './helpers/phase5.ts';
@@ -32,8 +32,31 @@ afterEach(async () => {
 const VOIDED = '2026-01-01T00:00:00.000Z';
 const upd = (c: DatabaseSync, table: string, col: string, val: unknown, id: number) =>
   c.prepare(`UPDATE ${table} SET ${col} = ? WHERE id = ?`).run(val as any, id);
-const voidRet = (c: DatabaseSync, id: number) =>
-  c.prepare("UPDATE sales_returns SET status = 'void', voided_at = ?, void_reason = 'r' WHERE id = ?").run(VOIDED, id);
+/**
+ * Voids a return the way the service does since migration 020 (M2): the reversal rows (stock first, then cash) of every original that has none
+ * yet are written FIRST, then the status flips; all inside one savepoint so a refusal (e.g. RETURN_NOT_NEWEST) leaves nothing behind.
+ * (Before 020 a raw flip without reversal rows was accepted; that is exactly the gap the new VOID_WITHOUT_REVERSAL trigger closes.)
+ */
+const reverseReturn = (c: DatabaseSync, id: number) => {
+  for (const o of c.prepare(`SELECT * FROM stock_movements o WHERE ref_table = 'sales_returns' AND ref_id = ? AND reverses_movement_id IS NULL AND qty_delta > 0
+      AND NOT EXISTS (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = o.id)`).all(id) as any[]) {
+    c.prepare("INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, ref_table, ref_id, reason, reverses_movement_id) VALUES (?, ?, 'sale_return', ?, ?, 'sales_returns', ?, 'r', ?)")
+      .run(o.product_id, o.business_date, -o.qty_delta, -o.value_delta_cents, id, o.id);
+  }
+  for (const o of c.prepare(`SELECT * FROM cash_entries o WHERE ref_table = 'sales_returns' AND ref_id = ? AND reverses_entry_id IS NULL AND amount_cents <> 0
+      AND NOT EXISTS (SELECT 1 FROM cash_entries r WHERE r.reverses_entry_id = o.id)`).all(id) as any[]) {
+    c.prepare("INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, reverses_entry_id) VALUES (?, ?, ?, ?, ?, 'sales_returns', ?, ?)")
+      .run(o.book, o.business_date, o.type, -o.amount_cents, o.fund, id, o.id);
+  }
+};
+const voidRet = (c: DatabaseSync, id: number) => {
+  c.exec('SAVEPOINT vr');
+  try {
+    reverseReturn(c, id);
+    c.prepare("UPDATE sales_returns SET status = 'void', voided_at = ?, void_reason = 'r' WHERE id = ?").run(VOIDED, id);
+    c.exec('RELEASE vr');
+  } catch (e) { c.exec('ROLLBACK TO vr'); c.exec('RELEASE vr'); throw e; }
+};
 const retStatus = (c: DatabaseSync, id: number) => c.prepare('SELECT status FROM sales_returns WHERE id = ?').get(id) as { status: string };
 const returned = (c: DatabaseSync, item: number) => scalar(c, 'SELECT returned_qty FROM sale_items WHERE id = ?', item);
 
@@ -258,17 +281,18 @@ describe('reversal rows of a return void', () => {
     expect(scalar(c, "SELECT COUNT(*) FROM stock_movements WHERE ref_table = 'sales_returns'")).toBe(1);
   });
 
-  it('after the void: one reversal up to the restocked quantity; a second one exceeds it; a refund entry is reversed once (unique link); the link must match', () => {
+  it('reversal rows: one reversal up to the restocked quantity; a second one exceeds it; a refund entry is reversed once (unique link); the link must match; nothing is accepted after the void', () => {
     const c = memDb(conns);
     const w = world(c);
     const id = w.ret(1);
-    voidRet(c, id);
-    const mv = (qty: number, value: number, type = 'sale_return') => c.prepare(
-      "INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, ref_table, ref_id, reason) VALUES (?, '2025-04-03', ?, ?, ?, 'sales_returns', ?, 'x')").run(w.p, type, qty, value, id);
-    mv(0, -10, 'adjustment');                                    // a value-only sweep is allowed for a void return
+    issueStock(c, { productId: w.p, businessDate: '2025-04-03', type: 'sale', qty: 10, refTable: null, refId: null, reason: 'drain' }); // pool = the returned unit: 1 / 1,000
+    const restock = scalar(c, "SELECT id FROM stock_movements WHERE ref_table = 'sales_returns' AND ref_id = ? AND qty_delta > 0", id);
+    const mv = (qty: number, value: number, type = 'sale_return', link: number | null = type === 'sale_return' ? restock : null) => c.prepare(
+      "INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, ref_table, ref_id, reason, reverses_movement_id) VALUES (?, '2025-04-03', ?, ?, ?, 'sales_returns', ?, 'x', ?)").run(w.p, type, qty, value, id, link);
+    mv(0, -10, 'adjustment');                                    // the value-only sweep (the pool holds exactly the units about to leave)
     mv(-1, -990);                                                // takes the one restocked unit out
     expect(msgOf(() => mv(-1, -10))).toMatch(/RETURN_REVERSAL_EXCEEDS/);
-    expect(pool(c, w.p)).toEqual({ qty: 10, value: 10000 });    // 10/10,000 + restock 1/1,000 - sweep 10 - unit 990
+    expect(pool(c, w.p)).toEqual({ qty: 0, value: 0 });          // 1/1,000 - sweep 10 - unit 990
     const orig = scalar(c, "SELECT id FROM cash_entries WHERE ref_table = 'sales_returns' AND ref_id = ? AND amount_cents < 0", id);
     const cash = (amount: number, link: number | null, date = '2025-04-03') => c.prepare(
       "INSERT INTO cash_entries (book, business_date, type, amount_cents, ref_table, ref_id, reverses_entry_id) VALUES ('shop', ?, 'sale_refund', ?, 'sales_returns', ?, ?)").run(date, amount, id, link);
@@ -278,6 +302,10 @@ describe('reversal rows of a return void', () => {
     cash(100000, orig);
     expect(msgOf(() => cash(100000, orig))).toMatch(/UNIQUE constraint failed/);         // the same refund can be reversed only once
     expect(scalar(c, "SELECT COUNT(*) FROM cash_entries WHERE ref_table = 'sales_returns' AND amount_cents > 0")).toBe(1);
+    voidRet(c, id);                                              // every reversal exists: the flip passes
+    expect(msgOf(() => cash(100000, orig))).toMatch(/UNIQUE constraint failed|RETURN_REVERSAL_INVALID/);
+    expect(msgOf(() => mv(-1, -10))).toMatch(/RETURN_REVERSAL_EXCEEDS/);
+    expect(msgOf(() => mv(0, -3, 'adjustment'))).toMatch(/UNIQUE|RETURN_NOT_VOID/);
   });
 
   it('the append-only ledgers and the delete guards are untouched', () => {

@@ -198,7 +198,7 @@ describe('a bad file is refused and the live data stays exactly as it was', () =
     };
     const noTables = make('a.db', (db) => { db.exec('DROP TRIGGER audit_logs_no_update; DROP TRIGGER audit_logs_no_delete; DROP TABLE audit_logs'); });
     const newer = make('b.db', (db) => { db.exec("INSERT INTO schema_migrations (version, name, checksum) VALUES (999, '999_future.sql', 'x')"); });
-    const tampered = make('c.db', (db) => { db.exec("UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 5"); });
+    const tampered = make('c.db', (db) => { db.exec("DROP TRIGGER trg_schema_migrations_no_update; UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 5"); }); // 020 guards the history; simulate a tampered file
     const noMigrations = make('d.db', (db) => { db.exec('DROP TABLE schema_migrations'); });
     for (const [label, content, codes] of [
       ['required table missing', noTables, ['RESTORE_SCHEMA_MISSING']], ['newer schema', newer, ['RESTORE_SCHEMA_TOO_NEW']],

@@ -10,15 +10,16 @@
  * 409 RETURN_NOT_NEWEST (R-VR 1) -> closed-day checks on the RETURN's business date (R9 + closed-day ordering, `assertDayOpen`)
  * -> 409 RETURN_STOCK_NOT_AVAILABLE (R-VR 3, nothing written) -> writes.
  *
- * Writes, in order (each step may fail and then the whole transaction rolls back):
- *  1. the return becomes `void` (voided_at/void_reason). From here the DATABASE (migration 017 triggers) lowers each line's
- *     `returned_qty` by exactly the returned quantity (R-VR 7) and voids the damaged-return loss row (R-VR 6, it has no movement).
+ * Writes, in order (each step may fail and then the whole transaction rolls back). Since migration 020 the reversal rows come
+ * BEFORE the status flip (the database refuses `void` while a cash entry or restock movement of the return is not yet reversed):
  *  2. for every RESALABLE line: the units that came back leave stock again (`sale_return` reversal movement, dated like the
  *     return). Value removed = the value the return restored (the line's cost portion), limited to the pool value (R4). If that
  *     empties the pool with value left over, the residue is swept first by a value-only `adjustment` movement (the database
  *     refuses quantity 0 with value > 0). See `removeRestockedUnits`.
  *  3. the refund is paid back in: one cash entry of the same type and book, +refund, with the return's ORIGINAL business date and a
  *     link to the original refund row (`reverseCash`). No entry when the refund was 0.
+ *  1. the return becomes `void` (voided_at/void_reason), last of the three. From here the DATABASE (migration 017 triggers) lowers
+ *     each line's `returned_qty` by exactly the returned quantity (R-VR 7) and voids the damaged-return loss row (R-VR 6, no movement).
  *  4. one audit row (entity `sale_return` like the create row, action `void`, business date and backdated flag).
  * Cost and extra cost stand again in full and revenue is back because every report reads POSTED returns only (R-VR 4, 5, 8).
  * The stock-value difference (value restored - value removed) is reported as the Stock adjustments component
@@ -33,7 +34,7 @@ import {
   getSale as getSaleRow, getSaleReturn, listSaleReturnItems, markSaleReturnVoid, newerPostedReturn,
 } from '../repositories/sales.repo.ts';
 import type { SaleReturnItemRow } from '../repositories/sales.repo.ts';
-import { insertMovement } from '../repositories/stock-movements.repo.ts';
+import { findUnreversedMovement, insertMovement } from '../repositories/stock-movements.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { reverseCash } from './cash-posting.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
@@ -57,6 +58,8 @@ import type { Fields } from './validation.ts';
  */
 export function removeRestockedUnits(conn: DatabaseSync, p: {
   productId: number; businessDate: string; qty: number; restoredValueCents: number; returnId: number;
+  /** The restock movement of this line that the removal cancels (migration 020 link). */
+  reversesMovementId: number;
 }): { removedCents: number; sweptCents: number } {
   const pool = getPool(conn, p.productId);
   if (p.qty > pool.qty) {
@@ -75,7 +78,7 @@ export function removeRestockedUnits(conn: DatabaseSync, p: {
   insertMovement(conn, {
     productId: p.productId, businessDate: p.businessDate, type: 'sale_return', qtyDelta: -p.qty, valueDeltaCents: -removedCents,
     unitCostCents: mulDivRound(removedCents, 1, p.qty), refTable: 'sales_returns', refId: p.returnId,
-    reason: `Void of sales return #${p.returnId}`,
+    reason: `Void of sales return #${p.returnId}`, reversesMovementId: p.reversesMovementId,
   });
   return { removedCents, sweptCents };
 }
@@ -129,21 +132,27 @@ export function voidSaleReturn(
     const resalable = listSaleReturnItems(conn, returnId).filter((l) => l.resalable);
     assertStockAvailable(conn, resalable);
 
-    // 1. status (the database lowers returned_qty and voids the damaged-return loss row)
-    markSaleReturnVoid(conn, returnId, reason);
-    // 2. stock leaves again
+    // Migration 020 (M2): the reversal rows are written FIRST; the database refuses the status flip until every cash entry
+    // and every restock movement of the return has its reversal (VOID_WITHOUT_REVERSAL). They are also refused for a return
+    // that is not the newest (RETURN_NOT_NEWEST) and a second time (unique links).
+    // 1. stock leaves again (each removal is linked to the restock row of its line)
     for (const l of resalable) {
+      const restock = findUnreversedMovement(conn, 'sales_returns', returnId, l.productId, l.qty);
+      if (!restock) throw new Error(`Sales return #${returnId} has no restock movement to reverse for product #${l.productId}`);
       removeRestockedUnits(conn, {
         productId: l.productId, businessDate: ret.businessDate, qty: l.qty, restoredValueCents: l.cogsCents, returnId,
+        reversesMovementId: restock.id,
       });
     }
-    // 3. the refund comes back (no entry existed for a zero refund)
+    // 2. the refund comes back (no entry existed for a zero refund)
     if (ret.refundCents > 0) {
       const original = findCashEntriesByRef(conn, 'sales_returns', returnId)
         .find((e) => e.reversesEntryId === null && e.type === REFUND_CASH_TYPE[sale.book]);
       if (!original) throw new Error(`Sales return #${returnId} has no refund entry to reverse`);
       reverseCash(conn, original, `Void of sales return #${returnId}`);
     }
+    // 3. status (the database lowers returned_qty and voids the damaged-return loss row)
+    markSaleReturnVoid(conn, returnId, reason);
 
     const after = toSaleReturn(conn, getSaleReturn(conn, returnId) as NonNullable<ReturnType<typeof getSaleReturn>>);
     logAudit(conn, 'sale_return', String(returnId), 'void', before, after, reason,
