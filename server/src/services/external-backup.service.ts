@@ -14,6 +14,14 @@
  *   5. rename it to the final name (checked once more that the name is still free).
  * Afterwards only files named like our own backups are pruned, keeping the newest 30.
  * Runs are serialised per server, so the timer, a manual click and a post-backup copy never overlap.
+ *
+ * What a run records (migration 021, hardening M5 / M6):
+ *   - `external_backup_state` (mutable, one row for the current folder) is updated by EVERY run: attempt time, failure counters,
+ *     and - when the folder was available and every start-up/manual backup is present and verified - `last_sync_at`, even if
+ *     nothing new was written ("synchronized"). The status is derived from it.
+ *   - `external_backup_log` (append-only) gets a row only for a change: a file really copied, the first recovery after failures,
+ *     and a failure at most once per (error text, source file) per 24 hours. Repeated identical failures only bump the counters.
+ * Names are compared case-insensitively (Windows): a file present under another letter case is the same file.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -21,14 +29,16 @@ import { readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
-import { getBackupSettings, insertExternalLog, newestExternalLog, setBackupDir } from '../repositories/external-backup.repo.ts';
+import {
+  failureLoggedSince, getBackupSettings, getExternalState, insertExternalLog, recordExternalRun, resetExternalState, setBackupDir,
+} from '../repositories/external-backup.repo.ts';
 import { listBackups } from './backup.service.ts';
 import type { BackupInfo } from './backup.service.ts';
 import { logAudit } from './audit.service.ts';
 import { externalHooks, externalNow } from './external-backup-hooks.ts';
 import { computeExternalStatus } from './external-backup-status.ts';
 import type { ExternalStatusCore, ExternalStatusName } from './external-backup-status.ts';
-import { isFolder, plainFsError, probeWritable, validateExternalFolder, writeNewFile } from './external-backup-validate.ts';
+import { SAME_DISK_WARNING, isFolder, plainFsError, probeWritable, sameVolume, validateExternalFolder, writeNewFile } from './external-backup-validate.ts';
 
 /** How many external backups are kept. */
 export const KEEP_EXTERNAL = 30;
@@ -37,8 +47,8 @@ export const EXTERNAL_NAME_RE = /^viman-\d{8}-\d{6}-(startup|manual)(-\d+)?\.db$
 /** Temporary copies we create; stale ones (older than an hour) are removed. */
 const TEMP_RE = /^\.viman-copy-[0-9a-f]+\.tmp$/;
 const STALE_TEMP_MS = 3_600_000;
-/** Identical consecutive automatic failures are logged at most once per this long (keeps the log small). */
-const FAILURE_LOG_GAP_MS = 3_600_000;
+/** The same failure (error text + source file) is appended to the log at most once per this long; further ones only count. */
+const FAILURE_LOG_GAP_MS = 24 * 3_600_000;
 /** How long the Settings screen waits for the folder write probe. */
 export const PROBE_TIMEOUT_MS = 3000;
 /** The timer period. */
@@ -47,7 +57,12 @@ export const EXTERNAL_TIMER_MS = 10 * 60 * 1000;
 /** One external copy as listed. */
 export interface ExternalCopyInfo { name: string; sizeBytes: number; createdAt: string }
 /** GET /backups/external. */
-export interface ExternalStatusResponse extends ExternalStatusCore { writable: boolean | null; copies: ExternalCopyInfo[] }
+export interface ExternalStatusResponse extends ExternalStatusCore {
+  writable: boolean | null;
+  /** Warning (not an error) when the folder is on the same disk as the shop data, else null. */
+  diskWarning: string | null;
+  copies: ExternalCopyInfo[];
+}
 /** POST /backups/external/copy. */
 export interface ExternalCopyResult {
   copied: Array<{ name: string; sizeBytes: number; sha256: string }>;
@@ -57,7 +72,7 @@ export interface ExternalCopyResult {
   status: ExternalStatusName;
   warning: string | null;
 }
-/** Why a copy run was started. `manual` = the owner's button (logs everything); the others are quiet. */
+/** Why a copy run was started. */
 export type CopyTrigger = 'manual' | 'auto' | 'timer';
 
 const sha256Of = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -112,7 +127,8 @@ export async function getExternalStatus(ctx: AppContext, probe = true): Promise<
     ]);
     writable = verdict === 'timeout' ? null : verdict === null;
   }
-  return { ...core, writable, copies: core.folderAvailable ? listExternalCopies(core.folder) : [] };
+  const diskWarning = core.folder !== null && core.folderAvailable && sameVolume(core.folder, ctx.dataDir) ? SAME_DISK_WARNING : null;
+  return { ...core, writable, diskWarning, copies: core.folderAvailable ? listExternalCopies(core.folder) : [] };
 }
 
 /**
@@ -121,30 +137,37 @@ export async function getExternalStatus(ctx: AppContext, probe = true): Promise<
  */
 export async function setExternalFolder(ctx: AppContext, folder: string | null): Promise<ExternalStatusResponse> {
   const next = folder === null ? null : await validateExternalFolder(folder, ctx.dataDir);
+  let changed = false;
   ctx.database.tx((conn) => {
     const before = getBackupSettings(conn).externalDir;
     if (before === next) return;
+    changed = true;
     setBackupDir(conn, next, nowIso());
+    // The status belongs to the folder: a new folder starts from scratch (the old folder's success must not count for it).
+    resetExternalState(conn, next, nowIso());
     logAudit(conn, 'backup_settings', '1', 'update', { folder: before }, { folder: next });
   });
+  // A newly set folder is synchronized at once, in the background (never awaited: the answer does not depend on the drive).
+  if (changed && next !== null) void runExternalCopyOnce(ctx, 'auto');
   return getExternalStatus(ctx, false);
 }
 
-/** Logs a failed attempt; automatic runs do not repeat an identical failure within an hour. Never throws. */
-function logFailure(ctx: AppContext, trigger: CopyTrigger, source: string | null, error: string): void {
-  try {
-    const conn = ctx.database.conn;
-    if (trigger !== 'manual') {
-      const last = newestExternalLog(conn);
-      if (last && last.status === 'failed' && last.sourceName === source && last.error === error
-        && externalNow().getTime() - new Date(last.createdAt).getTime() < FAILURE_LOG_GAP_MS) return;
-    }
-    insertExternalLog(conn, { sourceName: source, targetName: null, status: 'failed', error, createdAt: nowIso() });
-  } catch { /* the database may be closing; a log row is not worth failing for */ }
+function logRow(ctx: AppContext, row: Parameters<typeof insertExternalLog>[1]): void {
+  try { insertExternalLog(ctx.database.conn, row); } catch { /* the database may be closing; a log row is not worth failing for */ }
 }
 
-function logRow(ctx: AppContext, row: Parameters<typeof insertExternalLog>[1]): void {
-  try { insertExternalLog(ctx.database.conn, row); } catch { /* see logFailure */ }
+/** One failure of a run: which backup (null = the folder itself), a short kind and the plain-language text. */
+interface RunFailure { source: string | null; code: string; message: string }
+
+/** The kind of a failed copy, from the Node error code (or our own checks). */
+function kindOf(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && code !== '') return code;
+  const msg = err instanceof Error ? err.message : '';
+  if (/checksum/i.test(msg)) return 'CHECKSUM';
+  if (/wrong size/i.test(msg)) return 'SIZE';
+  if (/appeared while copying/i.test(msg)) return 'NAME_RACE';
+  return 'OTHER';
 }
 
 /** Source backups eligible for copying: start-up and manual only (never pre-restore safety copies), newest first. */
@@ -165,11 +188,11 @@ async function removeStaleTemps(folder: string): Promise<void> {
   }
 }
 
-/** Next unused name for a backup base: `base-2.db`, `base-3.db` ... */
+/** Next unused name for a backup base: `base-2.db`, `base-3.db` ... (`taken` holds lower-case names). */
 function uniqueName(base: string, taken: Set<string>): string {
   for (let n = 2; ; n++) {
     const candidate = `${base}-${n}.db`;
-    if (!taken.has(candidate)) return candidate;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
   }
 }
 
@@ -195,13 +218,65 @@ async function writeVerified(folder: string, finalName: string, data: Buffer, sh
     await rename(tmp, final);
   } catch (err) {
     await rm(tmp, { force: true }).catch(() => undefined);
-    throw new Error(err instanceof Error && !(err as { code?: string }).code ? err.message : plainFsError(err), { cause: err });
+    const plain = err instanceof Error && !(err as { code?: string }).code ? err.message : plainFsError(err);
+    throw Object.assign(new Error(plain, { cause: err }), { kind: kindOf(err) });
   }
 }
 
-/** One copy run. Never throws. */
-async function performCopy(ctx: AppContext, trigger: CopyTrigger): Promise<ExternalCopyResult> {
+/** Our own backup names in the folder in ANY letter case (Windows treats names case-insensitively), newest first. */
+function ourNamesAnyCase(folder: string): string[] {
+  try {
+    const re = new RegExp(EXTERNAL_NAME_RE.source, 'i');
+    return readdirSync(folder).filter((n) => re.test(n)).sort(byNewest);
+  } catch {
+    return [];
+  }
+}
+
+/** Every file name in the folder, lower-cased (a name is "taken" whatever its letter case). */
+function takenNames(folder: string): Set<string> {
+  try { return new Set(readdirSync(folder).map((n) => n.toLowerCase())); } catch { return new Set(); }
+}
+
+/**
+ * Records one finished run: the state row of the folder and, only for changes, rows in the append-only log
+ * (a failure once per error text and source file per 24 hours; the first success after failures). Never throws.
+ */
+function recordRun(ctx: AppContext, folder: string, runAt: string, failures: RunFailure[], result: ExternalCopyResult): void {
+  try {
+    ctx.database.tx((conn) => {
+      // The folder was switched while this run was going on: its result belongs to nobody any more.
+      if ((getBackupSettings(conn).externalDir ?? '').toLowerCase() !== folder.toLowerCase()) return;
+      const since = new Date(new Date(runAt).getTime() - FAILURE_LOG_GAP_MS).toISOString();
+      let failureLogged = false;
+      for (const f of failures) {
+        if (failureLoggedSince(conn, f.source, f.message, since)) continue;
+        insertExternalLog(conn, { sourceName: f.source, targetName: null, status: 'failed', error: f.message, createdAt: runAt });
+        failureLogged = true;
+      }
+      const wasFailing = (getExternalState(conn, folder)?.consecutiveFailures ?? 0) > 0;
+      const synced = failures.length === 0;
+      if (synced && wasFailing && result.copied.length === 0 && result.skipped.length > 0) {
+        // Recovery with nothing new to copy: one row says the drive is fine again (copied files wrote their own rows).
+        insertExternalLog(conn, { sourceName: null, targetName: result.skipped[0]!.name, status: 'skipped', createdAt: runAt });
+      }
+      recordExternalRun(conn, folder, {
+        at: runAt, synced, copied: result.copied.length > 0,
+        failure: failures[0] ? { code: failures[0].code, message: failures[0].message } : null, failureLogged,
+      });
+    });
+  } catch { /* the database may be closing; the state is recomputed by the next run */ }
+}
+
+/** One copy run. Never throws. `_trigger` is only informational: every kind of run is recorded the same way. */
+async function performCopy(ctx: AppContext, _trigger: CopyTrigger): Promise<ExternalCopyResult> {
+  const runAt = nowIso();
   const result: ExternalCopyResult = { copied: [], skipped: [], failed: [], pruned: [], status: 'ok', warning: null };
+  const failures: RunFailure[] = [];
+  const fail = (source: string | null, code: string, message: string): void => {
+    failures.push({ source, code, message });
+    result.failed.push({ name: source ?? '(external folder)', error: message });
+  };
   const finish = (): ExternalCopyResult => {
     try {
       const s = computeExternalStatus(ctx.database.conn, externalNow());
@@ -210,86 +285,73 @@ async function performCopy(ctx: AppContext, trigger: CopyTrigger): Promise<Exter
     } catch { /* database closed */ }
     return result;
   };
+  let folder: string | null = null;
   try {
     if (ctx.isRestoring) return finish();
-    const folder = getBackupSettings(ctx.database.conn).externalDir;
+    folder = getBackupSettings(ctx.database.conn).externalDir;
     if (folder === null) return finish();
 
     if (!isFolder(folder)) {
-      const msg = 'The external backup folder cannot be found (the drive may be unplugged).';
-      result.failed.push({ name: '(external folder)', error: msg });
-      // The 10-minute timer stays quiet while a drive is away; every other trigger records it.
-      if (trigger !== 'timer') logFailure(ctx, trigger, null, msg);
-      return finish();
-    }
-
-    await removeStaleTemps(folder);
-    const existing = new Set(ourNames(folder));
-    for (const src of eligibleSources(ctx)) {
-      let data: Buffer;
-      try {
-        data = await readFile(join(ctx.backupsDir, src.name));
-      } catch {
-        continue; // the local file was rotated away meanwhile: nothing to copy
+      fail(null, 'DRIVE_MISSING', 'The external backup folder cannot be found (the drive may be unplugged).');
+    } else {
+      await removeStaleTemps(folder);
+      const taken = takenNames(folder); // lower-case names of every file in the folder
+      const present = ourNamesAnyCase(folder); // our own backups, any letter case
+      for (const src of eligibleSources(ctx)) {
+        let data: Buffer;
+        try {
+          data = await readFile(join(ctx.backupsDir, src.name));
+        } catch {
+          continue; // the local file was rotated away meanwhile: nothing to copy
+        }
+        const sha = sha256Of(data);
+        try {
+          // Identical copy already there (same base name in any letter case, same size and checksum)?
+          const base = baseOf(src.name).toLowerCase();
+          let identical: string | null = null;
+          for (const name of present) {
+            if (baseOf(name).toLowerCase() !== base) continue;
+            const st = await stat(join(folder, name)).catch(() => null);
+            if (!st || st.size !== data.length) continue;
+            if (sha256Of(await readFile(join(folder, name))) === sha) { identical = name; break; }
+          }
+          if (identical !== null) {
+            result.skipped.push({ name: src.name, reason: 'already_present' });
+            continue;
+          }
+          const finalName = taken.has(src.name.toLowerCase()) ? uniqueName(baseOf(src.name), taken) : src.name;
+          // Would the retention rule remove it straight away? Then do not copy it (it would be copied again forever).
+          const ranked = [...present.filter((n) => EXTERNAL_NAME_RE.test(n)), finalName].sort(byNewest);
+          if (ranked.indexOf(finalName) >= KEEP_EXTERNAL) {
+            result.skipped.push({ name: src.name, reason: 'older_than_retention' });
+            continue;
+          }
+          await writeVerified(folder, finalName, data, sha);
+          taken.add(finalName.toLowerCase());
+          present.push(finalName);
+          result.copied.push({ name: finalName, sizeBytes: data.length, sha256: sha });
+          logRow(ctx, { sourceName: src.name, targetName: finalName, status: 'ok', sizeBytes: data.length, sha256: sha, createdAt: runAt });
+        } catch (err) {
+          const kind = (err as { kind?: string }).kind ?? kindOf(err);
+          fail(src.name, kind, err instanceof Error ? err.message : String(err));
+          // A full, read-only or removed drive will fail every remaining file the same way: stop here when it vanished.
+          if (!isFolder(folder)) break;
+        }
       }
-      const sha = sha256Of(data);
-      try {
-        // Identical copy already there (same base name, same size and checksum)?
-        const base = baseOf(src.name);
-        let identical: string | null = null;
-        for (const name of existing) {
-          if (baseOf(name) !== base) continue;
-          const st = await stat(join(folder, name)).catch(() => null);
-          if (!st || st.size !== data.length) continue;
-          if (sha256Of(await readFile(join(folder, name))) === sha) { identical = name; break; }
-        }
-        if (identical !== null) {
-          result.skipped.push({ name: src.name, reason: 'already_present' });
-          continue;
-        }
-        const finalName = existing.has(src.name) ? uniqueName(base, existing) : src.name;
-        // Would the retention rule remove it straight away? Then do not copy it (it would be copied again forever).
-        const ranked = [...existing, finalName].sort(byNewest);
-        if (ranked.indexOf(finalName) >= KEEP_EXTERNAL) {
-          result.skipped.push({ name: src.name, reason: 'older_than_retention' });
-          continue;
-        }
-        await writeVerified(folder, finalName, data, sha);
-        existing.add(finalName);
-        result.copied.push({ name: finalName, sizeBytes: data.length, sha256: sha });
-        logRow(ctx, { sourceName: src.name, targetName: finalName, status: 'ok', sizeBytes: data.length, sha256: sha, createdAt: nowIso() });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result.failed.push({ name: src.name, error: msg });
-        // Failures are logged after the loop, so the newest log row of a run that had any failure is a failure.
-        // A full, read-only or removed drive will fail every remaining file the same way: stop here.
-        if (!isFolder(folder)) break;
-      }
-    }
 
-    for (const f of result.failed) logFailure(ctx, trigger, f.name, f.error);
-
-    // Retention: only our own backup names, only beyond the newest 30.
-    for (const name of ourNames(folder).slice(KEEP_EXTERNAL)) {
-      try {
-        await rm(join(folder, name), { force: true });
-        result.pruned.push(name);
-      } catch { /* retried at the next run */ }
-    }
-
-    // A success after an earlier failure with nothing new to copy: record it so the warning clears.
-    if (result.failed.length === 0 && result.copied.length === 0 && result.skipped.length > 0) {
-      const last = newestExternalLog(ctx.database.conn);
-      if (last && last.status === 'failed') {
-        logRow(ctx, { sourceName: null, targetName: result.skipped[0]!.name, status: 'skipped', createdAt: nowIso() });
+      // Retention: only our own backup names (exact pattern), only beyond the newest 30.
+      for (const name of ourNames(folder).slice(KEEP_EXTERNAL)) {
+        try {
+          await rm(join(folder, name), { force: true });
+          result.pruned.push(name);
+        } catch { /* retried at the next run */ }
       }
     }
-    return finish();
   } catch (err) {
-    result.failed.push({ name: '(external folder)', error: plainFsError(err) });
-    logFailure(ctx, trigger, null, plainFsError(err));
-    return finish();
+    fail(null, kindOf(err), plainFsError(err));
   }
+  if (folder !== null) recordRun(ctx, folder, runAt, failures, result);
+  return finish();
 }
 
 // One chain of runs per server context, so two copies never run at once.
