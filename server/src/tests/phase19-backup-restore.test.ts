@@ -65,7 +65,7 @@ async function mutate(s: ApiBase, w: World14): Promise<void> {
 }
 
 /** Tables allowed to differ after restoring an old backup: the restore audit row, and the two backup-feature tables that travel with the file. */
-const MAY_DIFFER = new Set(['audit_logs', 'backup_settings', 'external_backup_log']);
+const MAY_DIFFER = new Set(['audit_logs', 'backup_settings', 'external_backup_log', 'external_backup_state']);
 
 describe('restore FROM an external copy (upload of the file on the USB drive)', () => {
   it('every figure (30 endpoints) and every table equals the backup moment; only audit_logs grows and the backup-feature tables travel with the file; the shop keeps working', async () => {

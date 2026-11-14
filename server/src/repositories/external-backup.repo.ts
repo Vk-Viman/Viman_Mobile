@@ -1,5 +1,6 @@
 /**
- * repositories/external-backup.repo.ts - SQL for `backup_settings` and `external_backup_log` (migration 018).
+ * repositories/external-backup.repo.ts - SQL for `backup_settings`, `external_backup_log` (migration 018) and the mutable
+ * `external_backup_state` (migration 021).
  *
  * Layer: repository. No rules live here: the service decides what the rows mean (status, warnings, dedupe).
  * `external_backup_log` is append-only (the database refuses UPDATE and DELETE), so there is only an insert.
@@ -77,4 +78,93 @@ export function lastExternalSuccessAt(conn: DatabaseSync): string | null {
 export function lastExternalAttemptAt(conn: DatabaseSync): string | null {
   const r = conn.prepare('SELECT MAX(created_at) AS t FROM external_backup_log').get() as { t: string | null };
   return r.t;
+}
+
+// ---------------------------------------------------------------------------------------------
+// external_backup_state (migration 021): one mutable row per external folder.
+// ---------------------------------------------------------------------------------------------
+
+/** The running facts about one external folder. */
+export interface ExternalState {
+  folder: string;
+  firstSeenAt: string;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastSyncAt: string | null;
+  consecutiveFailures: number;
+  totalFailures: number;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  firstFailureAt: string | null;
+  lastFailureLoggedAt: string | null;
+}
+
+interface RawState {
+  folder: string; first_seen_at: string; last_attempt_at: string | null; last_success_at: string | null; last_sync_at: string | null;
+  consecutive_failures: number | bigint; total_failures: number | bigint; last_error_code: string | null; last_error_message: string | null;
+  first_failure_at: string | null; last_failure_logged_at: string | null;
+}
+
+/** The state of `folder`, or undefined when nothing was recorded for it yet (case-insensitive). */
+export function getExternalState(conn: DatabaseSync, folder: string): ExternalState | undefined {
+  const r = conn.prepare('SELECT * FROM external_backup_state WHERE folder = ?').get(folder) as unknown as RawState | undefined;
+  if (!r) return undefined;
+  return {
+    folder: r.folder, firstSeenAt: r.first_seen_at, lastAttemptAt: r.last_attempt_at, lastSuccessAt: r.last_success_at,
+    lastSyncAt: r.last_sync_at, consecutiveFailures: Number(r.consecutive_failures), totalFailures: Number(r.total_failures),
+    lastErrorCode: r.last_error_code, lastErrorMessage: r.last_error_message, firstFailureAt: r.first_failure_at,
+    lastFailureLoggedAt: r.last_failure_logged_at,
+  };
+}
+
+/** Starts a clean state for a newly chosen folder and forgets the states of every other folder. */
+export function resetExternalState(conn: DatabaseSync, folder: string | null, nowIso: string): void {
+  conn.prepare('DELETE FROM external_backup_state').run();
+  if (folder !== null) conn.prepare('INSERT INTO external_backup_state (folder, first_seen_at, updated_at) VALUES (?, ?, ?)').run(folder, nowIso, nowIso);
+}
+
+/** What one run found. */
+export interface RunFacts {
+  at: string;
+  /** Every backup was present and verified and nothing failed. */
+  synced: boolean;
+  /** At least one file was copied and verified in this run. */
+  copied: boolean;
+  /** The failure that represents this run (the first one), when the run failed. */
+  failure: { code: string; message: string } | null;
+  /** Whether a failed row was appended to the log in this run. */
+  failureLogged: boolean;
+}
+
+/** Applies one run to the state of `folder` (creating the row when missing). */
+export function recordExternalRun(conn: DatabaseSync, folder: string, f: RunFacts): void {
+  conn.prepare('INSERT OR IGNORE INTO external_backup_state (folder, first_seen_at, updated_at) VALUES (?, ?, ?)').run(folder, f.at, f.at);
+  if (f.failure) {
+    conn.prepare(
+      `UPDATE external_backup_state SET
+         last_attempt_at = ?, last_success_at = CASE WHEN ? THEN ? ELSE last_success_at END,
+         first_failure_at = CASE WHEN consecutive_failures = 0 THEN ? ELSE first_failure_at END,
+         consecutive_failures = consecutive_failures + 1, total_failures = total_failures + 1,
+         last_error_code = ?, last_error_message = ?,
+         last_failure_logged_at = CASE WHEN ? THEN ? ELSE last_failure_logged_at END, updated_at = ?
+       WHERE folder = ?`,
+    ).run(f.at, f.copied ? 1 : 0, f.at, f.at, f.failure.code, f.failure.message, f.failureLogged ? 1 : 0, f.at, f.at, folder);
+    return;
+  }
+  conn.prepare(
+    `UPDATE external_backup_state SET
+       last_attempt_at = ?, last_success_at = CASE WHEN ? THEN ? ELSE last_success_at END,
+       last_sync_at = CASE WHEN ? THEN ? ELSE last_sync_at END,
+       consecutive_failures = CASE WHEN ? THEN 0 ELSE consecutive_failures END,
+       first_failure_at = CASE WHEN ? THEN NULL ELSE first_failure_at END, updated_at = ?
+     WHERE folder = ?`,
+  ).run(f.at, f.copied ? 1 : 0, f.at, f.synced ? 1 : 0, f.at, f.synced ? 1 : 0, f.synced ? 1 : 0, f.at, folder);
+}
+
+/** True when a failed row for this exact source and error text was logged at or after `sinceIso`. */
+export function failureLoggedSince(conn: DatabaseSync, source: string | null, error: string, sinceIso: string): boolean {
+  const r = conn.prepare(
+    "SELECT 1 AS x FROM external_backup_log WHERE status = 'failed' AND source_name IS ? AND error = ? AND created_at >= ? LIMIT 1",
+  ).get(source, error, sinceIso);
+  return r !== undefined;
 }

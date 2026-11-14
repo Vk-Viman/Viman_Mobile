@@ -1,30 +1,35 @@
 /**
- * services/external-backup-status.ts - "is the external backup healthy?", derived from the settings row, the copy
- * log and a live look at the folder. Nothing is stored: the status is recomputed on every call.
+ * services/external-backup-status.ts - "is the external backup healthy?", derived from the per-folder state row
+ * (`external_backup_state`, migration 021), the settings row and a live look at the folder.
  *
- * Statuses (BUSINESS_RULES section 12, API_CONTRACTS part C):
+ * Statuses (BUSINESS_RULES section 12, API_CONTRACTS hardening contract M5):
  *   not_configured  no external folder is set (informational)
- *   stale           configured, but no successful copy for 7 days or more (a folder that never had a successful copy
- *                   counts from the day the folder was set). Stale wins over drive_missing / failed because it is
- *                   the owner's real risk; the warning text still says why.
+ *   stale           configured, but no CONFIRMED SYNCHRONIZATION for 7 days or more (a folder that never synchronized counts
+ *                   from the day it was set). A synchronization is a run that found the folder available and every
+ *                   start-up/manual backup present and verified, even when nothing new had to be written. Stale wins over
+ *                   drive_missing / failed because it is the owner's real risk; the warning text still says why.
  *   drive_missing   configured, but the folder cannot be found (the USB drive is not plugged in)
- *   failed          the newest attempt failed (full drive, read-only, damaged copy ...) and nothing succeeded since
- *   ok              everything fine
+ *   failed          the latest run failed to copy (full drive, read-only, damaged copy ...) and nothing succeeded since
+ *   ok              synchronized: no warning
+ * The state belongs to ONE folder: choosing another folder starts from scratch.
  */
 import type { DatabaseSync } from 'node:sqlite';
-import { getBackupSettings, lastExternalAttemptAt, lastExternalSuccessAt, newestExternalLog } from '../repositories/external-backup.repo.ts';
+import { getBackupSettings, getExternalState } from '../repositories/external-backup.repo.ts';
+import type { ExternalState } from '../repositories/external-backup.repo.ts';
 import { isFolder } from './external-backup-validate.ts';
 
 export type ExternalStatusName = 'ok' | 'not_configured' | 'drive_missing' | 'failed' | 'stale';
 
-/** Days without a successful copy at which the status becomes `stale`. */
+/** Days without a confirmed synchronization at which the status becomes `stale`. */
 export const EXTERNAL_STALE_DAYS = 7;
 const DAY_MS = 86_400_000;
 
 /** What the dashboard shows. */
 export interface ExternalSummary {
   status: ExternalStatusName;
+  /** The newest confirmed synchronization (the drive was fine and every backup was on it), not only the newest file written. */
   lastSuccessAt: string | null;
+  /** Whole days since `lastSuccessAt`. */
   daysSinceSuccess: number | null;
   warning: string | null;
 }
@@ -35,68 +40,74 @@ export interface ExternalStatusCore extends ExternalSummary {
   folder: string | null;
   folderAvailable: boolean;
   lastAttemptAt: string | null;
+  /** The newest failure message while the latest run is failing, else null. */
   lastError: string | null;
+  /** Newest run in which a file was really copied. */
+  lastCopyAt: string | null;
+  /** Runs in a row that failed (0 when the latest run succeeded) and the first failure of that series. */
+  consecutiveFailures: number;
+  firstFailureAt: string | null;
 }
 
 /** Warning text per status (plain English, no jargon). */
 function warningFor(
-  status: ExternalStatusName, folder: string | null, days: number | null, lastError: string | null,
-  sinceSetDays: number, neverSucceeded: boolean,
+  status: ExternalStatusName, folder: string | null, days: number, lastError: string | null, neverSynced: boolean,
 ): string | null {
   switch (status) {
     case 'ok': return null;
     case 'not_configured':
       return 'No external backup folder is set, so backups exist only on this computer. Choose a USB drive or another local drive in Settings > Backups.';
     case 'drive_missing':
-      return `The external backup drive or folder (${folder}) cannot be found. Plug the drive in; backups are then copied automatically. Shop work is not affected.`;
+      return `Drive not found: the external backup drive or folder (${folder}) cannot be found. Plug the drive in; backups are then copied automatically. Shop work is not affected.`;
     case 'failed':
-      return `The last copy to the external backup folder failed: ${lastError ?? 'unknown problem'}. Your local backups are safe and shop work is not affected.`;
+      return `The last copy to the external backup folder failed: ${(lastError ?? 'unknown problem').replace(/\.+$/, '')}. Your local backups are safe and shop work is not affected.`;
     case 'stale': {
-      const how = neverSucceeded
-        ? `No backup has been copied to the external folder since it was set up ${sinceSetDays} day${sinceSetDays === 1 ? '' : 's'} ago`
-        : `No backup has been copied to the external folder for ${days} day${days === 1 ? '' : 's'}`;
+      const how = neverSynced
+        ? `Overdue: no synchronization with the external folder has been confirmed since it was set up ${days} day${days === 1 ? '' : 's'} ago`
+        : `Overdue: no confirmed synchronization with the external folder for ${days} day${days === 1 ? '' : 's'}`;
       return `${how}. Check that the drive is connected, then use "Copy backup now" in Settings > Backups. Shop work is not affected.`;
     }
   }
 }
 
 /**
- * Computes the status.
+ * Computes the status of the CURRENT folder.
  * @param now The clock (tests inject one).
  */
 export function computeExternalStatus(conn: DatabaseSync, now: Date): ExternalStatusCore {
   const { externalDir, updatedAt } = getBackupSettings(conn);
-  const lastSuccessAt = lastExternalSuccessAt(conn);
-  const lastAttemptAt = lastExternalAttemptAt(conn);
-  const newest = newestExternalLog(conn);
-  const lastError = newest && newest.status === 'failed' ? newest.error : null;
   if (externalDir === null) {
     return {
-      configured: false, folder: null, folderAvailable: false, status: 'not_configured', lastSuccessAt, lastAttemptAt,
-      lastError: null, daysSinceSuccess: null, warning: warningFor('not_configured', null, null, null, 0, true),
+      configured: false, folder: null, folderAvailable: false, status: 'not_configured', lastSuccessAt: null, lastAttemptAt: null,
+      lastError: null, daysSinceSuccess: null, warning: warningFor('not_configured', null, 0, null, true),
+      lastCopyAt: null, consecutiveFailures: 0, firstFailureAt: null,
     };
   }
+  const state: ExternalState | undefined = getExternalState(conn, externalDir);
   const folderAvailable = isFolder(externalDir);
-  // A success logged BEFORE the folder was (re)set belongs to an earlier folder, but "never copied" is judged on the
-  // log as a whole: the clock starts at the later of the last success and nothing, falling back to the setting time.
-  const refMs = new Date(lastSuccessAt ?? updatedAt).getTime();
-  const elapsedDays = (now.getTime() - refMs) / DAY_MS;
-  const daysSinceSuccess = lastSuccessAt === null ? null : Math.max(0, Math.floor(elapsedDays));
+  const lastSyncAt = state?.lastSyncAt ?? null;
+  const failing = (state?.consecutiveFailures ?? 0) > 0
+    // A failure "drive not found" is history once the drive is back: the next pass synchronizes.
+    && !(folderAvailable && state?.lastErrorCode === 'DRIVE_MISSING');
+  const lastError = failing ? (state?.lastErrorMessage ?? 'unknown problem') : null;
+  const refMs = new Date(lastSyncAt ?? state?.firstSeenAt ?? updatedAt).getTime();
+  const elapsedDays = Math.max(0, (now.getTime() - refMs) / DAY_MS);
+  const wholeDays = Math.floor(elapsedDays);
   let status: ExternalStatusName;
   if (elapsedDays >= EXTERNAL_STALE_DAYS) status = 'stale';
   else if (!folderAvailable) status = 'drive_missing';
-  else if (newest && newest.status === 'failed') status = 'failed';
+  else if (failing) status = 'failed';
   else status = 'ok';
-  const warning = warningFor(
-    status, externalDir, daysSinceSuccess, lastError, Math.max(0, Math.floor(elapsedDays)), lastSuccessAt === null,
-  );
+  const warning = warningFor(status, externalDir, wholeDays, lastError, lastSyncAt === null);
   // A stale status caused by an unplugged drive or a failing copy also names the cause.
   const cause = status !== 'stale' || warning === null ? '' : !folderAvailable
     ? ' (The drive or folder cannot be found right now.)'
     : lastError ? ` (The last attempt failed: ${lastError})` : '';
   return {
-    configured: true, folder: externalDir, folderAvailable, status, lastSuccessAt, lastAttemptAt, lastError,
-    daysSinceSuccess, warning: warning === null ? null : warning + cause,
+    configured: true, folder: externalDir, folderAvailable, status, lastSuccessAt: lastSyncAt, lastAttemptAt: state?.lastAttemptAt ?? null,
+    lastError, daysSinceSuccess: lastSyncAt === null ? null : wholeDays, warning: warning === null ? null : warning + cause,
+    lastCopyAt: state?.lastSuccessAt ?? null, consecutiveFailures: failing ? state?.consecutiveFailures ?? 0 : 0,
+    firstFailureAt: failing ? state?.firstFailureAt ?? null : null,
   };
 }
 

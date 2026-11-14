@@ -87,8 +87,10 @@ describe('start-up copy through the real index.ts (two real process starts on on
     const first = /Startup backup: (\S+)/.exec(one.output())![1]!;
     expect((await one.api('PUT', '/backups/external', { folder: usb })).status).toBe(200);
     expect((await one.api('GET', '/backups/external')).body.status).toBe('ok');
+    // CHANGED by hardening M5: setting a folder now starts an immediate background synchronization, so the first start-up backup reaches
+    // the drive by itself (it used to stay empty until the next start).
+    expect(await waitFor(() => oursIn(usb).includes(first))).toBe(true);
     await stop(one);
-    expect(oursIn(usb)).toEqual([]); // nothing was copied by a request that never happened
 
     const two = await startServer(dataDir, port);
     const second = /Startup backup: (\S+)/.exec(two.output())![1]!;

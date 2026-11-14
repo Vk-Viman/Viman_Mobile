@@ -10,6 +10,7 @@ import type { AppContext } from '../../app.ts';
 import { TestEnv } from './tmp.ts';
 import { call, get } from './catalog.ts';
 import { createBackup } from '../../services/backup.service.ts';
+import { externalHooks } from '../../services/external-backup-hooks.ts';
 
 /** SHA-256 of a file. */
 export const sha256File = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
@@ -19,7 +20,14 @@ export const OURS_RE = /^viman-\d{8}-\d{6}-(startup|manual)(-\d+)?\.db$/;
 /** Names in a folder that match the pattern, sorted ascending. */
 export const oursIn = (dir: string): string[] => readdirSync(dir).filter((n) => OURS_RE.test(n)).sort();
 
-export const putFolder = (app: FastifyInstance, folder: unknown) => call(app, 'PUT', '/backups/external', { folder });
+/**
+ * Sets the external folder WITHOUT the immediate synchronization that hardening M5 added (see phase21-external-sync.test.ts for that
+ * behaviour): the older audit tests set up a still-empty drive and then drive every copy themselves.
+ */
+export const putFolder = async (app: FastifyInstance, folder: unknown) => {
+  externalHooks.noSyncOnSet = true;
+  try { return await call(app, 'PUT', '/backups/external', { folder }); } finally { delete externalHooks.noSyncOnSet; }
+};
 export const extStatus = async (app: FastifyInstance): Promise<any> => (await get(app, '/backups/external')).body;
 export const copyNow = (app: FastifyInstance) => call(app, 'POST', '/backups/external/copy');
 export const sqlAll = (ctx: AppContext, q: string, ...p: any[]): any[] => ctx.database.conn.prepare(q).all(...p) as any[];

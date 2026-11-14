@@ -133,7 +133,9 @@ describe('paths: cloud-synced folders (detection is by NAME only)', () => {
     const harmless = await putFolder(s.app, link2);
     expect(code(harmless)).toBe('EXTERNAL_FOLDER_INVALID');
     expect(harmless.body.error.message).toMatch(/cannot write to that folder/);
-    expect(harmless.body.error.message).toMatch(/EEXIST/); // the raw Node text leaks into the owner's message (plainFsError has no EEXIST case)
+    // CHANGED by hardening L3: plain wording instead of the raw Node text "EEXIST".
+    expect(harmless.body.error.message).not.toMatch(/EEXIST/);
+    expect(harmless.body.error.message).toMatch(/shortcut \(junction\)/);
     // junction pointing into the data folder is refused as "inside the data folder"
     const link3 = join(root, 'data-link');
     makeJunction(link3, s.ctx.backupsDir);
@@ -168,7 +170,9 @@ describe('paths: cloud-synced folders (detection is by NAME only)', () => {
     expect(r.body.copied).toEqual([]);
     expect(r.body.failed).toHaveLength(1);
     expect(r.body.failed[0].name).toBe(name);
-    expect(r.body.failed[0].error).toMatch(/EEXIST/); // not plain English (OBSERVATION, Low)
+    // CHANGED by hardening L3: plain English instead of the raw Node text "EEXIST ..."
+    expect(r.body.failed[0].error).not.toMatch(/EEXIST/);
+    expect(r.body.failed[0].error).toMatch(/shortcut \(junction\)/);
     expect(readdirSync(cloudTarget)).toEqual([]); // the wx-creation failed, so nothing reached the cloud-named folder
     rmSync(s.usb, { recursive: false, force: true }); // removes the junction only
     expect(existsSync(cloudTarget)).toBe(true);
