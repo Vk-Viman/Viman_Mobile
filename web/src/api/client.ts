@@ -23,17 +23,20 @@ const BASE = '/api/v1';
  * - `code`: stable machine code from the server, e.g. FUTURE_DATE_NOT_ALLOWED, or NETWORK_ERROR / HTTP_ERROR.
  * - `message`: human-readable text that is safe to show to the owner.
  * - `fields`: per-field messages for validation errors (field name -> message); empty object when none.
+ * - `extra`: any other keys of the error body (e.g. the `failures` list of a refused restore); empty object when none.
  */
 export class ApiError extends Error {
   status: number;
   code: string;
   fields: Record<string, string>;
-  constructor(status: number, code: string, message: string, fields?: Record<string, string>) {
+  extra: Record<string, unknown>;
+  constructor(status: number, code: string, message: string, fields?: Record<string, string>, extra?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.fields = fields ?? {};
+    this.extra = extra ?? {};
   }
 }
 
@@ -73,7 +76,8 @@ async function request<T>(method: string, path: string, body?: BodyInit | null, 
     // Prefer the server's own error envelope; fall back to a generic message for unexpected replies.
     const env = (data as ApiErrorBody | null)?.error;
     if (env && typeof env.code === 'string') {
-      throw new ApiError(res.status, env.code, env.message ?? 'Request failed', env.fields);
+      const { code: _c, message: _m, fields: _f, ...extra } = env;
+      throw new ApiError(res.status, env.code, env.message ?? 'Request failed', env.fields, extra);
     }
     throw new ApiError(res.status, 'HTTP_ERROR', `Request failed (HTTP ${res.status})`);
   }

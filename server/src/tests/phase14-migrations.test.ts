@@ -180,7 +180,11 @@ describe('schema sanity (from sqlite_master)', () => {
     const guarded = new Set(rows(ctx, "SELECT tbl_name FROM sqlite_master WHERE type='trigger' AND sql LIKE '%BEFORE DELETE%'").map((r) => r.tbl_name as string));
     const unguarded = tableNames(ctx).filter((t) => !guarded.has(t));
     // (stocktake_items is guarded too: a trigger refuses deleting lines of a completed stocktake)
-    expect(unguarded.sort()).toEqual(['products', 'schema_migrations', 'settings', 'suppliers'].sort());
+    // migration 020 also guards schema_migrations (no UPDATE / DELETE / REPLACE), so it is no longer unguarded
+    // external_backup_state (migration 021, hardening M6) is the one deliberately mutable operational table: it holds only running facts about the
+    // CURRENT external backup folder and is cleared when the folder changes. It is not a business record (the append-only external_backup_log keeps
+    // the history and keeps its guards).
+    expect(unguarded.sort()).toEqual(['external_backup_state', 'products', 'settings', 'suppliers'].sort());
   });
 
   it('on a real world: dates and posting timestamps of every record cannot be edited, no record row can be deleted, a product with history cannot be deleted', async () => {

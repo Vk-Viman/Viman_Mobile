@@ -17,6 +17,8 @@ export interface ExternalHooks {
   beforeRename?: (tmpPath: string, finalPath: string) => Promise<void> | void;
   /** The clock used for statuses and log times. */
   now?: () => Date;
+  /** When true, setting a folder does not start the immediate synchronization (lets a test set up a drive that is still empty). */
+  noSyncOnSet?: boolean;
 }
 
 /** The active hooks (mutated by tests). */
@@ -28,6 +30,7 @@ export function resetExternalHooks(): void {
   delete externalHooks.afterWrite;
   delete externalHooks.beforeRename;
   delete externalHooks.now;
+  delete externalHooks.noSyncOnSet;
 }
 
 /** The current time according to the hooks (real time in production). */

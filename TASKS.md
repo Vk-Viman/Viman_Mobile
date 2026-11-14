@@ -59,8 +59,7 @@ Each item below was checked in the code.
 - **Stocktake expected quantity at count time** (BUSINESS_RULES §13A decision 4): record the expected quantity when each line is counted and adjust for movements since, so a stocktake can safely run while the shop is trading. Until then: complete the stocktake immediately after counting, when the shop is quiet.
 - **POS service lines** (decision 7): not planned; services use Services → Service types.
 
-### Hardening backlog from the final audit (needs owner approval before work)
-- M1/M2/M3/M4/L2: database triggers for the remaining protection gaps (closed-day on stock-only and profit-only tables, status flips needing reversal rows, return reversal caps, duplicate refund/restock rows, `schema_migrations` guard, `INSERT OR REPLACE` bypass). Reproductions: branch `audit/defect-reproductions`.
-- M5/M6/L1/L3: external backup status (stale cannot be cleared by Copy backup now), failure-log growth, letter-case clash, raw EEXIST text, cloud-name rule false positives/negatives, status after switching folders.
-- M7: stronger restore validation (use the recorded SHA-256 where available).
+### Hardening pass M1-M7 (owner-approved and DONE 2026-11-14)
+- M1 closed days enforced by database triggers on every business-date table (migration 019); M2/M3/M4/L2 void-needs-reversal, return reversal caps, one refund and one restock set per return, `schema_migrations` and `INSERT OR REPLACE` guards (migration 020); M5/M6 accurate external-backup status and bounded failure log (migration 021); M7 restore validation before the live database is touched (`database-validation.ts`). Details: migrations README, API_CONTRACTS "Hardening contract".
+- Still open from the audit: L1/L3 (letter-case clash on the drive, cloud-name rule false positives such as a folder called Boxes). Restore cannot detect a consistent change inside free-text columns.
 - Real USB drive test still to be done by the owner (README checklist and `scripts/verify-external-backup.mjs`).

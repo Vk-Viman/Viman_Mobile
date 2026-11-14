@@ -17,7 +17,7 @@ import { ErrorState } from '../../components/ErrorState';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useCopyExternalNow, useExternalBackup, useSetExternalFolder } from '../../api/backups';
-import { EXTERNAL_STATUS_LABEL } from '../../types/externalBackup';
+import { externalStatusLabel } from '../../types/externalBackup';
 import type { ExternalCopy, ExternalCopyResult } from '../../types/externalBackup';
 import { formatBytes, formatDateTime } from '../../lib/format';
 import { errorMessage } from './formUtils';
@@ -61,7 +61,7 @@ export function ExternalBackupSection() {
   ];
 
   const d = q.data;
-  const label = d ? EXTERNAL_STATUS_LABEL[d.status] : null;
+  const label = d ? externalStatusLabel(d.status, d.daysSinceSuccess, d.lastSuccessAt !== null) : null;
   const dirty = d !== undefined && draft.trim() !== (d.folder ?? '');
   const fieldError = save.isError ? ((save.error as { fields?: Record<string, string> }).fields?.folder ?? errorMessage(save.error)) : undefined;
 
@@ -111,8 +111,12 @@ export function ExternalBackupSection() {
               <dd>{label && <Badge tone={label.tone}>{label.text}</Badge>}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2">
-              <dt className="text-slate-500">Last successful copy</dt>
+              <dt className="text-slate-500">Last confirmed sync</dt>
               <dd className="num font-medium text-slate-900">{d!.lastSuccessAt ? formatDateTime(d!.lastSuccessAt) : 'Never'}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2">
+              <dt className="text-slate-500">Last file copied</dt>
+              <dd className="num font-medium text-slate-900">{d!.lastCopyAt ? formatDateTime(d!.lastCopyAt) : 'None yet'}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2">
               <dt className="text-slate-500">Last attempt</dt>
@@ -131,6 +135,20 @@ export function ExternalBackupSection() {
             <p role="alert" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${d!.status === 'ok' || d!.status === 'not_configured' || d!.status === 'drive_missing' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-red-200 bg-red-50 text-red-900'}`}>
               <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
               <span>{d!.warning}</span>
+            </p>
+          )}
+
+          {d!.consecutiveFailures > 0 && (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="external-failure-count">
+              Failed {d!.consecutiveFailures} time{d!.consecutiveFailures === 1 ? '' : 's'}
+              {d!.firstFailureAt ? <> since <span className="num">{formatDateTime(d!.firstFailureAt)}</span></> : null}, last error: {d!.lastError ?? 'unknown problem'}
+            </p>
+          )}
+
+          {d!.diskWarning && (
+            <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="external-disk-warning">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{d!.diskWarning}</span>
             </p>
           )}
 

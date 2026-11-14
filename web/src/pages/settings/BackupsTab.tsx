@@ -32,6 +32,17 @@ function describeError(e: unknown): string {
   return errorMessage(e);
 }
 
+/** One failed safety check of a refused restore, as sent by the server (plain language). */
+interface RestoreFailure { code: string; message: string; detail?: string }
+
+/** The failed checks carried by a refused restore (422), or an empty list for any other error. */
+function refusalFailures(e: unknown): { items: RestoreFailure[]; total: number } {
+  if (!(e instanceof ApiError) || !Array.isArray(e.extra.failures)) return { items: [], total: 0 };
+  const items = (e.extra.failures as unknown[]).filter((f): f is RestoreFailure =>
+    typeof f === 'object' && f !== null && typeof (f as RestoreFailure).message === 'string');
+  return { items, total: typeof e.extra.totalFailures === 'number' ? e.extra.totalFailures : items.length };
+}
+
 /** The tab: backup table, "Backup now" / "Restore from file" buttons and the restore confirmation dialog. */
 export function BackupsTab() {
   const q = useBackups();
@@ -43,6 +54,7 @@ export function BackupsTab() {
   // What the owner chose to restore (null = dialog closed). The dialog is open exactly while this is set.
   const [target, setTarget] = useState<RestoreInput | null>(null);
 
+  const refusal = refusalFailures(restore.error);
   const targetLabel = target ? (target.kind === 'name' ? target.name : target.file.name) : '';
 
   // Closing is blocked while the restore is running, so the owner cannot dismiss the dialog mid-operation.
@@ -125,13 +137,25 @@ export function BackupsTab() {
         danger
         requireText="RESTORE"
         loading={restore.isPending}
-        error={restore.isError ? describeError(restore.error) : null}
+        error={restore.isError ? (refusal.items.length > 0 && restore.error instanceof ApiError ? restore.error.message : describeError(restore.error)) : null}
         onConfirm={doRestore}
         onClose={closeDialog}
       >
         <p>You are about to restore <strong className="break-all">{targetLabel}</strong>.</p>
         <p><strong>All current data will be replaced</strong> by the contents of this backup. Anything entered since it was made will be lost from the live system.</p>
         <p>A safety backup of the current data is made first, so you can undo this by restoring that safety backup.</p>
+        {refusal.items.length > 0 && (
+          <div data-testid="restore-failures" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <p className="font-medium">What is wrong with this file:</p>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {refusal.items.map((f, i) => (
+                <li key={`${f.code}-${i}`}>{f.message}{f.detail ? <span className="block break-words text-xs text-red-700">{f.detail}</span> : null}</li>
+              ))}
+            </ul>
+            {refusal.total > refusal.items.length && <p className="mt-1">&hellip; and {refusal.total - refusal.items.length} more problems.</p>}
+            <p className="mt-2">Your current data was not changed. Please choose a different backup file.</p>
+          </div>
+        )}
       </ConfirmDialog>
     </Card>
     </div>

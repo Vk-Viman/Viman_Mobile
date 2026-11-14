@@ -4,10 +4,10 @@
 // World: Shop, Telecom and Ice Cream are all closed on C; E (earlier) and L (later) are open. Every probe runs inside a SAVEPOINT that is rolled back.
 //   PROTECTED by a trigger (migrations 012/014/016): cash_entries (all books) INSERT; icecream_days / icecream_payments / icecream_fund_moves INSERT;
 //     icecream_days and icecream_fund_moves status posted -> void.
-//   NOT protected by the database (service layer only): every other table, INSERT and status -> void: icecream_fund_entries, icecream_sales,
-//     stock_movements, stock_losses, stocktakes, owner_drawings, opening_stock_batches, sales, sales_returns, purchases, purchase_returns, expenses,
-//     capital_entries, cash_counts, reload_sales, ezcash_sales, telecom_topups, print_sales, printing_supplies, cash_transfers, import_runs;
-//     void flips of icecream_payments and of all cash-bearing headers (their reversal CASH row IS refused by the cash_entries trigger).
+//   Since migration 019 (hardening M1) EVERY business-date table is protected by a trigger (see phase20-closedday-*.test.ts for the full
+//   per-table / per-book script). These characterisation tests now assert REFUSAL where they used to pin the gap (finding D-1 / D-2 closed).
+//   Deliberate exceptions asserted below: import_runs (audit of refused imports), a DRAFT stocktake (posts nothing), a zero-difference cash
+//   count (exact day only, BUSINESS_RULES section 8).
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
@@ -68,65 +68,79 @@ const run = (w: World, sql: string, ...p: any[]) => w.fx.s.ctx.database.conn.pre
 const conn = (w: World) => w.fx.s.ctx.database.conn;
 
 /** [table, insert, protectedByDatabase] */
-const INSERTS: Array<[string, Ins, boolean]> = [
+type Prot = true | false | 'exact';
+const INSERTS: Array<[string, Ins, Prot]> = [
   ['cash_entries (shop)', (w, d) => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents) VALUES ('shop', ?, 'capital', 100)", d), true],
   ['cash_entries (telecom)', (w, d) => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents) VALUES ('telecom', ?, 'capital', 100)", d), true],
   ['cash_entries (icecream)', (w, d) => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents, fund) VALUES ('icecream', ?, 'capital', 100, 'cost')", d), true],
   ['icecream_days', (w, d) => run(w, 'INSERT INTO icecream_days (business_date, sales_cents, cost_alloc_cents, electricity_alloc_cents, profit_share_cents, client_ref) VALUES (?, 0, 0, 0, 0, ?)', d, ref()), true],
   ['icecream_payments', (w, d) => run(w, "INSERT INTO icecream_payments (business_date, kind, fund, amount_cents, description, client_ref) VALUES (?, 'materials', 'cost', 100, 'x', ?)", d, ref()), true],
   ['icecream_fund_moves', (w, d) => run(w, "INSERT INTO icecream_fund_moves (business_date, from_fund, to_fund, amount_cents, profit_effect_cents, client_ref) VALUES (?, 'cost', 'electricity', 100, 0, ?)", d, ref()), true],
-  ['icecream_fund_entries', (w, d) => run(w, "INSERT INTO icecream_fund_entries (business_date, fund, amount_cents, kind) VALUES (?, 'cost', 100, 'opening_balance')", d), false],
-  ['stock_movements', (w, d) => run(w, "INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents) VALUES (?, ?, 'adjustment', 0, 1)", w.fx.shopP.id, d), false],
-  ['stock_losses', (w, d) => run(w, "INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, client_ref) VALUES (?, ?, 'shop', 1, 10, 'lost', ?)", d, w.fx.shopP.id, ref()), false],
+  ['icecream_fund_entries', (w, d) => run(w, "INSERT INTO icecream_fund_entries (business_date, fund, amount_cents, kind) VALUES (?, 'cost', 100, 'opening_balance')", d), true],
+  ['stock_movements', (w, d) => run(w, "INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents) VALUES (?, ?, 'adjustment', 0, 1)", w.fx.shopP.id, d), true],
+  ['stock_losses', (w, d) => run(w, "INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, client_ref) VALUES (?, ?, 'shop', 1, 10, 'lost', ?)", d, w.fx.shopP.id, ref()), true],
   ['stocktakes', (w, d) => run(w, "INSERT INTO stocktakes (business_date, book, client_ref) VALUES (?, 'shop', ?)", d, ref()), false],
-  ['owner_drawings (cash)', (w, d) => run(w, "INSERT INTO owner_drawings (business_date, book, kind, amount_cents, client_ref) VALUES (?, 'shop', 'cash', 100, ?)", d, ref()), false],
-  ['opening_stock_batches', (w, d) => run(w, "INSERT INTO opening_stock_batches (business_date, source, row_count, total_value_cents, client_ref) VALUES (?, 'manual', 0, 0, ?)", d, ref()), false],
-  ['sales', (w, d) => sqlSale(conn(w), { date: d }), false],
-  ['sales_returns', (w, d) => sqlReturn(conn(w), w.saleId, { date: d }), false],
-  ['purchases', (w, d) => run(w, "INSERT INTO purchases (business_date, book, total_cents, client_ref) VALUES (?, 'shop', 0, ?)", d, ref()), false],
-  ['purchase_returns', (w, d) => run(w, 'INSERT INTO purchase_returns (purchase_id, business_date, refund_cents, client_ref) VALUES (?, ?, 0, ?)', w.purchaseId, d, ref()), false],
-  ['expenses', (w, d) => run(w, "INSERT INTO expenses (business_date, book, category, amount_cents, description, client_ref) VALUES (?, 'shop', 'rent', 100, 'x', ?)", d, ref()), false],
-  ['capital_entries', (w, d) => run(w, "INSERT INTO capital_entries (business_date, book, kind, amount_cents, client_ref) VALUES (?, 'shop', 'capital', 100, ?)", d, ref()), false],
-  ['cash_counts', (w, d) => run(w, "INSERT INTO cash_counts (book, business_date, expected_cents, counted_cents, difference_cents, client_ref) VALUES ('shop', ?, 0, 0, 0, ?)", d, ref()), false],
-  ['reload_sales', (w, d) => run(w, 'INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, commission_cents, client_ref) VALUES (?, ?, 1000, 600, 60, ?)', d, w.fx.prov.Dialog, ref()), false],
-  ['ezcash_sales', (w, d) => run(w, 'INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, client_ref) VALUES (?, ?, 1000, 80, 8, ?)', d, w.fx.prov.Dialog, ref()), false],
-  ['telecom_topups', (w, d) => run(w, "INSERT INTO telecom_topups (business_date, kind, amount_cents, client_ref) VALUES (?, 'wallet_topup', 100, ?)", d, ref()), false],
-  ['print_sales', (w, d) => sqlPrintSale(conn(w), { date: d }), false],
-  ['printing_supplies', (w, d) => sqlSupply(conn(w), { date: d }), false],
-  ['cash_transfers', (w, d) => run(w, "INSERT INTO cash_transfers (business_date, from_book, to_book, amount_cents, client_ref) VALUES (?, 'shop', 'telecom', 100, ?)", d, ref()), false],
+  ['owner_drawings (cash)', (w, d) => run(w, "INSERT INTO owner_drawings (business_date, book, kind, amount_cents, client_ref) VALUES (?, 'shop', 'cash', 100, ?)", d, ref()), true],
+  ['opening_stock_batches', (w, d) => run(w, "INSERT INTO opening_stock_batches (business_date, source, row_count, total_value_cents, client_ref) VALUES (?, 'manual', 0, 0, ?)", d, ref()), true],
+  ['sales', (w, d) => sqlSale(conn(w), { date: d }), true],
+  ['sales_returns', (w, d) => sqlReturn(conn(w), w.saleId, { date: d }), true],
+  ['purchases', (w, d) => run(w, "INSERT INTO purchases (business_date, book, total_cents, client_ref) VALUES (?, 'shop', 0, ?)", d, ref()), true],
+  ['purchase_returns', (w, d) => run(w, 'INSERT INTO purchase_returns (purchase_id, business_date, refund_cents, client_ref) VALUES (?, ?, 0, ?)', w.purchaseId, d, ref()), true],
+  ['expenses', (w, d) => run(w, "INSERT INTO expenses (business_date, book, category, amount_cents, description, client_ref) VALUES (?, 'shop', 'rent', 100, 'x', ?)", d, ref()), true],
+  ['capital_entries', (w, d) => run(w, "INSERT INTO capital_entries (business_date, book, kind, amount_cents, client_ref) VALUES (?, 'shop', 'capital', 100, ?)", d, ref()), true],
+  ['cash_counts', (w, d) => run(w, "INSERT INTO cash_counts (book, business_date, expected_cents, counted_cents, difference_cents, client_ref) VALUES ('shop', ?, 0, 0, 0, ?)", d, ref()), 'exact'],
+  ['reload_sales', (w, d) => run(w, 'INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, commission_cents, client_ref) VALUES (?, ?, 1000, 600, 60, ?)', d, w.fx.prov.Dialog, ref()), true],
+  ['ezcash_sales', (w, d) => run(w, 'INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, client_ref) VALUES (?, ?, 1000, 80, 8, ?)', d, w.fx.prov.Dialog, ref()), true],
+  ['telecom_topups', (w, d) => run(w, "INSERT INTO telecom_topups (business_date, kind, amount_cents, client_ref) VALUES (?, 'wallet_topup', 100, ?)", d, ref()), true],
+  ['print_sales', (w, d) => sqlPrintSale(conn(w), { date: d }), true],
+  ['printing_supplies', (w, d) => sqlSupply(conn(w), { date: d }), true],
+  ['cash_transfers', (w, d) => run(w, "INSERT INTO cash_transfers (business_date, from_book, to_book, amount_cents, client_ref) VALUES (?, 'shop', 'telecom', 100, ?)", d, ref()), true],
   ['import_runs', (w, d) => run(w, "INSERT INTO import_runs (kind, file_name, file_sha256, business_date, mode, status, rows_total, rows_ok, rows_failed) VALUES ('opening_stock', 'f.xlsx', ?, ?, 'preview', 'previewed', 0, 0, 0)", 'a'.repeat(64), d), false],
 ];
 
 describe('database protection: raw INSERT dated before / on the latest closed day (all books closed on C)', () => {
-  it.each(INSERTS)('%s', async (name, ins, protectedByDb) => {
+  it.each(INSERTS)('%s', async (name, ins, protectedByDb: Prot) => {
     const w = await world();
     const e = probe(w.fx, () => ins(w, E()));
     const c = probe(w.fx, () => ins(w, C()));
     const l = probe(w.fx, () => ins(w, L()));
     expect(l, `${name} dated L (later than every closed day) must be accepted`).toBe('ok');
-    if (protectedByDb) {
+    if (protectedByDb === true) {
       expect(c, `${name} on the closed day`).toContain('DAY_CLOSED');
       expect(e, `${name} before the closed day`).toContain('BACKDATE_BEFORE_CLOSED_DAY');
     } else {
-      // GAP (finding D-1, Medium): the database accepts a row dated on / before a closed day; only the service layer refuses it.
-      expect([e, c], `${name}: service-layer-only protection`).toEqual(['ok', 'ok']);
+      if (protectedByDb === 'exact') {
+        // a zero-difference count posts nothing: only its exact day is protected (section 8)
+        expect(e, `${name} before the closed day (posts nothing)`).toBe('ok');
+        expect(c, `${name} on the closed day`).toContain('DAY_CLOSED');
+      } else {
+        // import_runs and a DRAFT stocktake: non-posting rows stay allowed on a closed day (M1 exemptions)
+        expect([e, c], `${name}: deliberately exempt`).toEqual(['ok', 'ok']);
+      }
     }
   });
 });
 
 describe('database protection: raw void flip (status posted -> void) of a record dated E / C', () => {
-  const PROTECTED = new Set(['icecream_days', 'icecream_fund_moves']);
+  const PROTECTED = new Set(Object.keys(VOIDABLE)); // since migration 019 every voidable table is protected
   it.each(Object.keys(VOIDABLE))('%s', async (t) => {
     const w = await world();
     const flip = (id: number) => probe(w.fx, () => run(w, `UPDATE ${t} SET status = 'void', voided_at = '2026-01-01T00:00:00.000Z', void_reason = 'raw' WHERE id = ?`, id));
     const e = flip(w.recs[t]!.E);
     const c = flip(w.recs[t]!.C);
-    if (PROTECTED.has(t)) {
+    // Migration 020 (M2): a record that has cash / stock / fund rows can no longer be flipped without its reversal rows at all
+    // (VOID_WITHOUT_REVERSAL answers before the closed-day triggers); a record without ledger rows still meets the rules below.
+    const ledger = (id: number) => Number((conn(w).prepare(`SELECT (SELECT COUNT(*) FROM cash_entries WHERE ref_table = '${t}' AND ref_id = ?)
+      + (SELECT COUNT(*) FROM stock_movements WHERE ref_table = '${t}' AND ref_id = ?)
+      + (SELECT COUNT(*) FROM icecream_fund_entries WHERE ref_table = '${t}' AND ref_id = ?) AS n`).get(id, id, id) as any).n);
+    if (ledger(w.recs[t]!.E) > 0 && ledger(w.recs[t]!.C) > 0) {
+      expect(e).toContain('VOID_WITHOUT_REVERSAL');
+      expect(c).toContain('VOID_WITHOUT_REVERSAL');
+    } else if (PROTECTED.has(t)) {
       expect(e).toContain('BACKDATE_BEFORE_CLOSED_DAY');
       expect(c).toContain('DAY_CLOSED');
     } else {
-      // GAP (finding D-2, Medium): the flag flips; only the reversal CASH row (separate insert) is refused by trg_cash_entries_day_closed.
-      expect([e, c]).toEqual(['ok', 'ok']);
+      expect([e, c]).toEqual(['ok', 'ok']); // (no table is left unprotected)
     }
   });
 });
@@ -134,9 +148,13 @@ describe('database protection: raw void flip (status posted -> void) of a record
 describe('database protection: reversal rows, other books, reopen / re-close', () => {
   it('a raw reversal cash row copying a closed date is refused exactly like any cash row', async () => {
     const w = await world();
-    const orig = conn(w).prepare("SELECT id FROM cash_entries WHERE book = 'shop' AND business_date = ? LIMIT 1").get(E()) as unknown as { id: number };
-    expect(orig).toBeTruthy();
-    const rev = (d: string) => probe(w.fx, () => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents, reverses_entry_id) VALUES ('shop', ?, 'capital', -1, ?)", d, orig.id));
+    // (migration 020: a row that claims to reverse another must mirror its amount, book, fund AND date, so each probe reverses an original
+    // dated like the reversal; the original dated L is written first, L being open)
+    run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents) VALUES ('shop', ?, 'capital', 500)", L());
+    const origOn = (d: string) => conn(w).prepare("SELECT id, type, amount_cents FROM cash_entries WHERE book = 'shop' AND business_date = ? AND reverses_entry_id IS NULL AND amount_cents <> 0 AND NOT EXISTS (SELECT 1 FROM cash_entries r WHERE r.reverses_entry_id = cash_entries.id) LIMIT 1").get(d) as unknown as { id: number; type: string; amount_cents: number };
+    expect(origOn(E())).toBeTruthy();
+    expect(origOn(C())).toBeTruthy();
+    const rev = (d: string) => { const o = origOn(d); return probe(w.fx, () => run(w, `INSERT INTO cash_entries (book, business_date, type, amount_cents, reverses_entry_id) VALUES ('shop', ?, '${o.type}', ?, ?)`, d, -o.amount_cents, o.id)); };
     expect(rev(E())).toContain('BACKDATE_BEFORE_CLOSED_DAY');
     expect(rev(C())).toContain('DAY_CLOSED');
     expect(rev(L())).toBe('ok');

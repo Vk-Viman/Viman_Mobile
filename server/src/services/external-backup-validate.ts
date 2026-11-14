@@ -67,6 +67,8 @@ export function plainFsError(err: unknown): string {
     case 'ENOENT': case 'ENOTDIR': return 'The external folder could not be found (the drive may have been unplugged).';
     case 'EIO': case 'ENXIO': case 'ENODEV': return 'The external drive could not be read or written (it may have been unplugged or is failing).';
     case 'EBUSY': return 'The external drive or file is busy.';
+    case 'EEXIST': return 'The shop cannot create files in that folder. It may be a shortcut (junction) or a mount point; please choose the real folder on the drive instead.';
+    case 'EISDIR': return 'A folder is in the way where a backup file should be written.';
     default: return err instanceof Error ? err.message : String(err);
   }
 }
@@ -146,4 +148,22 @@ export async function validateExternalFolder(raw: string, dataDir: string): Prom
   const why = await probeWritable(full);
   if (why !== null) throw invalid(`The shop cannot write to that folder. ${why}`);
   return full;
+}
+
+/** Warning shown when the external folder is on the same disk (volume) as the shop's data folder, or null. */
+export const SAME_DISK_WARNING =
+  'This folder is on the same disk as the shop data, so a failure of that disk would also destroy these copies. Use a separate USB drive or another physical disk.';
+
+/**
+ * Same-disk check: true when both paths are on the same volume (same device number, or the same drive letter on Windows).
+ * It sees volumes, not physical disks: two partitions of one physical disk are not recognised.
+ */
+export function sameVolume(folder: string, dataDir: string): boolean {
+  try {
+    const a = statSync(folder);
+    const b = statSync(dataDir);
+    if (a.dev !== 0 && b.dev !== 0) return a.dev === b.dev;
+  } catch { return false; }
+  const root = (p: string): string => resolve(p).slice(0, 3).toLowerCase();
+  return root(folder) === root(dataDir);
 }

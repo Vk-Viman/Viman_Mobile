@@ -67,7 +67,7 @@ export interface BackupCreated { item: Backup }
 export interface RestoreResult { restoredFrom: string; safetyBackup: string; schemaVersion: number }
 
 /** The standard error envelope every failed API call returns; decoded in api/client.ts. */
-export interface ApiErrorBody { error: { code: string; message: string; fields?: Record<string, string> } }
+export interface ApiErrorBody { error: { code: string; message: string; fields?: Record<string, string>; [extra: string]: unknown } }
 
 // ---- Phase 2: Catalog ----
 /** The two accounting books of the shop (separate cash/profit tracking). */

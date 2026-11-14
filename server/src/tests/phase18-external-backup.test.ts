@@ -33,7 +33,12 @@ afterEach(async () => {
 
 const DAY = 86_400_000;
 const sha = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
-const putFolder = (app: FastifyInstance, folder: unknown) => call(app, 'PUT', '/backups/external', { folder });
+// Sets the folder without the immediate synchronization added by hardening M5 (covered in phase21-external-sync.test.ts):
+// these tests set up a still-empty drive and then drive every copy themselves.
+const putFolder = async (app: FastifyInstance, folder: unknown) => {
+  externalHooks.noSyncOnSet = true;
+  try { return await call(app, 'PUT', '/backups/external', { folder }); } finally { delete externalHooks.noSyncOnSet; }
+};
 const status = async (app: FastifyInstance) => (await get(app, '/backups/external')).body;
 const sqlRows = (ctx: AppContext, q: string, ...p: any[]): any[] => ctx.database.conn.prepare(q).all(...p) as any[];
 const logRows = (ctx: AppContext) => sqlRows(ctx, 'SELECT * FROM external_backup_log ORDER BY id');
@@ -756,7 +761,7 @@ describe('migration 018 on a populated database', () => {
     db.exec("INSERT INTO suppliers (name, phone) VALUES ('Alpha', '0771'), ('Beta', '0772')");
     db.exec("INSERT INTO audit_logs (entity, entity_id, action, after_json) VALUES ('settings', 'rates', 'update', '{\"a\":1}')");
     const dump = (): string => {
-      const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('backup_settings','external_backup_log','schema_migrations') ORDER BY name").all() as any[]).map((r) => r.name);
+      const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('backup_settings','external_backup_log','external_backup_state','schema_migrations') ORDER BY name").all() as any[]).map((r) => r.name);
       return JSON.stringify(names.map((n) => [n, db.prepare(`SELECT * FROM "${n}" ORDER BY rowid`).all()]));
     };
     const before = dump();
