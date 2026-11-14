@@ -4,6 +4,7 @@
 // unchanged, or with raw bytes) and checks that the matching check - and only plausible companions - report it in plain words.
 // Honest limit (also in the module header): a change inside a free-text column (a name, a note) keeps the file perfectly consistent and cannot be detected.
 
+import { tamperMigrationRecords } from './helpers/tamper.ts';
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -194,7 +195,7 @@ describe('schema_version and migration_records', () => {
     expect(r.checks.find((c) => c.code === 'trial_upgrade')!.status).toBe('skipped');
   });
   it('a wrong checksum of an applied migration is refused (migration_records)', () => {
-    const r = verdict(damaged((db) => db.exec("DROP TRIGGER trg_schema_migrations_no_update; UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 3")));
+    const r = verdict(damaged((db) => tamperMigrationRecords(db, "UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 3")));
     expect(codes(r)).toEqual(['migration_records']);
     expect(r.failures[0]!.message).toMatch(/step 3 was changed/);
   });
@@ -204,7 +205,7 @@ describe('schema_version and migration_records', () => {
     expect(r.failures[0]!.message).toMatch(/step 5 is missing/);
   });
   it('a changed migration name is refused too', () => {
-    const r = verdict(damaged((db) => db.exec("DROP TRIGGER trg_schema_migrations_no_update; UPDATE schema_migrations SET name = '004_other.sql' WHERE version = 4")));
+    const r = verdict(damaged((db) => tamperMigrationRecords(db, "UPDATE schema_migrations SET name = '004_other.sql' WHERE version = 4")));
     expect(codes(r)).toEqual(['migration_records']);
   });
   it('no migration table at all is refused', () => {

@@ -4,6 +4,7 @@
 // live database except ONE audit row (restore_refused), leaves no temporary file, keeps earlier safety backups and keeps the app fully usable.
 // Valid backups (named, uploaded, a copy from the external folder, older-schema files, after a failed attempt) still restore with the same figures.
 
+import { tamperMigrationRecords } from './helpers/tamper.ts';
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -170,7 +171,7 @@ describe('many failures: at most 10 shown, all counted', () => {
 describe('every kind of bad file through the API is refused, the live data stays', () => {
   const cases: [string, (db: DatabaseSync) => void, string, boolean?][] = [
     ['foreign key orphan', (db) => db.exec('UPDATE stock_movements SET product_id = 987654 WHERE id = (SELECT MIN(id) FROM stock_movements)'), 'foreign_key_check'],
-    ['edited migration checksum', (db) => db.exec("DROP TRIGGER trg_schema_migrations_no_update; UPDATE schema_migrations SET checksum = 'zz' WHERE version = 2"), 'migration_records'],
+    ['edited migration checksum', (db) => tamperMigrationRecords(db, "UPDATE schema_migrations SET checksum = 'zz' WHERE version = 2"), 'migration_records'],
     ['missing migration version', (db) => db.exec('DELETE FROM schema_migrations WHERE version = 6'), 'migration_records'],
     ['missing index', (db) => db.exec('DROP INDEX idx_sales_returns_status'), 'schema_objects'],
     ['extra trigger', (db) => db.exec('CREATE TRIGGER evil AFTER INSERT ON settings BEGIN SELECT 1; END'), 'schema_objects', true],

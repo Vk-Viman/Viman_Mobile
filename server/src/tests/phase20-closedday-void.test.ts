@@ -22,7 +22,13 @@ const BOOKS3: Book[] = ['shop', 'telecom', 'icecream'];
 function probe(fx: Fx, fn: () => unknown): string {
   const c = fx.s.ctx.database.conn;
   c.exec('SAVEPOINT pr');
-  try { fn(); return 'ok'; } catch (e) { return (e as Error).message; } finally { c.exec('ROLLBACK TO pr'); c.exec('RELEASE pr'); }
+  try {
+    // Migration 020 (M2) refuses a raw status flip that has no reversal rows. This file tests the CLOSED-DAY triggers of migration 019 in isolation, so
+    // the reversal guards are lifted INSIDE this rolled-back savepoint only (DDL is transactional in SQLite); the guards have their own tests (phase20-reversal-*).
+    for (const t of c.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND sql LIKE '%VOID_WITHOUT_REVERSAL%'").all() as unknown as { name: string }[]) c.exec(`DROP TRIGGER "${t.name}"`);
+    fn();
+    return 'ok';
+  } catch (e) { return (e as Error).message; } finally { c.exec('ROLLBACK TO pr'); c.exec('RELEASE pr'); }
 }
 
 /** [table, registry operation that creates one posted record, books that must be closed for the flip to be refused] */
