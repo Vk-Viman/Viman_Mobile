@@ -277,6 +277,17 @@ Tables `backup_settings` (at most one row, `id = 1`, created when a folder is fi
 
 **Rollback:** forward-only (restore the start-up backup). Dropping the new triggers and re-creating the 012/014 versions would restore the old behaviour.
 
+## 021_external_backup_state.sql (external backup status and bounded failure log, hardening M5 + M6)
+**Why:** the status was derived only from the append-only `external_backup_log`. (M5) A run that found every backup already on the drive wrote nothing, so "Copy backup now" could never clear the seven-day warning it asked for. (M6) While a drive stayed full, read-only or missing, every 10-minute pass appended a failed row per pending backup (up to ~4,300 rows a day), and an append-only table cannot be trimmed.
+
+**What it adds (nothing existing is changed; `external_backup_log` and `backup_settings` keep every row and every trigger):** the mutable table `external_backup_state`, one row per external **folder** (primary key = folder path, case-insensitive): `first_seen_at` (when the folder became the reference), `last_attempt_at`, `last_success_at` (a file was really copied), `last_sync_at` (the folder was available and **every** start-up/manual backup was present and verified, even if nothing new was written), `consecutive_failures`, `total_failures`, `last_error_code`, `last_error_message`, `first_failure_at` (start of the current failure series), `last_failure_logged_at`. CHECKs: counters are non-negative, `consecutive_failures <= total_failures`, a failing series has a `first_failure_at`.
+**Data carried over:** for the folder currently configured, `last_success_at` / `last_sync_at` come from the newest `ok` (and for the sync time also `skipped`) log row, a trailing series of failed rows becomes the current failure series; with no folder configured the table starts empty. Nothing is invented.
+
+**How the application uses it:** every run (start-up/manual backup, timer, Copy backup now, setting a folder) updates the row of the current folder. Status (`ok` synchronized / `not_configured` / `drive_missing` / `failed` / `stale`) is computed from it: `stale` only when no synchronization was confirmed for 7 days (a never-synchronized folder counts from the day it was set). Choosing another folder deletes the state of every other folder and starts a fresh row, then synchronizes at once in the background. The append-only log gets a row only on a change: a file really copied, the first success after a logged failure series, and a failure at most once per (error text, source file) per 24 hours; repeated identical failures only increment the counters. The 10-minute timer finding the drive simply absent is counted but not logged.
+**Restore:** the state is ordinary data of the database file, so a restored backup carries its own folder and state (the next run corrects it). Restoring a backup made before 021 runs the migration, which rebuilds the row from that file's log.
+
+**Rollback:** forward-only (restore the start-up backup taken before 021 ran). Dropping the table would restore the old derived-from-log behaviour only together with the old program.
+
 ## Rules of thumb for a new migration
 - Next number, three digits, lower-case name; never edit an applied file (the checksum would stop startup).
 - Money in integer cents, rates in basis points, dates as `YYYY-MM-DD` text with the strict CHECK, timestamps from `strftime('%Y-%m-%dT%H:%M:%fZ','now')`.

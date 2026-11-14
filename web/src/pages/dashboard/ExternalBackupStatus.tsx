@@ -1,17 +1,17 @@
 /**
  * ExternalBackupStatus: the "External copy" part of the dashboard backup card (dashboard `backup.external`).
- * Green = working, amber = not set up / drive not found, red = last copy failed or no copy for 7+ days.
+ * Green = synchronized, amber = not set up / drive not found, red = last copy failed or no copy for 7+ days.
  * A missing or failing drive only warns here; it never stops shop work.
  */
 import { Link } from 'react-router';
 import { AlertTriangle } from 'lucide-react';
 import { Badge } from '../../components/Badge';
-import { EXTERNAL_STATUS_LABEL } from '../../types/externalBackup';
+import { externalStatusLabel } from '../../types/externalBackup';
 import type { ExternalBackupSummary } from '../../types/externalBackup';
 import { formatDateTime } from '../../lib/format';
 
 export function ExternalBackupStatus({ external }: { external: ExternalBackupSummary }) {
-  const label = EXTERNAL_STATUS_LABEL[external.status];
+  const label = externalStatusLabel(external.status, external.daysSinceSuccess, external.lastSuccessAt !== null);
   const red = external.status === 'failed' || external.status === 'stale';
   return (
     <div className="mt-4 border-t border-slate-100 pt-3" data-testid="external-backup-status">
@@ -20,7 +20,7 @@ export function ExternalBackupStatus({ external }: { external: ExternalBackupSum
       </p>
       {external.status !== 'not_configured' && (
         <p className="mt-1 text-xs text-slate-500">
-          Last successful copy: <span className="num">{external.lastSuccessAt ? formatDateTime(external.lastSuccessAt) : 'never'}</span>
+          Last confirmed sync: <span className="num">{external.lastSuccessAt ? formatDateTime(external.lastSuccessAt) : 'never'}</span>
           {external.daysSinceSuccess !== null && external.daysSinceSuccess > 0 ? ` (${external.daysSinceSuccess} days ago)` : ''}
         </p>
       )}
