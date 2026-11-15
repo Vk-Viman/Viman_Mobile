@@ -1,6 +1,6 @@
 # Proposal: Telecom split into 4 providers x 2 kinds = 8 separately calculated cash books
 
-**Status: DESIGN ONLY. Nothing is implemented. This changes the approved structure of the cash books (BUSINESS_RULES section 0 and 1: three logical cash books), so it needs your explicit approval first.**
+**Status: APPROVED 2026-11-15 (Option A; EZCash under Dialog Reloads; expenses per relevant segment; other points as recommended). Not yet implemented. Recorded in BUSINESS_RULES 13D.**
 
 ## 1. What you asked for
 
