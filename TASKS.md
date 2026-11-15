@@ -60,7 +60,7 @@ Each item below was checked in the code.
 - **POS service lines** (decision 7): not planned; services use Services → Service types.
 
 ### Awaiting owner approval (designs only, nothing built)
-- Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated cash books: `PROPOSAL_TELECOM_SEGMENTS.md` (changes the approved book structure; 7 decisions open).
+- Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated cash books: `PROPOSAL_TELECOM_SEGMENTS.md` APPROVED 2026-11-15 (BUSINESS_RULES 13D), to be built after correction Phase 1/2 and the product-name change, before discounts.
 - Product names unique per category instead of shop-wide (small catalog change, requested 2026-11-15; not yet built).
 - Correct-this-entry (void + replacement in one action): `PROPOSAL_TRANSACTION_CORRECTION.md`.
 - Sales discounts (per-item, whole-bill, fixed, percentage, limits): `PROPOSAL_SALES_DISCOUNTS.md`.
