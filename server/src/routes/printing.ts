@@ -15,6 +15,9 @@ import {
   listSupplies, updateServiceType, voidPrintSale, voidSupply,
 } from '../services/printing.service.ts';
 import type { PrintSaleCreate } from '../services/printing.service.ts';
+import { checkSupplyCorrection, correctSupply, optionalDate, previewSupplyCorrection } from '../services/correction-other.ts';
+import type { CorrectionRequest } from '../services/correction-other.ts';
+import { correctionBodySchema } from './corrections.ts';
 import {
   boolQuery, checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseBool, parseId,
   parsePaging, voidBody,
@@ -82,6 +85,9 @@ const supplyCreateBody = {
     clientRef,
   },
 } as const;
+
+const supplyCorrectionBody = correctionBodySchema(optionalDate(supplyCreateBody));
+type SupplyCreate = { businessDate: string; amountCents: number; description: string; clientRef: string };
 
 const supplyListQuery = {
   type: 'object',
@@ -159,4 +165,16 @@ export function registerPrintingRoutes(app: FastifyInstance, ctx: AppContext): v
   app.post('/printing-supplies/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
     item: voidSupply(ctx, parseId(request.params), request.body as { reason: string }),
   }));
+
+  // ---- printing supply corrections (void the original + enter the replacement, one transaction) ----
+  app.get('/printing-supplies/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkSupplyCorrection(ctx, parseId(request.params)));
+
+  app.post('/printing-supplies/:id/correct-preview', { schema: { params: idParamsSchema, body: supplyCorrectionBody } }, async (request) =>
+    previewSupplyCorrection(ctx, parseId(request.params), request.body as CorrectionRequest<SupplyCreate>));
+
+  app.post('/printing-supplies/:id/correct', { schema: { params: idParamsSchema, body: supplyCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctSupply(ctx, parseId(request.params), request.body as CorrectionRequest<SupplyCreate>);
+    return reply.code(status).send(body);
+  });
 }

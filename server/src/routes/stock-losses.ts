@@ -11,6 +11,9 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
+import { checkStockLossCorrection, correctStockLoss, optionalDate, previewStockLossCorrection } from '../services/correction-other.ts';
+import type { CorrectionRequest } from '../services/correction-other.ts';
+import { correctionBodySchema } from './corrections.ts';
 import {
   createStockLoss, getStockLoss, listStockLosses, voidStockLoss,
 } from '../services/stock-losses.service.ts';
@@ -38,6 +41,8 @@ const createBody = {
     clientRef,
   },
 } as const;
+
+const correctionBody = correctionBodySchema(optionalDate(createBody));
 
 const listQuery = {
   type: 'object',
@@ -85,4 +90,16 @@ export function registerStockLossRoutes(app: FastifyInstance, ctx: AppContext): 
   app.post('/stock-losses/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
     item: voidStockLoss(ctx, parseId(request.params), request.body as { reason: string }),
   }));
+
+  // corrections: void the original + enter the replacement, one transaction (a loss from a damaged return is refused 409 CORRECTION_NOT_SUPPORTED)
+  app.get('/stock-losses/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkStockLossCorrection(ctx, parseId(request.params)));
+
+  app.post('/stock-losses/:id/correct-preview', { schema: { params: idParamsSchema, body: correctionBody } }, async (request) =>
+    previewStockLossCorrection(ctx, parseId(request.params), request.body as CorrectionRequest<StockLossCreate>));
+
+  app.post('/stock-losses/:id/correct', { schema: { params: idParamsSchema, body: correctionBody } }, async (request, reply) => {
+    const { status, body } = correctStockLoss(ctx, parseId(request.params), request.body as CorrectionRequest<StockLossCreate>);
+    return reply.code(status).send(body);
+  });
 }

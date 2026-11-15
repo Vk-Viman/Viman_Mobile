@@ -18,6 +18,9 @@ import {
   listReloadSales, listTopups, telecomSummary, updateProvider, voidEzCashSale, voidReloadSale, voidTopup,
 } from '../services/telecom.service.ts';
 import type { EzCashSaleCreate, ReloadSaleCreate, TopupCreate } from '../services/telecom.service.ts';
+import { checkTopupCorrection, correctTopup, optionalDate, previewTopupCorrection } from '../services/correction-other.ts';
+import type { CorrectionRequest } from '../services/correction-other.ts';
+import { correctionBodySchema } from './corrections.ts';
 import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
 } from './catalog-query.ts';
@@ -79,6 +82,8 @@ const topupBody = {
     clientRef,
   },
 } as const;
+
+const topupCorrectionBody = correctionBodySchema(optionalDate(topupBody));
 
 const reloadListQuery = {
   type: 'object',
@@ -195,6 +200,18 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.post('/telecom/topups/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
     item: voidTopup(ctx, parseId(request.params), request.body as { reason: string }),
   }));
+
+  // ---------- top-up corrections (void the original + enter the replacement, one transaction) ----------
+  app.get('/telecom/topups/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkTopupCorrection(ctx, parseId(request.params)));
+
+  app.post('/telecom/topups/:id/correct-preview', { schema: { params: idParamsSchema, body: topupCorrectionBody } }, async (request) =>
+    previewTopupCorrection(ctx, parseId(request.params), request.body as CorrectionRequest<TopupCreate>));
+
+  app.post('/telecom/topups/:id/correct', { schema: { params: idParamsSchema, body: topupCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctTopup(ctx, parseId(request.params), request.body as CorrectionRequest<TopupCreate>);
+    return reply.code(status).send(body);
+  });
 
   // ---------- summary ----------
   app.get('/telecom/summary', { schema: { querystring: summaryQuery } }, async (request) => {
