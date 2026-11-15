@@ -39,6 +39,7 @@ import { registerExpenseRoutes } from './routes/expenses.ts';
 import { registerCashbookRoutes } from './routes/cashbooks.ts';
 import { registerCashTransferRoutes } from './routes/cash-transfers.ts';
 import { registerCapitalRoutes } from './routes/capital.ts';
+import { registerCorrectionRoutes } from './routes/corrections.ts';
 import { registerIceCreamRoutes } from './routes/icecream.ts';
 import { registerFinancialReportRoutes } from './routes/reports-financial.ts';
 import { registerOperationalReportRoutes } from './routes/reports-operational.ts';
@@ -246,6 +247,7 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     registerCashbookRoutes(api, ctx);
     registerCashTransferRoutes(api, ctx);
     registerCapitalRoutes(api, ctx);
+    registerCorrectionRoutes(api, ctx);
     registerIceCreamRoutes(api, ctx);
     registerFinancialReportRoutes(api, ctx);
     registerOperationalReportRoutes(api, ctx);
