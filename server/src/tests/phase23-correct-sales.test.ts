@@ -43,6 +43,7 @@ describe('sales correction - success', () => {
   it('voids the original with the reason, posts the replacement, links both, ledgers equal manual void + create, nothing is off', async () => {
     const s = await setup();
     const P = await stockedShop(s, 10, 300000);
+    const base = cashBal(s, 'shop'); // the purchase paid cash out (-300,000); only the change caused by the sale matters
     const sale = (await sellOk(s, [cl(P.id, 4, 100000)], { notes: 'first' })).sales[0];
 
     const r = await correct(s, sale.id, [cl(P.id, 5, 110000)], { notes: 'fixed' }, '  typed 4 instead of 5  ');
@@ -63,7 +64,7 @@ describe('sales correction - success', () => {
     expect(list.totals.revenueCents).toBe(550000);
 
     expect(poolOf(s, P.id)).toEqual({ qty: 5, value: 150000 });
-    expect(cashBal(s, 'shop')).toBe(550000);
+    expect(cashBal(s, 'shop')).toBe(base + 550000);
     expect(count(s.ctx, 'corrections')).toBe(1);
     expect(sql(s, "SELECT COUNT(*) AS n FROM audit_logs WHERE entity = 'correction' AND action = 'correct'")[0]!.n).toBe(1);
     expect(allProblems(s.ctx)).toEqual([]);
@@ -95,6 +96,7 @@ describe('sales correction - success', () => {
   it('a corrected sale can itself be corrected (chain)', async () => {
     const s = await setup();
     const P = await stockedShop(s, 10, 300000);
+    const base = cashBal(s, 'shop');
     const s1 = (await sellOk(s, [cl(P.id, 1, 100000)])).sales[0];
     const r2 = (await correct(s, s1.id, [cl(P.id, 2, 100000)])).body;
     const r3 = await correct(s, r2.replacement.id, [cl(P.id, 3, 100000)]);
@@ -105,7 +107,7 @@ describe('sales correction - success', () => {
     expect(count(s.ctx, 'corrections')).toBe(2);
     expect((await links(s, [r2.replacement.id])).length).toBe(2);
     expect(poolOf(s, P.id)).toEqual({ qty: 7, value: 210000 });
-    expect(cashBal(s, 'shop')).toBe(300000);
+    expect(cashBal(s, 'shop')).toBe(base + 300000);
     expect(allProblems(s.ctx)).toEqual([]);
     // the first original cannot be corrected again
     expect(err(await correct(s, s1.id, [cl(P.id, 1, 100000)])).code).toBe('ALREADY_VOID');
@@ -291,10 +293,10 @@ describe('sales correction - refusals leave the database unchanged', () => {
   it('a replacement clientRef that belongs to another (or the original) sale is refused 409 and never linked', async () => {
     const s = await setup();
     const P = await stockedShop(s, 10, 300000);
-    const a = (await sellOk(s, [cl(P.id, 1, 100000)], { clientRef: 'cart-a' })).sales[0];
-    const b = (await sellOk(s, [cl(P.id, 1, 100000)], { clientRef: 'cart-b' })).sales[0];
+    const a = (await sellOk(s, [cl(P.id, 1, 100000)], { clientRef: 'cart-aaaa' })).sales[0];
+    const b = (await sellOk(s, [cl(P.id, 1, 100000)], { clientRef: 'cart-bbbb' })).sales[0];
     const fp = fingerprint(s.ctx);
-    for (const clientRef of ['cart-a', 'cart-b']) {
+    for (const clientRef of ['cart-aaaa', 'cart-bbbb']) {
       const r = await correct(s, a.id, [cl(P.id, 1, 100000)], { clientRef });
       expect(r.status).toBe(409);
       expect(err(r).code).toBe('CLIENT_REF_CONFLICT');
@@ -354,8 +356,8 @@ describe('sales correction - closed days, backdating, negative cash', () => {
     expect(fingerprint(s.ctx)).toBe(fp);
   });
 
-  // No opening balance: sale +400,000 (cash 400,000), an expense of 350,000 (cash 50,000). Voiding the sale takes cash to -350,000: a
-  // WARNING (R13), never a block. The replacement adds +100,000 back, so the final balance is -250,000.
+  // No opening balance: the purchase paid 300,000 out, the sale brings +400,000 (100,000), an expense of 350,000 (-250,000). Voiding the
+  // sale takes cash to -650,000: a WARNING (R13), never a block. The replacement adds +100,000 back, so the final balance is -550,000.
   it('negative cash stays a warning, not a block', async () => {
     const s = await setup();
     const P = await stockedShop(s, 10, 300000);
@@ -369,7 +371,7 @@ describe('sales correction - closed days, backdating, negative cash', () => {
     const r = await correct(s, sale.id, [cl(P.id, 1, 100000)]);
     expect(r.status).toBe(201);
     expect(r.body.warnings.filter((w: any) => w.code === 'NEGATIVE_CASH_BALANCE')).toHaveLength(1); // de-duplicated
-    expect(cashBal(s, 'shop')).toBe(-250000);
+    expect(cashBal(s, 'shop')).toBe(-550000);
     expect(allProblems(s.ctx)).toEqual([]);
   });
 
@@ -379,7 +381,7 @@ describe('sales correction - closed days, backdating, negative cash', () => {
     const sale = (await sellOk(s, [cl(P.id, 1, 100000)])).sales[0];
     const r = await correct(s, sale.id, [cl(P.id, 1, 10000)]);
     expect(r.status).toBe(201);
-    expect(r.body.warnings.map((w: any) => w.code).sort()).toEqual(['PRICE_BELOW_COST', 'PRICE_BELOW_MINIMUM']);
+    expect(r.body.warnings.map((w: any) => w.code).filter((c: string) => c !== 'NEGATIVE_CASH_BALANCE').sort()).toEqual(['PRICE_BELOW_COST', 'PRICE_BELOW_MINIMUM']);
   });
 });
 
@@ -390,7 +392,7 @@ describe('sales correction - idempotency, concurrency, preview agreement, alread
     const s = await setup();
     const P = await stockedShop(s, 10, 300000);
     const sale = (await sellOk(s, [cl(P.id, 4, 100000)])).sales[0];
-    const body = { reason: 'qty', replacement: { items: [cl(P.id, 5, 100000)], clientRef: 'fix-1' } };
+    const body = { reason: 'qty', replacement: { items: [cl(P.id, 5, 100000)], clientRef: 'fix-0001' } };
     const a = await post(s.app, `/sales/${sale.id}/correct`, body);
     const fp = fingerprint(s.ctx);
     const b = await post(s.app, `/sales/${sale.id}/correct`, body);
@@ -405,7 +407,7 @@ describe('sales correction - idempotency, concurrency, preview agreement, alread
     expect(count(s.ctx, 'corrections')).toBe(1);
     // the same clientRef for a different original is a conflict
     const other = (await sellOk(s, [cl(P.id, 1, 100000)])).sales[0];
-    const c = await post(s.app, `/sales/${other.id}/correct`, { reason: 'x', replacement: { items: [cl(P.id, 1, 100000)], clientRef: 'fix-1' } });
+    const c = await post(s.app, `/sales/${other.id}/correct`, { reason: 'x', replacement: { items: [cl(P.id, 1, 100000)], clientRef: 'fix-0001' } });
     expect(c.status).toBe(409);
     expect(err(c).code).toBe('CLIENT_REF_CONFLICT');
     expect(allProblems(s.ctx)).toEqual([]);
@@ -431,7 +433,7 @@ describe('sales correction - idempotency, concurrency, preview agreement, alread
     const sale = (await sellOk(s, [cl(P.id, 4, 100000)])).sales[0];
     const fp = fingerprint(s.ctx);
     expect((await check(s, sale.id)).body).toEqual({ eligible: true });
-    const body = { reason: 'qty', replacement: { items: [cl(P.id, 5, 100000)], clientRef: 'pv-1' } };
+    const body = { reason: 'qty', replacement: { items: [cl(P.id, 5, 100000)], clientRef: 'pv-00001' } };
     const pv = await post(s.app, `/sales/${sale.id}/correct-preview`, body);
     expect(pv.status).toBe(200);
     expect(fingerprint(s.ctx)).toBe(fp);
@@ -484,6 +486,8 @@ describe('sales correction - stock quantities and values reconcile', () => {
     const bad = await correct(s, r2.body.replacement.id, [cl(B.id, 99, 1)]);
     expect(bad.status).toBe(422);
     expect(allProblems(s.ctx)).toEqual([]);
-    expect(cashBal(s, 'shop')).toBe(sql(s, "SELECT COALESCE(SUM(total_cents),0) AS n FROM sales WHERE status = 'posted'")[0]!.n);
+    // net sale cash (originals reversed) equals the posted sales' totals
+    expect(sql(s, "SELECT COALESCE(SUM(amount_cents),0) AS n FROM cash_entries WHERE book = 'shop' AND type = 'sale_goods'")[0]!.n)
+      .toBe(sql(s, "SELECT COALESCE(SUM(total_cents),0) AS n FROM sales WHERE status = 'posted'")[0]!.n);
   });
 });
