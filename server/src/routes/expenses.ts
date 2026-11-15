@@ -18,6 +18,8 @@ import type { ExpenseCreate } from '../services/expenses.service.ts';
 import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
 } from './catalog-query.ts';
+import { registerCorrectionEndpoints, expenseCorrection } from '../services/correction-cash.ts';
+import { correctionBodySchema } from './corrections.ts';
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
@@ -83,4 +85,9 @@ export function registerExpenseRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.post('/expenses/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
     item: voidExpense(ctx, parseId(request.params), request.body as { reason: string }),
   }));
+
+  // ---------- correct this entry (Correction contract, Phase 1): existing void + existing create in ONE transaction ----------
+  registerCorrectionEndpoints(app, ctx, 'expenses', expenseCorrection, correctionBodySchema({
+    ...createBody, required: createBody.required.filter((k) => k !== 'businessDate'),
+  }), idParamsSchema);
 }

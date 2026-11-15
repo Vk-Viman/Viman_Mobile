@@ -29,6 +29,8 @@ import { listOpeningBalances, setOpeningBalance, voidCapitalEntry } from '../ser
 import {
   checkQueryDates, clientRef, dateField, dateQuery, fail, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
 } from './catalog-query.ts';
+import { registerCorrectionEndpoints, capitalCorrection } from '../services/correction-cash.ts';
+import { correctionBodySchema } from './corrections.ts';
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
@@ -99,6 +101,20 @@ const closingListQuery = {
 function checkDay(date: string): void {
   if (!isIsoDate(date)) fail({ businessDate: 'must be a valid date (YYYY-MM-DD)' });
 }
+
+/**
+ * Replacement body of a capital-entry correction = the body of `POST /capital` (same fields and bounds) with `businessDate`
+ * optional (defaults to the original's date). Kept here because this file holds `/capital-entries`.
+ */
+const capitalReplacementBody = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['book', 'amountCents', 'clientRef'],
+  properties: {
+    businessDate: dateField, book: bookEnum, fund: fundEnum,
+    amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS }, note: { type: 'string' }, clientRef,
+  },
+} as const;
 
 /** Registers the cash book, opening balance, cash count and daily closing endpoints under the `/api/v1` prefix. */
 export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -186,4 +202,7 @@ export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): v
   app.post('/daily-closings/:id/reopen', { schema: { params: idParamsSchema, body: reopenBody } }, async (request) => ({
     item: reopenDay(ctx, parseId(request.params), request.body as { reason: string }),
   }));
+
+  // ---------- correct this entry (Correction contract, Phase 1): existing void + existing create in ONE transaction ----------
+  registerCorrectionEndpoints(app, ctx, 'capital-entries', capitalCorrection, correctionBodySchema(capitalReplacementBody), idParamsSchema);
 }
