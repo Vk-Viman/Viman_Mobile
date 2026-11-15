@@ -17,6 +17,9 @@ import {
   createSaleReturn, createSales, getSale, listSales, voidSale, voidSaleReturn,
 } from '../services/sales.service.ts';
 import type { SaleCreate, SaleReturnCreate } from '../services/sales.service.ts';
+import { checkSaleCorrectable, correctSale, previewSaleCorrection } from '../services/sales-correction.ts';
+import type { SaleCorrectionBody } from '../services/sales-correction.ts';
+import { correctionBodySchema } from './corrections.ts';
 import {
   bookQuery, checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging,
   voidBody,
@@ -72,6 +75,9 @@ const createBody = {
     clientRef,
   },
 } as const;
+
+/** Correction body (Phase 1): the normal POS body, but `businessDate` is optional (default: the original sale's date). */
+const correctBody = correctionBodySchema({ ...createBody, required: ['items', 'clientRef'] });
 
 const returnBody = {
   type: 'object',
@@ -149,5 +155,16 @@ export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.post('/sales/:id/returns/:returnId/void', { schema: { params: returnVoidParams, body: voidBody } }, async (request) => {
     const p = request.params as { id: string; returnId: string };
     return voidSaleReturn(ctx, Number(p.id), Number(p.returnId), request.body as { reason: string });
+  });
+
+  app.get('/sales/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkSaleCorrectable(ctx, parseId(request.params)));
+
+  app.post('/sales/:id/correct-preview', { schema: { params: idParamsSchema, body: correctBody } }, async (request) =>
+    previewSaleCorrection(ctx, parseId(request.params), request.body as SaleCorrectionBody));
+
+  app.post('/sales/:id/correct', { schema: { params: idParamsSchema, body: correctBody } }, async (request, reply) => {
+    const { replayed, ...result } = correctSale(ctx, parseId(request.params), request.body as SaleCorrectionBody);
+    return reply.code(replayed ? 200 : 201).send(result);
   });
 }
