@@ -22,12 +22,18 @@ import type { IceFund } from '../repositories/cash-entries.repo.ts';
 import type { IceStatus } from '../repositories/icecream.repo.ts';
 import { createDay, getDayByDate, listDays, replaceDay, voidDay } from '../services/icecream-days.service.ts';
 import type { IceDayCreate, IceDayInput } from '../services/icecream-days.service.ts';
+import {
+  checkIceMoveCorrection, checkIcePaymentCorrection, correctIceMove, correctIcePayment, optionalDate, previewIceMoveCorrection,
+  previewIcePaymentCorrection,
+} from '../services/correction-other.ts';
+import type { CorrectionRequest } from '../services/correction-other.ts';
 import { createMove, listIceMoves, previewMove, voidMove } from '../services/icecream-moves.service.ts';
 import type { IceMoveCreate } from '../services/icecream-moves.service.ts';
 import { createPayment, listIcePayments, voidPayment } from '../services/icecream-payments.service.ts';
 import type { IcePaymentCreate } from '../services/icecream-payments.service.ts';
 import type { PaymentKind } from '../services/icecream-rules.ts';
 import { MAX_CENTS, getFundLedger, getFunds } from '../services/icecream.service.ts';
+import { correctionBodySchema } from './corrections.ts';
 import {
   DATE_PATTERN, checkQueryDates, clientRef, dateField, dateQuery, fail, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
 } from './catalog-query.ts';
@@ -117,6 +123,9 @@ const moveListQuery = {
   properties: { from: dateQuery, to: dateQuery, status: statusQuery, limit: intQuery, offset: intQuery },
 } as const;
 
+const paymentCorrectionBody = correctionBodySchema(optionalDate(paymentBody));
+const moveCorrectionBody = correctionBodySchema(optionalDate(moveBody));
+
 const fundsQuery = {
   type: 'object', additionalProperties: false, properties: { asOf: dateQuery, from: dateQuery },
 } as const;
@@ -183,6 +192,18 @@ export function registerIceCreamRoutes(app: FastifyInstance, ctx: AppContext): v
     return listIcePayments(ctx, q);
   });
 
+  // payment corrections (void the original + enter the replacement, one transaction; answers carry `funds`)
+  app.get('/icecream/payments/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkIcePaymentCorrection(ctx, parseId(request.params)));
+
+  app.post('/icecream/payments/:id/correct-preview', { schema: { params: idParamsSchema, body: paymentCorrectionBody } }, async (request) =>
+    previewIcePaymentCorrection(ctx, parseId(request.params), request.body as CorrectionRequest<IcePaymentCreate>));
+
+  app.post('/icecream/payments/:id/correct', { schema: { params: idParamsSchema, body: paymentCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctIcePayment(ctx, parseId(request.params), request.body as CorrectionRequest<IcePaymentCreate>);
+    return reply.code(status).send(body);
+  });
+
   // ---------- fund moves ----------
   app.post('/icecream/fund-moves/preview', { schema: { body: previewBody } }, async (request) =>
     previewMove(ctx, request.body as { fromFund: IceFund; toFund: IceFund; amountCents: number }));
@@ -204,6 +225,18 @@ export function registerIceCreamRoutes(app: FastifyInstance, ctx: AppContext): v
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.status !== undefined) q.status = raw.status;
     return listIceMoves(ctx, q);
+  });
+
+  // fund move corrections (D2 void guard and D4 split confirmation apply unchanged)
+  app.get('/icecream/fund-moves/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkIceMoveCorrection(ctx, parseId(request.params)));
+
+  app.post('/icecream/fund-moves/:id/correct-preview', { schema: { params: idParamsSchema, body: moveCorrectionBody } }, async (request) =>
+    previewIceMoveCorrection(ctx, parseId(request.params), request.body as CorrectionRequest<IceMoveCreate>));
+
+  app.post('/icecream/fund-moves/:id/correct', { schema: { params: idParamsSchema, body: moveCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctIceMove(ctx, parseId(request.params), request.body as CorrectionRequest<IceMoveCreate>);
+    return reply.code(status).send(body);
   });
 
   // ---------- funds ----------
