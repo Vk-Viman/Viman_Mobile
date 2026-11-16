@@ -34,6 +34,8 @@ import type { CapitalEntry, CashBook } from '../../types/cashbooks';
 import type { CapitalQuery } from '../../types/transfers';
 import { bookFundLabel, CashBookBadge, CashBookFilterSelect } from './BookFundFields';
 import { CapitalDialog } from './CapitalDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { CapitalCorrection } from '../corrections/CashCorrections';
 
 /** The capital tab: filter bar, list with total, pager, and the add / void dialogs. */
 export function CapitalTab() {
@@ -47,6 +49,7 @@ export function CapitalTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<CapitalEntry | null>(null);
+  const [correcting, setCorrecting] = useState<CapitalEntry | null>(null);
 
   useEffect(() => { setPage(0); }, [from, to, book, kind, status]);
 
@@ -56,6 +59,7 @@ export function CapitalTab() {
   };
   const list = useCapital(query);
   const filtered = Boolean(from || to || book || kind || status);
+  const badgesFor = useCorrectionBadges('capital_entries', (list.data?.items ?? []).filter((e) => e.kind === 'capital').map((e) => e.id));
 
   const columns: Column<CapitalEntry>[] = [
     { key: 'date', header: 'Date', render: (e) => <span className="inline-flex flex-wrap items-center gap-2">{e.businessDate}{e.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
@@ -65,13 +69,18 @@ export function CapitalTab() {
     { key: 'amount', header: 'Amount (Rs.)', align: 'right', render: (e) => <Money cents={e.amountCents} /> },
     {
       key: 'status', header: 'Status',
-      render: (e) => (<span><PostedStatusBadge status={e.status} />{e.status === 'void' && e.voidReason && <span className="mt-1 block text-xs text-slate-500">{e.voidReason}</span>}</span>),
+      render: (e) => (<span><PostedStatusBadge status={e.status} />{e.status === 'void' && e.voidReason && <span className="mt-1 block text-xs text-slate-500">{e.voidReason}</span>}{e.kind === 'capital' && badgesFor(e.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
       render: (e) => {
         if (e.kind === 'opening_balance') return <Link to="/cash-books" className="text-sm text-brand-700 hover:underline">Manage in Cash Books</Link>;
-        return e.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(e)} aria-label={`Void capital #${e.id}`}>Void</Button> : null;
+        return e.status === 'posted' ? (
+          <span className="inline-flex">
+            <CorrectButton noun="capital entry" id={e.id} onClick={() => setCorrecting(e)} />
+            <Button variant="ghost" onClick={() => setVoiding(e)} aria-label={`Void capital #${e.id}`}>Void</Button>
+          </span>
+        ) : null;
       },
     },
   ];
@@ -112,6 +121,7 @@ export function CapitalTab() {
           </>
         )}
       </Card>
+      {correcting && <CapitalCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <CapitalDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

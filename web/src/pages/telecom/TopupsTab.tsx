@@ -29,6 +29,8 @@ import type { Topup, TopupKind, TopupQuery } from '../../types/telecom';
 import { DateCell, StatusCell } from './shared';
 import { TelecomSummaryCard } from './TelecomSummaryCard';
 import { TopupDialog } from './TopupDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { TopupCorrection } from '../corrections/OtherCorrections';
 
 /** The tab. */
 export function TopupsTab() {
@@ -43,6 +45,7 @@ export function TopupsTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<Topup | null>(null);
+  const [correcting, setCorrecting] = useState<Topup | null>(null);
 
   useEffect(() => { setPage(0); }, [from, to, kind, providerId, status]);
 
@@ -52,6 +55,7 @@ export function TopupsTab() {
   };
   const list = useTopups(query);
   const filtered = Boolean(from || to || kind || providerId || status);
+  const badgesFor = useCorrectionBadges('telecom_topups', (list.data?.items ?? []).map((t) => t.id));
 
   const columns: Column<Topup>[] = [
     { key: 'date', header: 'Date', render: (t) => <DateCell date={t.businessDate} backdated={t.backdated} /> },
@@ -61,10 +65,15 @@ export function TopupsTab() {
     },
     { key: 'amount', header: 'Paid out (Rs.)', align: 'right', render: (t) => <Money cents={t.amountCents} /> },
     { key: 'note', header: 'Notes', render: (t) => t.notes || '—' },
-    { key: 'status', header: 'Status', render: (t) => <StatusCell status={t.status} reason={t.voidReason} /> },
+    { key: 'status', header: 'Status', render: (t) => <span><StatusCell status={t.status} reason={t.voidReason} />{badgesFor(t.id)}</span> },
     {
       key: 'act', header: 'Actions',
-      render: (t) => (t.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(t)} aria-label={`Void top-up #${t.id}`}>Void</Button> : null),
+      render: (t) => (t.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="top-up" id={t.id} onClick={() => setCorrecting(t)} />
+          <Button variant="ghost" onClick={() => setVoiding(t)} aria-label={`Void top-up #${t.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -107,6 +116,7 @@ export function TopupsTab() {
           </>
         )}
       </Card>
+      {correcting && <TopupCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <TopupDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

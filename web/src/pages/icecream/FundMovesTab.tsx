@@ -30,6 +30,8 @@ import { formatLKR } from '../../lib/format';
 import type { PostedStatus } from '../../types/api';
 import type { IceMove, MoveQuery } from '../../types/icecream';
 import { MoveDialog } from './MoveDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { MoveCorrection } from '../corrections/OtherCorrections';
 import { FUND_LABEL, MOVE_KIND_LABEL, notifyIceWarnings } from './shared';
 
 /** What a posted move did to the profit and the cost charge, in a few words. */
@@ -56,12 +58,14 @@ export function FundMovesTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<IceMove | null>(null);
+  const [correcting, setCorrecting] = useState<IceMove | null>(null);
 
   useEffect(() => { setPage(0); }, [from, to, status]);
 
   const query: MoveQuery = { from: from || undefined, to: to || undefined, status: status || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
   const list = useMoves(query);
   const filtered = Boolean(from || to || status);
+  const badgesFor = useCorrectionBadges('icecream_fund_moves', (list.data?.items ?? []).map((m) => m.id));
 
   const columns: Column<IceMove>[] = [
     {
@@ -81,11 +85,16 @@ export function FundMovesTab() {
     { key: 'effect', header: 'What it did', render: (m) => <EffectText m={m} /> },
     {
       key: 'status', header: 'Status',
-      render: (m) => (<span><PostedStatusBadge status={m.status} />{m.status === 'void' && m.voidReason && <span className="mt-1 block text-xs text-slate-500">{m.voidReason}</span>}</span>),
+      render: (m) => (<span><PostedStatusBadge status={m.status} />{m.status === 'void' && m.voidReason && <span className="mt-1 block text-xs text-slate-500">{m.voidReason}</span>}{badgesFor(m.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
-      render: (m) => (m.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(m)} aria-label={`Void move #${m.id}`}>Void</Button> : null),
+      render: (m) => (m.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="fund move" id={m.id} onClick={() => setCorrecting(m)} />
+          <Button variant="ghost" onClick={() => setVoiding(m)} aria-label={`Void move #${m.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -122,6 +131,7 @@ export function FundMovesTab() {
           </>
         )}
       </Card>
+      {correcting && <MoveCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <MoveDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

@@ -32,6 +32,8 @@ import type { CashBook } from '../../types/cashbooks';
 import type { Transfer, TransferQuery } from '../../types/transfers';
 import { bookFundLabel, CashBookBadge, CashBookFilterSelect } from './BookFundFields';
 import { TransferDialog } from './TransferDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { TransferCorrection } from '../corrections/CashCorrections';
 
 /** The transfers tab: filter bar, ledger-style list (From -> To) with total, pager, and the transfer / void dialogs. */
 export function TransfersTab() {
@@ -44,6 +46,7 @@ export function TransfersTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<Transfer | null>(null);
+  const [correcting, setCorrecting] = useState<Transfer | null>(null);
 
   useEffect(() => { setPage(0); }, [from, to, book, status]);
 
@@ -53,6 +56,7 @@ export function TransfersTab() {
   };
   const list = useTransfers(query);
   const filtered = Boolean(from || to || book || status);
+  const badgesFor = useCorrectionBadges('cash_transfers', (list.data?.items ?? []).map((t) => t.id));
 
   const columns: Column<Transfer>[] = [
     { key: 'date', header: 'Date', render: (t) => <span className="inline-flex flex-wrap items-center gap-2">{t.businessDate}{t.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
@@ -70,11 +74,16 @@ export function TransfersTab() {
     { key: 'note', header: 'Note', render: (t) => t.note || '—' },
     {
       key: 'status', header: 'Status',
-      render: (t) => (<span><PostedStatusBadge status={t.status} />{t.status === 'void' && t.voidReason && <span className="mt-1 block text-xs text-slate-500">{t.voidReason}</span>}</span>),
+      render: (t) => (<span><PostedStatusBadge status={t.status} />{t.status === 'void' && t.voidReason && <span className="mt-1 block text-xs text-slate-500">{t.voidReason}</span>}{badgesFor(t.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
-      render: (t) => (t.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(t)} aria-label={`Void transfer #${t.id}`}>Void</Button> : null),
+      render: (t) => (t.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="transfer" id={t.id} onClick={() => setCorrecting(t)} />
+          <Button variant="ghost" onClick={() => setVoiding(t)} aria-label={`Void transfer #${t.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -109,6 +118,7 @@ export function TransfersTab() {
           </>
         )}
       </Card>
+      {correcting && <TransferCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <TransferDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog
