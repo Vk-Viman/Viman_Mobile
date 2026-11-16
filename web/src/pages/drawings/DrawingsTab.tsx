@@ -35,6 +35,8 @@ import type { CashBook } from '../../types/cashbooks';
 import type { OwnerDrawing, OwnerDrawingQuery } from '../../types/transfers';
 import { bookFundLabel, CashBookBadge, CashBookFilterSelect } from './BookFundFields';
 import { CashDrawingDialog } from './CashDrawingDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { DrawingCorrection } from '../corrections/CashCorrections';
 
 /** The drawings tab: filter bar, one list of both kinds with totals, pager, and the record / void dialogs. */
 export function DrawingsTab() {
@@ -48,6 +50,7 @@ export function DrawingsTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<OwnerDrawing | null>(null);
+  const [correcting, setCorrecting] = useState<OwnerDrawing | null>(null);
 
   // A new filter always starts at the first page.
   useEffect(() => { setPage(0); }, [from, to, book, kind, status]);
@@ -58,6 +61,7 @@ export function DrawingsTab() {
   };
   const list = useOwnerDrawings(query);
   const filtered = Boolean(from || to || book || kind || status);
+  const badgesFor = useCorrectionBadges('owner_drawings', (list.data?.items ?? []).filter((d) => d.kind === 'cash').map((d) => d.id));
 
   const columns: Column<OwnerDrawing>[] = [
     { key: 'date', header: 'Date', render: (d) => <span className="inline-flex flex-wrap items-center gap-2">{d.businessDate}{d.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
@@ -72,13 +76,18 @@ export function DrawingsTab() {
     { key: 'amount', header: 'Amount (Rs.)', align: 'right', render: (d) => <Money cents={d.amountCents} /> },
     {
       key: 'status', header: 'Status',
-      render: (d) => (<span><PostedStatusBadge status={d.status} />{d.status === 'void' && d.voidReason && <span className="mt-1 block text-xs text-slate-500">{d.voidReason}</span>}</span>),
+      render: (d) => (<span><PostedStatusBadge status={d.status} />{d.status === 'void' && d.voidReason && <span className="mt-1 block text-xs text-slate-500">{d.voidReason}</span>}{d.kind === 'cash' && badgesFor(d.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
       render: (d) => {
         if (d.kind === 'goods') return <Link to="/stock/personal-use" className="text-sm text-brand-700 hover:underline">Manage in Stock</Link>;
-        return d.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(d)} aria-label={`Void cash drawing #${d.id}`}>Void</Button> : null;
+        return d.status === 'posted' ? (
+          <span className="inline-flex">
+            <CorrectButton noun="cash drawing" id={d.id} onClick={() => setCorrecting(d)} />
+            <Button variant="ghost" onClick={() => setVoiding(d)} aria-label={`Void cash drawing #${d.id}`}>Void</Button>
+          </span>
+        ) : null;
       },
     },
   ];
@@ -127,6 +136,7 @@ export function DrawingsTab() {
           </>
         )}
       </Card>
+      {correcting && <DrawingCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <CashDrawingDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog
