@@ -31,6 +31,8 @@ import type { PostedStatus } from '../../types/api';
 import type { IceFund } from '../../types/cashbooks';
 import type { IcePayment, PaymentKind, PaymentQuery } from '../../types/icecream';
 import { PaymentDialog } from './PaymentDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { PaymentCorrection } from '../corrections/OtherCorrections';
 import { ELECTRICITY_NOTE, FUNDS, FUND_LABEL, PAYMENT_KINDS, PAYMENT_KIND_LABEL, notifyIceWarnings } from './shared';
 
 /** The payments screen. */
@@ -45,6 +47,7 @@ export function PaymentsTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<IcePayment | null>(null);
+  const [correcting, setCorrecting] = useState<IcePayment | null>(null);
 
   useEffect(() => { setPage(0); }, [from, to, kind, fund, status]);
 
@@ -54,6 +57,7 @@ export function PaymentsTab() {
   };
   const list = usePayments(query);
   const filtered = Boolean(from || to || kind || fund || status);
+  const badgesFor = useCorrectionBadges('icecream_payments', (list.data?.items ?? []).map((p) => p.id));
 
   const columns: Column<IcePayment>[] = [
     {
@@ -73,11 +77,16 @@ export function PaymentsTab() {
     },
     {
       key: 'status', header: 'Status',
-      render: (p) => (<span><PostedStatusBadge status={p.status} />{p.status === 'void' && p.voidReason && <span className="mt-1 block text-xs text-slate-500">{p.voidReason}</span>}</span>),
+      render: (p) => (<span><PostedStatusBadge status={p.status} />{p.status === 'void' && p.voidReason && <span className="mt-1 block text-xs text-slate-500">{p.voidReason}</span>}{badgesFor(p.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
-      render: (p) => (p.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(p)} aria-label={`Void payment #${p.id}`}>Void</Button> : null),
+      render: (p) => (p.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="payment" id={p.id} onClick={() => setCorrecting(p)} />
+          <Button variant="ghost" onClick={() => setVoiding(p)} aria-label={`Void payment #${p.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -119,6 +128,7 @@ export function PaymentsTab() {
           </>
         )}
       </Card>
+      {correcting && <PaymentCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <PaymentDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

@@ -30,6 +30,8 @@ import { formatLKR } from '../../lib/format';
 import type { Book, PostedStatus, StockLoss, StockLossQuery, StockLossReason } from '../../types/api';
 import { REASON_LABEL, useStockProductChoices } from './shared';
 import { StockOutDialog } from './StockOutDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { StockLossCorrection } from '../corrections/OtherCorrections';
 
 /** The tab: filter bar, losses table with total, pager, and the record / void dialogs. */
 export function StockLossesTab() {
@@ -47,6 +49,7 @@ export function StockLossesTab() {
   // Dialog state: `creating` shows the record form; `voiding` holds the loss being voided.
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<StockLoss | null>(null);
+  const [correcting, setCorrecting] = useState<StockLoss | null>(null);
 
   // The "Find product" box narrows the Product drop-down (debounced so the server is queried once typing pauses).
   const q = useDebounced(search.trim());
@@ -68,6 +71,7 @@ export function StockLossesTab() {
   const list = useStockLosses(query);
   // True when any filter is set; decides between "no losses yet" and "no losses match".
   const filtered = Boolean(from || to || productId || reason || book || status);
+  const badgesFor = useCorrectionBadges('stock_losses', (list.data?.items ?? []).map((l) => l.id));
 
   const columns: Column<StockLoss>[] = [
     {
@@ -90,6 +94,7 @@ export function StockLossesTab() {
         <span>
           <PostedStatusBadge status={l.status} />
           {l.status === 'void' && l.voidReason && <span className="mt-1 block text-xs text-slate-500">{l.voidReason}</span>}
+          {badgesFor(l.id)}
         </span>
       ),
     },
@@ -98,7 +103,12 @@ export function StockLossesTab() {
       header: 'Actions',
       // Only live (posted) manual entries can be voided; a damaged sales-return loss belongs to its return
       // (the server answers 409 DAMAGED_RETURN_LOSS), so it is labelled instead of offering a Void button.
-      render: (l) => (l.status === 'posted' && l.source === 'damaged_return' ? <span className="text-xs text-slate-500">From sale return #{l.salesReturnId}</span> : l.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(l)} aria-label={`Void loss #${l.id}`}>Void</Button> : null),
+      render: (l) => (l.status === 'posted' && l.source === 'damaged_return' ? <span className="text-xs text-slate-500">From sale return #{l.salesReturnId}</span> : l.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="stock loss" id={l.id} onClick={() => setCorrecting(l)} />
+          <Button variant="ghost" onClick={() => setVoiding(l)} aria-label={`Void loss #${l.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -147,6 +157,7 @@ export function StockLossesTab() {
         )}
       </Card>
       {/* Dialogs are mounted only while open so each opening starts fresh (new clientRef, empty form). */}
+      {correcting && <StockLossCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <StockOutDialog mode="loss" onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

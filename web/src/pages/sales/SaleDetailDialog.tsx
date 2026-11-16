@@ -19,6 +19,8 @@ import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSale } from '../../api/sales';
 import type { Sale, SaleReturn } from '../../types/api';
 import { formatDateTime } from '../../lib/format';
+import { SaleCorrection } from '../corrections/SaleCorrection';
+import { useCorrectionBadges } from '../../components/CorrectionBadges';
 import { SaleReturnDialog } from './SaleReturnDialog';
 import { VoidReturnDialog } from './VoidReturnDialog';
 import { VoidSaleDialog } from './VoidSaleDialog';
@@ -27,10 +29,11 @@ import { VoidSaleDialog } from './VoidSaleDialog';
 export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   const q = useSale(id);
   // Which action dialog is open on top of this one (null = none).
-  const [sub, setSub] = useState<'void' | 'return' | null>(null);
+  const [sub, setSub] = useState<'void' | 'return' | 'correct' | null>(null);
   // The return whose "Void return" dialog is open (R-VR); kept by id so the dialog always shows the freshest data.
   const [voidRetId, setVoidRetId] = useState<number | null>(null);
   const s = q.data?.item;
+  const badgesFor = useCorrectionBadges('sales', [id]);
 
   // R-VR 7: only POSTED returns block a sale void (a voided return no longer counts).
   const hasReturns = s?.returns.some((r) => r.status === 'posted') ?? false;
@@ -51,7 +54,7 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
               <Row k="Business date" v={<>{s.businessDate} {s.backdated && <Badge tone="amber">Backdated</Badge>}</>} />
               <Row k="Posted (Colombo time)" v={formatDateTime(s.postedAt)} />
               <Row k="Book" v={<BookBadge book={s.book} />} />
-              <Row k="Status" v={<PostedStatusBadge status={s.status} />} />
+              <Row k="Status" v={<><PostedStatusBadge status={s.status} />{badgesFor(id)}</>} />
               <Row k="Total" v={<Money cents={s.totalCents} className="font-semibold" />} />
               <Row k="Cost" v={<Money cents={s.chargedCostCents} />} />
               {s.extraCostCents > 0 && (
@@ -154,8 +157,10 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
               {s.status === 'void' && <span className="mr-auto text-xs text-slate-500">This sale is void, so it accepts no further changes.</span>}
               {hasReturns && s.status === 'posted' && (
-                <span className="mr-auto text-xs text-slate-500">This sale has returns, so it cannot be voided.</span>
+                <span className="mr-auto text-xs text-slate-500">This sale has returns, so it cannot be voided or corrected. Void the returns first (newest first), or leave the sale as it is.</span>
               )}
+              <Button variant="secondary" disabled={s.status === 'void' || hasReturns} onClick={() => setSub('correct')}
+                title={hasReturns ? 'Void the returns first (newest first), or leave the sale as it is.' : undefined}>Correct this entry</Button>
               <Button variant="danger" disabled={s.status === 'void' || hasReturns} onClick={() => setSub('void')}>Void sale</Button>
               <Button disabled={s.status === 'void' || fullyReturned} onClick={() => setSub('return')}>Return items</Button>
               <Button variant="secondary" onClick={onClose}>Close</Button>
@@ -163,6 +168,7 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
           </div>
         )}
       </Modal>
+      {s && sub === 'correct' && <SaleCorrection original={s} onClose={() => setSub(null)} />}
       {s && sub === 'void' && <VoidSaleDialog sale={s} onClose={() => setSub(null)} />}
       {s && sub === 'return' && <SaleReturnDialog sale={s} onClose={() => setSub(null)} />}
       {s && voidRet && <VoidReturnDialog sale={s} ret={voidRet} onClose={() => setVoidRetId(null)} />}

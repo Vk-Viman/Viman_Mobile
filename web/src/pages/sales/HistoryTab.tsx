@@ -22,6 +22,7 @@ import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSales } from '../../api/sales';
 import { PAGE_SIZE } from '../../lib/constants';
 import type { Book, PostedStatus, Sale, SaleQuery } from '../../types/api';
+import { useCorrectionBadges } from '../../components/CorrectionBadges';
 import { ProductFilter } from './ProductFilter';
 import { SaleDetailDialog } from './SaleDetailDialog';
 
@@ -50,6 +51,7 @@ export function HistoryTab() {
   };
   const list = useSales(query);
   const filtered = Boolean(from || to || book || status || productId);
+  const badgesFor = useCorrectionBadges('sales', (list.data?.items ?? []).map((s) => s.id));
 
   const columns: Column<Sale>[] = [
     {
@@ -71,7 +73,7 @@ export function HistoryTab() {
     { key: 'total', header: 'Total (Rs.)', align: 'right', render: (s) => <Money cents={s.totalCents} /> },
     { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (s) => <Money cents={s.chargedCostCents} /> },
     { key: 'profit', header: 'Profit', align: 'right', render: (s) => <Money cents={s.grossProfitCents} /> },
-    { key: 'status', header: 'Status', render: (s) => <PostedStatusBadge status={s.status} /> },
+    { key: 'status', header: 'Status', render: (s) => <span><PostedStatusBadge status={s.status} />{badgesFor(s.id)}</span> },
     {
       key: 'returns',
       header: 'Returns',
