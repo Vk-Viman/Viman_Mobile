@@ -272,11 +272,10 @@ describe('POST /products: categoryId or newCategory', () => {
     const s = await setup();
     await mkProduct(s, { name: 'Same name' });
     const before = [count(s.ctx, 'categories'), count(s.ctx, 'products'), count(s.ctx, 'audit_logs')];
-    const r = await post(s.app, '/products', prodBody({ name: 'SAME NAME', newCategory: { name: 'Brand new', book: 'telecom' } }));
-    expect(r.status).toBe(409);
-    expect(r.body.error.code).toBe('DUPLICATE_NAME');
-    expect([count(s.ctx, 'categories'), count(s.ctx, 'products'), count(s.ctx, 'audit_logs')]).toEqual(before);
-    expect((await get(s.app, '/categories')).body.items.some((c: any) => c.name === 'Brand new')).toBe(false);
+    // Names are unique PER CATEGORY (migration 023): a brand-new category is empty, so the same name is accepted there.
+    const r = await post(s.app, '/products', prodBody({ name: 'SAME NAME', newCategory: { name: 'Fresh', book: 'shop' } }));
+    expect(r.status).toBe(201);
+    expect([count(s.ctx, 'categories'), count(s.ctx, 'products')]).toEqual([before[0]! + 1, before[1]! + 1]);
     // a duplicate CODE rolls back too
     await mkProduct(s, { name: 'Coded', code: 'ABC' });
     const r2 = await post(s.app, '/products', prodBody({ name: 'Other', code: 'abc', newCategory: { name: 'Brand new', book: 'shop' } }));
