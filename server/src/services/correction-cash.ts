@@ -27,6 +27,7 @@ import type { CapitalCreate, CapitalEntry } from './capital.service.ts';
 import { voidCapitalEntry } from './opening-balance.service.ts';
 import { createDrawing, getDrawing, voidDrawing } from './drawings.service.ts';
 import type { Drawing, DrawingCreate } from './drawings.service.ts';
+import { validationError } from './validation.ts';
 
 /** The replacement body: the normal create body with `businessDate` optional. */
 export type Replacement<C extends { businessDate: string }> = Omit<C, 'businessDate'> & { businessDate?: string };
@@ -35,7 +36,7 @@ export type Replacement<C extends { businessDate: string }> = Omit<C, 'businessD
 export interface CorrectionRequest<C extends { businessDate: string }> { reason: string; replacement: Replacement<C> }
 
 /** Answer of preview. */
-export interface CorrectionPreview<T> { original: T; replacement: T; warnings: CashWarning[] }
+export interface CorrectionPreview<T> { original: T; replacement: T; warnings: CashWarning[]; comparison?: unknown }
 
 /** Answer of a real correction (`replayed` = the same replacement clientRef was already applied; the route answers 200 then). */
 export interface CorrectionApplied<T> extends CorrectionPreview<T> { correction: CorrectionLink; replayed: boolean }
@@ -46,6 +47,10 @@ interface Adapter<T extends { id: number; status: 'posted' | 'void'; businessDat
   find: (ctx: AppContext, id: number) => T | null;
   /** Throws 409 CORRECTION_NOT_SUPPORTED for a variant that is not correctable in Phase 1 (called before the void). */
   assertSupported: (original: T) => void;
+  /** Optional (Phase 2): refuses a replacement that does not fit the original (e.g. another drawing kind); called before the void. */
+  assertReplacement?: (original: T, replacement: Replacement<C>) => void;
+  /** Optional (Phase 2): the `comparison` of the answer; undefined = none. */
+  compare?: (original: T, replacement: T) => unknown;
   /** Calls the existing void; returns the voided record and any warnings it produced. */
   voidIt: (ctx: AppContext, id: number, reason: string) => { item: T; warnings: CashWarning[] };
   /** Calls the existing create. */
@@ -90,6 +95,7 @@ function build<T extends { id: number; status: 'posted' | 'void'; businessDate: 
       voidOriginal: (r: string) => {
         const current = a.find(ctx, id);
         if (current) a.assertSupported(current); // refused BEFORE the void is attempted
+        if (current && replacement !== null && a.assertReplacement) a.assertReplacement(current, replacement);
         const v = a.voidIt(ctx, id, r);
         captured.original = v.item;
         captured.voidWarnings = v.warnings;
@@ -113,6 +119,12 @@ function build<T extends { id: number; status: 'posted' | 'void'; businessDate: 
     return { base, captured };
   }
 
+  /** `{ comparison }` when the type has one, else `{}` (so Phase 1 answers keep exactly their old keys). */
+  const cmp = (original: T, replacement: T): { comparison?: unknown } => {
+    const c = a.compare?.(original, replacement);
+    return c === undefined ? {} : { comparison: c };
+  };
+
   return {
     check(ctx: AppContext, id: number): Eligibility {
       const { base } = steps(ctx, id, 'Eligibility check', null);
@@ -124,6 +136,7 @@ function build<T extends { id: number; status: 'posted' | 'void'; businessDate: 
       return {
         original: captured.original as T, replacement: captured.replacement as T,
         warnings: mergeWarnings(captured.voidWarnings, captured.createWarnings),
+        ...cmp(captured.original as T, captured.replacement as T),
       };
     },
     apply(ctx: AppContext, id: number, req: CorrectionRequest<C>): CorrectionApplied<T> {
@@ -132,11 +145,12 @@ function build<T extends { id: number; status: 'posted' | 'void'; businessDate: 
       if (r.replayed) {
         const original = a.find(ctx, r.correction.originalId) as T;
         const replacement = a.find(ctx, r.correction.replacementId) as T;
-        return { replayed: true, correction: r.correction, original, replacement, warnings: [] };
+        return { replayed: true, correction: r.correction, original, replacement, warnings: [], ...cmp(original, replacement) };
       }
       return {
         replayed: false, correction: r.correction, original: captured.original as T, replacement: captured.replacement as T,
         warnings: mergeWarnings(captured.voidWarnings, captured.createWarnings),
+        ...cmp(captured.original as T, captured.replacement as T),
       };
     },
   };
@@ -183,9 +197,13 @@ const capital = build<CapitalEntry, CapitalCreate>({
 const drawings = build<Drawing, DrawingCreate>({
   entity: 'owner_drawings',
   find: (ctx, id) => findOrNull(() => getDrawing(ctx, id)),
-  assertSupported: (d) => {
-    if (d.kind !== 'cash') throw unsupported('Only cash drawings can be corrected. Void this goods drawing and enter a new one.');
+  assertSupported: () => {}, // Phase 2: goods drawings are correctable too (the replacement must keep the kind)
+  assertReplacement: (d, r) => {
+    if (r.kind !== d.kind) throw validationError({ 'replacement.kind': `The replacement must be a ${d.kind} drawing, like the original.` });
   },
+  compare: (o, r) => (o.kind === 'goods'
+    ? { originalCostCents: o.amountCents, replacementCostCents: r.amountCents, differenceCents: r.amountCents - o.amountCents }
+    : undefined),
   voidIt: (ctx, id, reason) => ({ item: voidDrawing(ctx, id, { reason }), warnings: [] }),
   create: createDrawing,
   notFoundMessage: 'Drawing not found.',
