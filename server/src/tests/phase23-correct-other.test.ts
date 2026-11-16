@@ -23,7 +23,7 @@ interface Kit {
   negCode: string | null;
   world: (s: ApiBase) => Promise<W>;
   make: (s: ApiBase, w: W, date: string) => Promise<any>;
-  repl: (w: W, o?: { date?: string }) => Record<string, unknown>;
+  repl: (w: W, o?: { businessDate?: string }) => Record<string, unknown>;
   bad: (w: W) => { body: Record<string, unknown>; code: string };
   neg: (w: W) => Record<string, unknown>;
   /** The fields of the replacement that must show the corrected values. */
@@ -144,7 +144,7 @@ describe.each(KITS)('correct $key', (k) => {
   it('1b. an explicit replacement businessDate overrides the default', async () => {
     const { s, w } = await setup();
     const orig = await k.make(s, w, daysAgo(10));
-    const r = await correct(s, orig.id, body('date was wrong', k.repl(w, { date: daysAgo(9) })));
+    const r = await correct(s, orig.id, body('date was wrong', k.repl(w, { businessDate: daysAgo(9) })));
     expect(r.status).toBe(201);
     expect(r.body.replacement.businessDate).toBe(daysAgo(9));
     expect(allProblems(s.ctx)).toEqual([]);
@@ -196,9 +196,9 @@ describe.each(KITS)('correct $key', (k) => {
     const b = await k.make(s, w, daysAgo(10));
     await closeOk(s, k.book, daysAgo(20));
     const fp = fingerprint(s.ctx);
-    const closed = await correct(s, a.id, body('x', k.repl(w, { date: daysAgo(20) })));
+    const closed = await correct(s, a.id, body('x', k.repl(w, { businessDate: daysAgo(20) })));
     expect([closed.status, closed.body.error.code]).toEqual([409, 'DAY_CLOSED']);
-    const before = await correct(s, b.id, body('x', k.repl(w, { date: daysAgo(25) })));
+    const before = await correct(s, b.id, body('x', k.repl(w, { businessDate: daysAgo(25) })));
     expect([before.status, before.body.error.code]).toEqual([409, 'BACKDATE_BEFORE_CLOSED_DAY']);
     const old = await correct(s, early.id, body('x', k.repl(w)));
     expect([old.status, old.body.error.code]).toEqual([409, 'BACKDATE_BEFORE_CLOSED_DAY']);
