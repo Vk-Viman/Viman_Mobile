@@ -42,6 +42,9 @@ const TABLE: Record<string, { kind: Kind; ops?: string[]; note?: string }> = {
   // --- sales
   'POST /sales': { kind: 'financial', ops: ['sale (shop)', 'sale (telecom)', 'sale cart with a Shop and a Telecom line'] },
   'POST /sales/:id/void': { kind: 'financial', ops: ['sale (shop)', 'sale (telecom)'] },
+  // correct this entry = the existing void + the existing create in one transaction: judged by the same closed-day rules
+  'POST /sales/:id/correct': { kind: 'financial', ops: ['sale (shop)', 'sale (telecom)'] },
+  'POST /sales/:id/correct-preview': { kind: 'preview' },
   'POST /sales/:id/returns': { kind: 'financial', ops: ['sale return (shop)', 'sale return damaged (shop)', 'sale return (telecom)'] },
   'POST /sales/:id/returns/:returnId/void': { kind: 'financial', ops: ['sale return (shop)', 'sale return damaged (telecom)'] },
   // --- telecom / printing / expenses
