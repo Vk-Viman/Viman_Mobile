@@ -81,9 +81,9 @@ export function getProduct(conn: DatabaseSync, id: number): ProductRow | undefin
   return r ? map(r) : undefined;
 }
 
-/** One product by name (NOCASE unique), or undefined - used for duplicate-name checks. */
-export function findProductByName(conn: DatabaseSync, name: string): ProductRow | undefined {
-  const r = conn.prepare(`${SELECT} WHERE p.name = ?`).get(name) as unknown as Raw | undefined;
+/** One product by name inside one category (NOCASE; names are unique per category), or undefined - used for duplicate-name checks. */
+export function findProductByName(conn: DatabaseSync, categoryId: number, name: string): ProductRow | undefined {
+  const r = conn.prepare(`${SELECT} WHERE p.category_id = ? AND p.name = ?`).get(categoryId, name) as unknown as Raw | undefined;
   return r ? map(r) : undefined;
 }
 
