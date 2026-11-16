@@ -29,6 +29,8 @@ import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { PAGE_SIZE } from '../../lib/constants';
 import type { PostedStatus } from '../../types/api';
 import type { PrintSale, PrintSaleQuery, PrintWarning } from '../../types/printing';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { PrintSaleCorrection } from '../corrections/ServiceCorrections';
 import { QuickEntry } from './QuickEntry';
 import { warningsText } from './shared';
 
@@ -51,6 +53,7 @@ export function PrintSalesTab() {
   const [status, setStatus] = useState<'' | PostedStatus>('');
   const [page, setPage] = useState(0);
   const [voiding, setVoiding] = useState<PrintSale | null>(null);
+  const [correcting, setCorrecting] = useState<PrintSale | null>(null);
   useEffect(() => { setPage(0); }, [from, to, typeId, status]);
 
   const query: PrintSaleQuery = {
@@ -63,6 +66,7 @@ export function PrintSalesTab() {
   };
   const list = usePrintSales(query);
   const filtered = Boolean(from || to || typeId || status);
+  const badgesFor = useCorrectionBadges('print_sales', (list.data?.items ?? []).map((s) => s.id));
   // Range shortcuts use the server's business date (not the PC clock).
   const monthStart = today ? `${today.slice(0, 8)}01` : '';
 
@@ -94,13 +98,19 @@ export function PrintSalesTab() {
         <span>
           <PostedStatusBadge status={s.status} />
           {s.status === 'void' && s.voidReason && <span className="mt-1 block text-xs text-slate-500">{s.voidReason}</span>}
+          {badgesFor(s.id)}
         </span>
       ),
     },
     {
       key: 'act',
       header: 'Actions',
-      render: (s) => (s.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(s)} aria-label={`Void print sale #${s.id}`}>Void</Button> : null),
+      render: (s) => (s.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="print sale" id={s.id} onClick={() => setCorrecting(s)} />
+          <Button variant="ghost" onClick={() => setVoiding(s)} aria-label={`Void print sale #${s.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -163,6 +173,7 @@ export function PrintSalesTab() {
         )}
       </Card>
 
+      {correcting && <PrintSaleCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {voiding && (
         <VoidRecordDialog
           title={`Void print sale #${voiding.id}`}

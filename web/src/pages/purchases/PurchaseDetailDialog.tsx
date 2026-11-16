@@ -16,6 +16,7 @@ import { Spinner } from '../../components/Spinner';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { usePurchase } from '../../api/purchases';
 import { formatDateTime } from '../../lib/format';
+import { PurchaseCorrection } from '../corrections/StockCorrections';
 import { ReturnDialog } from './ReturnDialog';
 import { VoidDialog } from './VoidDialog';
 
@@ -23,7 +24,7 @@ import { VoidDialog } from './VoidDialog';
 export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   const q = usePurchase(id);
   // Which action dialog is open on top of this one (null = none).
-  const [sub, setSub] = useState<'void' | 'return' | null>(null);
+  const [sub, setSub] = useState<'void' | 'return' | 'correct' | null>(null);
   const p = q.data?.item;
 
   const hasReturns = (p?.returns.length ?? 0) > 0;
@@ -116,8 +117,10 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
             {/* Actions: disabled according to the purchase state (void/return rules above) */}
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
               {hasReturns && p.status === 'posted' && (
-                <span className="mr-auto text-xs text-slate-500">A purchase with returns cannot be voided.</span>
+                <span className="mr-auto text-xs text-slate-500">A purchase with returns cannot be voided or corrected.</span>
               )}
+              <Button variant="secondary" disabled={p.status === 'void' || hasReturns} onClick={() => setSub('correct')}
+                title={hasReturns ? 'This purchase has returns, so it cannot be corrected.' : undefined}>Correct this entry</Button>
               <Button variant="danger" disabled={p.status === 'void' || hasReturns} onClick={() => setSub('void')}>Void purchase</Button>
               <Button disabled={p.status === 'void' || fullyReturned} onClick={() => setSub('return')}>Return items</Button>
               <Button variant="secondary" onClick={onClose}>Close</Button>
@@ -125,6 +128,7 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
           </div>
         )}
       </Modal>
+      {p && sub === 'correct' && <PurchaseCorrection original={p} onClose={() => setSub(null)} />}
       {p && sub === 'void' && <VoidDialog purchase={p} onClose={() => setSub(null)} />}
       {p && sub === 'return' && <ReturnDialog purchase={p} onClose={() => setSub(null)} />}
     </>
