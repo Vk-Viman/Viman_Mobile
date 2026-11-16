@@ -158,7 +158,7 @@ export function CorrectionDialog<R>({
   };
 
   const checkFailed = check.isError;
-  const refused = check.isSuccess && !check.data.eligible ? check.data : null;
+  const refused = !done && check.isSuccess && !check.data.eligible ? check.data : null; // after saving the original is void: never show that stale refusal
   const banner = errorBanner(err);
 
   return (
