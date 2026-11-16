@@ -218,7 +218,9 @@ export interface ReloadSaleCreate {
  *
  * @throws AppError 400 VALIDATION_ERROR / FUTURE_DATE_NOT_ALLOWED, 409 PROVIDER_INACTIVE.
  */
-export function createReloadSale(ctx: AppContext, body: ReloadSaleCreate): { item: ReloadSale; created: boolean } {
+export function createReloadSale(
+  ctx: AppContext, body: ReloadSaleCreate, opts?: { commissionBp?: number },
+): { item: ReloadSale; created: boolean } {
   const fields: Fields = {};
   const notes = trimmed(fields, 'notes', 'Notes', body.notes, 0, NOTE_MAX_LENGTH);
   const extraCents = body.extraCents ?? 0;
@@ -241,7 +243,8 @@ export function createReloadSale(ctx: AppContext, body: ReloadSaleCreate): { ite
     }
 
     // Rate snapshot: the provider's own rate, else the shop default (section 5; C11 range is checked at save time).
-    const commissionBp = provider.ownCommissionBp ?? defaults.reloadCommissionBp;
+    // `opts.commissionBp` is internal (a correction keeping the original rate); the HTTP create never passes it.
+    const commissionBp = opts?.commissionBp ?? provider.ownCommissionBp ?? defaults.reloadCommissionBp;
     const commissionCents = reloadCommission(body.salesCents, commissionBp, extraCents);
     const id = insertReloadSale(conn, {
       businessDate: body.businessDate, providerId: provider.id, salesCents: body.salesCents, commissionBp, extraCents,
@@ -317,13 +320,15 @@ export interface EzCashSaleCreate { businessDate: string; billTotalCents: number
  *
  * @throws AppError 400 VALIDATION_ERROR / FUTURE_DATE_NOT_ALLOWED.
  */
-export function createEzCashSale(ctx: AppContext, body: EzCashSaleCreate): { item: EzCashSale; created: boolean } {
+export function createEzCashSale(
+  ctx: AppContext, body: EzCashSaleCreate, opts?: { commissionBp?: number },
+): { item: EzCashSale; created: boolean } {
   const fields: Fields = {};
   const notes = trimmed(fields, 'notes', 'Notes', body.notes, 0, NOTE_MAX_LENGTH);
   checkAmount(fields, 'billTotalCents', 'Bill total', body.billTotalCents, 1);
   assertNoFieldErrors(fields);
   checkBusinessDate(body.businessDate);
-  const commissionBp = defaultRates(ctx).ezcashCommissionBp;
+  const commissionBp = opts?.commissionBp ?? defaultRates(ctx).ezcashCommissionBp; // opts: internal, see createReloadSale
 
   return runWrite(ctx, (conn) => {
     const existing = getEzCashSaleByClientRef(conn, body.clientRef);
