@@ -37,6 +37,7 @@ import { bookFundLabel, CashBookBadge, CashBookFilterSelect } from './BookFundFi
 import { CashDrawingDialog } from './CashDrawingDialog';
 import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
 import { DrawingCorrection } from '../corrections/CashCorrections';
+import { GoodsDrawingCorrection } from '../corrections/StockCorrections';
 
 /** The drawings tab: filter bar, one list of both kinds with totals, pager, and the record / void dialogs. */
 export function DrawingsTab() {
@@ -61,7 +62,7 @@ export function DrawingsTab() {
   };
   const list = useOwnerDrawings(query);
   const filtered = Boolean(from || to || book || kind || status);
-  const badgesFor = useCorrectionBadges('owner_drawings', (list.data?.items ?? []).filter((d) => d.kind === 'cash').map((d) => d.id));
+  const badgesFor = useCorrectionBadges('owner_drawings', (list.data?.items ?? []).map((d) => d.id));
 
   const columns: Column<OwnerDrawing>[] = [
     { key: 'date', header: 'Date', render: (d) => <span className="inline-flex flex-wrap items-center gap-2">{d.businessDate}{d.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
@@ -76,12 +77,19 @@ export function DrawingsTab() {
     { key: 'amount', header: 'Amount (Rs.)', align: 'right', render: (d) => <Money cents={d.amountCents} /> },
     {
       key: 'status', header: 'Status',
-      render: (d) => (<span><PostedStatusBadge status={d.status} />{d.status === 'void' && d.voidReason && <span className="mt-1 block text-xs text-slate-500">{d.voidReason}</span>}{d.kind === 'cash' && badgesFor(d.id)}</span>),
+      render: (d) => (<span><PostedStatusBadge status={d.status} />{d.status === 'void' && d.voidReason && <span className="mt-1 block text-xs text-slate-500">{d.voidReason}</span>}{badgesFor(d.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
       render: (d) => {
-        if (d.kind === 'goods') return <Link to="/stock/personal-use" className="text-sm text-brand-700 hover:underline">Manage in Stock</Link>;
+        if (d.kind === 'goods') {
+          return (
+            <span className="inline-flex flex-wrap items-center">
+              {d.status === 'posted' && <CorrectButton noun="goods drawing" id={d.id} onClick={() => setCorrecting(d)} />}
+              <Link to="/stock/personal-use" className="px-2 text-sm text-brand-700 hover:underline">Manage in Stock</Link>
+            </span>
+          );
+        }
         return d.status === 'posted' ? (
           <span className="inline-flex">
             <CorrectButton noun="cash drawing" id={d.id} onClick={() => setCorrecting(d)} />
@@ -136,7 +144,9 @@ export function DrawingsTab() {
           </>
         )}
       </Card>
-      {correcting && <DrawingCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
+      {correcting && (correcting.kind === 'goods'
+        ? <GoodsDrawingCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />
+        : <DrawingCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />)}
       {creating && <CashDrawingDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

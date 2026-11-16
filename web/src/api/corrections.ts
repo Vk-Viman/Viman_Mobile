@@ -18,7 +18,9 @@ import { apiGet, apiPost } from './client';
 /** Table names the server uses to identify the record type (the `entity` of a link). */
 export type CorrectionEntity =
   | 'sales' | 'expenses' | 'cash_transfers' | 'capital_entries' | 'owner_drawings' | 'telecom_topups' | 'printing_supplies'
-  | 'icecream_payments' | 'icecream_fund_moves' | 'stock_losses';
+  | 'icecream_payments' | 'icecream_fund_moves' | 'stock_losses'
+  // Phase 2
+  | 'purchases' | 'print_sales' | 'reload_sales' | 'ezcash_sales';
 
 /** Route prefix (relative to /api/v1) of each supported type; the three correction endpoints hang under it. */
 export const CORRECTION_RESOURCE: Record<CorrectionEntity, string> = {
@@ -32,6 +34,10 @@ export const CORRECTION_RESOURCE: Record<CorrectionEntity, string> = {
   icecream_payments: '/icecream/payments',
   icecream_fund_moves: '/icecream/fund-moves',
   stock_losses: '/stock-losses',
+  purchases: '/purchases',
+  print_sales: '/print-sales',
+  reload_sales: '/reload-sales',
+  ezcash_sales: '/ezcash-sales',
 };
 
 /** GET correct-check: either "yes" or the existing void's own plain-language refusal (or CORRECTION_NOT_SUPPORTED). */
@@ -66,11 +72,47 @@ export interface SaleComparison {
   lines: Array<{ productId: number; originalUnitCostCents: number; replacementUnitCostCents: number }>;
 }
 
-/** Body of correct-preview and correct. `replacement` is the type's normal create body (+ clientRef). */
-export interface CorrectionBody { reason: string; replacement: Record<string, unknown> }
+/** Purchases (Phase 2): original against replacement totals and per-line quantities. */
+export interface PurchaseComparison {
+  originalTotalCents: number;
+  replacementTotalCents: number;
+  differenceTotalCents: number;
+  lines: Array<{ productId: number; originalQty: number; replacementQty: number; originalLineTotalCents: number; replacementLineTotalCents: number }>;
+}
+
+/** Goods personal use (Phase 2): the stock cost taken, original against replacement (weighted-average cost at the time of the correction). */
+export interface GoodsComparison { originalCostCents: number; replacementCostCents: number; differenceCents: number }
+
+/**
+ * Print / service sales (Phase 2). The contract says "revenue and cost if the sale stores them": every figure is optional here
+ * and the table only draws the rows the server actually returned.
+ */
+export interface PrintComparison {
+  originalRevenueCents?: number; replacementRevenueCents?: number; revenueDifferenceCents?: number;
+  originalCostCents?: number; replacementCostCents?: number; costDifferenceCents?: number;
+  originalCogsCents?: number; replacementCogsCents?: number; cogsDifferenceCents?: number;
+}
+
+/** Reloads and EZCash (Phase 2): the commission rate (basis points) and the commission, original against replacement. */
+export interface CommissionComparison {
+  originalCommissionBp: number;
+  replacementCommissionBp: number;
+  originalCommissionCents: number;
+  replacementCommissionCents: number;
+  rateRecalculated: boolean;
+}
+
+/** Any `comparison` a correction can return; CorrectionComparison.tsx tells them apart by their fields. */
+export type AnyComparison = SaleComparison | PurchaseComparison | GoodsComparison | PrintComparison | CommissionComparison;
+
+/**
+ * Body of correct-preview and correct. `replacement` is the type's normal create body (+ clientRef).
+ * `recalculateCommission` (reloads and EZCash only, default false): replace the original's commission rate by today's rate.
+ */
+export interface CorrectionBody { reason: string; replacement: Record<string, unknown>; recalculateCommission?: boolean }
 
 /** Answer of correct-preview. `R` is the record type of the screen (Expense, Sale, ...). */
-export interface CorrectionPreview<R> { original: R; replacement: R; warnings: CorrectionWarning[]; comparison?: SaleComparison }
+export interface CorrectionPreview<R> { original: R; replacement: R; warnings: CorrectionWarning[]; comparison?: AnyComparison }
 /** Answer of correct. */
 export interface CorrectionApplied<R> extends CorrectionPreview<R> { correction: CorrectionLink }
 

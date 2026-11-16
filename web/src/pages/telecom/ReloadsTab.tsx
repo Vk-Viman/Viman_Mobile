@@ -27,6 +27,8 @@ import { formatLKR } from '../../lib/format';
 import type { PostedStatus } from '../../types/api';
 import type { ReloadSale, ReloadSaleQuery } from '../../types/telecom';
 import { ProviderRatesCard } from './ProviderRatesCard';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { ReloadCorrection } from '../corrections/TelecomCorrections';
 import { ReloadDialog } from './ReloadDialog';
 import { DateCell, StatusCell, rateLabel } from './shared';
 import { TelecomSummaryCard } from './TelecomSummaryCard';
@@ -43,6 +45,7 @@ export function ReloadsTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<ReloadSale | null>(null);
+  const [correcting, setCorrecting] = useState<ReloadSale | null>(null);
 
   // Back to the first page whenever a filter changes.
   useEffect(() => { setPage(0); }, [from, to, providerId, status]);
@@ -53,6 +56,7 @@ export function ReloadsTab() {
   };
   const list = useReloadSales(query);
   const filtered = Boolean(from || to || providerId || status);
+  const badgesFor = useCorrectionBadges('reload_sales', (list.data?.items ?? []).map((r) => r.id));
 
   const columns: Column<ReloadSale>[] = [
     { key: 'date', header: 'Date', render: (r) => <DateCell date={r.businessDate} backdated={r.backdated} /> },
@@ -69,10 +73,15 @@ export function ReloadsTab() {
       ),
     },
     { key: 'note', header: 'Notes', render: (r) => r.notes || '—' },
-    { key: 'status', header: 'Status', render: (r) => <StatusCell status={r.status} reason={r.voidReason} /> },
+    { key: 'status', header: 'Status', render: (r) => <span><StatusCell status={r.status} reason={r.voidReason} />{badgesFor(r.id)}</span> },
     {
       key: 'act', header: 'Actions',
-      render: (r) => (r.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(r)} aria-label={`Void reload entry #${r.id}`}>Void</Button> : null),
+      render: (r) => (r.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="reload entry" id={r.id} onClick={() => setCorrecting(r)} />
+          <Button variant="ghost" onClick={() => setVoiding(r)} aria-label={`Void reload entry #${r.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -115,6 +124,7 @@ export function ReloadsTab() {
         )}
       </Card>
       {creating && <ReloadDialog onClose={() => setCreating(false)} />}
+      {correcting && <ReloadCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {voiding && (
         <VoidRecordDialog
           title={`Void reload entry #${voiding.id}`}

@@ -21,6 +21,7 @@ import { SearchField } from '../../components/SearchField';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
+import { useCorrectionBadges } from '../../components/CorrectionBadges';
 import { useSuppliers } from '../../api/catalog';
 import { usePurchases } from '../../api/purchases';
 import { useDebounced } from '../../hooks/useDebounced';
@@ -64,6 +65,8 @@ export function PurchasesPage() {
   // True when any filter is set; decides between "no purchases yet" and "no purchases match".
   const filtered = Boolean(from || to || book || status || supplierId || q);
 
+  const badgesFor = useCorrectionBadges('purchases', (list.data?.items ?? []).map((p) => p.id));
+
   const columns: Column<Purchase>[] = [
     {
       key: 'date',
@@ -83,7 +86,7 @@ export function PurchasesPage() {
     { key: 'book', header: 'Book', render: (p) => <BookBadge book={p.book} /> },
     { key: 'items', header: 'Items', align: 'right', render: (p) => p.items.length },
     { key: 'total', header: 'Total (Rs.)', align: 'right', render: (p) => <Money cents={p.totalCents} /> },
-    { key: 'status', header: 'Status', render: (p) => <PostedStatusBadge status={p.status} /> },
+    { key: 'status', header: 'Status', render: (p) => <span><PostedStatusBadge status={p.status} />{p.status === 'void' && p.voidReason && <span className="mt-1 block text-xs text-slate-500">{p.voidReason}</span>}{badgesFor(p.id)}</span> },
   ];
 
   return (

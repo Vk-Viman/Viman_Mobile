@@ -26,6 +26,8 @@ import { PAGE_SIZE } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
 import type { PostedStatus } from '../../types/api';
 import type { EzCashSale, EzCashSaleQuery } from '../../types/telecom';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { EzCashCorrection } from '../corrections/TelecomCorrections';
 import { EzCashDialog } from './EzCashDialog';
 import { DateCell, StatusCell, rateLabel } from './shared';
 import { TelecomSummaryCard } from './TelecomSummaryCard';
@@ -41,12 +43,14 @@ export function EzCashTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<EzCashSale | null>(null);
+  const [correcting, setCorrecting] = useState<EzCashSale | null>(null);
 
   useEffect(() => { setPage(0); }, [from, to, status]);
 
   const query: EzCashSaleQuery = { from: from || undefined, to: to || undefined, status: status || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
   const list = useEzCashSales(query);
   const filtered = Boolean(from || to || status);
+  const badgesFor = useCorrectionBadges('ezcash_sales', (list.data?.items ?? []).map((r) => r.id));
 
   const columns: Column<EzCashSale>[] = [
     { key: 'date', header: 'Date', render: (r) => <DateCell date={r.businessDate} backdated={r.backdated} /> },
@@ -54,10 +58,15 @@ export function EzCashTab() {
     { key: 'rate', header: 'Rate', align: 'right', render: (r) => rateLabel(r.commissionBp) },
     { key: 'comm', header: 'Commission (Rs.)', align: 'right', render: (r) => <Money cents={r.commissionCents} className="font-semibold" /> },
     { key: 'note', header: 'Notes', render: (r) => r.notes || '—' },
-    { key: 'status', header: 'Status', render: (r) => <StatusCell status={r.status} reason={r.voidReason} /> },
+    { key: 'status', header: 'Status', render: (r) => <span><StatusCell status={r.status} reason={r.voidReason} />{badgesFor(r.id)}</span> },
     {
       key: 'act', header: 'Actions',
-      render: (r) => (r.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(r)} aria-label={`Void EZCash entry #${r.id}`}>Void</Button> : null),
+      render: (r) => (r.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="EZCash entry" id={r.id} onClick={() => setCorrecting(r)} />
+          <Button variant="ghost" onClick={() => setVoiding(r)} aria-label={`Void EZCash entry #${r.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -94,6 +103,7 @@ export function EzCashTab() {
         )}
       </Card>
       {creating && <EzCashDialog onClose={() => setCreating(false)} />}
+      {correcting && <EzCashCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {voiding && (
         <VoidRecordDialog
           title={`Void EZCash entry #${voiding.id}`}

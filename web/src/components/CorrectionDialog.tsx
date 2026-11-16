@@ -18,7 +18,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import { Button } from './Button';
-import { SaleComparisonTable } from './SaleComparisonTable';
+import { CorrectionComparison } from './CorrectionComparison';
 import { Spinner } from './Spinner';
 import { TextField } from './TextField';
 import { useToast } from './Toast';
@@ -56,6 +56,10 @@ interface Props<R> {
   build: (ctx: { businessDate: string; clientRef: string }) => Record<string, unknown> | null;
   /** Lets the adapter take over a special refusal of the preview (Ice Cream split confirmation). Return true when handled. */
   onPreviewError?: (e: unknown) => boolean;
+  /** Extra top-level request fields (reloads and EZCash: `recalculateCommission`); read again at every Preview. */
+  bodyExtras?: Pick<CorrectionBody, 'recalculateCommission'>;
+  /** Product names of a record, so a comparison that only carries product ids (purchases) can name its lines. */
+  productNames?: (record: R) => Record<number, string>;
   /** Show the amber "backdated" notice next to the date (inventory transactions). */
   inventory?: boolean;
   widthClass?: string;
@@ -98,7 +102,7 @@ type Stage = 'edit' | 'preview' | 'done';
 
 /** The dialog. `R` is the record type of the screen (Expense, Sale, ...). */
 export function CorrectionDialog<R>({
-  entity, noun, original, originalId, originalDate, describe, children, build, onPreviewError, inventory, widthClass = 'max-w-2xl', onClose,
+  entity, noun, original, originalId, originalDate, describe, children, build, onPreviewError, bodyExtras, productNames, inventory, widthClass = 'max-w-2xl', onClose,
 }: Props<R>) {
   const toast = useToast();
   const resource = CORRECTION_RESOURCE[entity];
@@ -135,7 +139,7 @@ export function CorrectionDialog<R>({
     setErr(null);
     const replacement = build({ businessDate: date, clientRef });
     if (!replacement) { setErr(new Error('Please complete the fields marked in red before the preview.')); return; }
-    const body: CorrectionBody = { reason: r, replacement };
+    const body: CorrectionBody = { reason: r, replacement, ...bodyExtras };
     previewMut.mutate(body, {
       onSuccess: (p) => { setSaved({ body, preview: p }); setStage('preview'); },
       onError: (e2) => { if (!onPreviewError?.(e2)) setErr(e2); },
@@ -160,6 +164,7 @@ export function CorrectionDialog<R>({
   const checkFailed = check.isError;
   const refused = !done && check.isSuccess && !check.data.eligible ? check.data : null; // after saving the original is void: never show that stale refusal
   const banner = errorBanner(err);
+  const namesOf = (a: R, b: R): Record<number, string> => (productNames ? { ...productNames(a), ...productNames(b) } : {});
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
@@ -230,7 +235,7 @@ export function CorrectionDialog<R>({
                 The corrected entry is dated <strong>{date}</strong>, not {originalDate}. It will count in the period of {date}.
               </p>
             )}
-            {saved.preview.comparison && <SaleComparisonTable c={saved.preview.comparison} />}
+            {saved.preview.comparison && <CorrectionComparison c={saved.preview.comparison} names={namesOf(saved.preview.original, saved.preview.replacement)} />}
             <Warnings list={saved.preview.warnings ?? []} />
             <p className="text-sm text-slate-600">Correction reason: <span className="font-medium text-slate-900">{saved.body.reason}</span></p>
             {banner && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{banner}</p>}
@@ -252,7 +257,7 @@ export function CorrectionDialog<R>({
               <RecordCard title={`Original #${originalId}: now void`} tone="red" lines={describe(done.original)} />
               <RecordCard title={`Corrected entry #${idOf(done.replacement)}`} tone="green" lines={describe(done.replacement)} />
             </div>
-            {done.comparison && <SaleComparisonTable c={done.comparison} />}
+            {done.comparison && <CorrectionComparison c={done.comparison} names={namesOf(done.original, done.replacement)} />}
             <Warnings list={done.warnings ?? []} />
             <div className="flex justify-end"><Button onClick={onClose}>Close</Button></div>
           </div>
