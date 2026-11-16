@@ -18,6 +18,9 @@ import {
   checkQueryDates, clientRef, dateField, dateQuery, bookQuery, idParamsSchema, intQuery, parseId, parsePaging,
   voidBody,
 } from './catalog-query.ts';
+import { registerCorrectionEndpoints } from '../services/correction-cash.ts';
+import { purchaseCorrection } from '../services/correction-stock.ts';
+import { correctionBodySchema } from './corrections.ts';
 
 // Re-exported: other route files historically import these two from here.
 export { checkQueryDates, dateQuery };
@@ -134,4 +137,9 @@ export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): v
     );
     return reply.code(created ? 201 : 200).send({ item, purchase, warnings });
   });
+
+  // ---------- correct this entry (Correction contract, Phase 2): existing void + existing create in ONE transaction ----------
+  registerCorrectionEndpoints(app, ctx, 'purchases', purchaseCorrection, correctionBodySchema({
+    ...createBody, required: createBody.required.filter((k) => k !== 'businessDate'),
+  }), idParamsSchema);
 }

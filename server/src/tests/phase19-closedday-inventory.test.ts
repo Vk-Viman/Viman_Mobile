@@ -45,6 +45,12 @@ const TABLE: Record<string, { kind: Kind; ops?: string[]; note?: string }> = {
   // correct this entry = the existing void + the existing create in one transaction: judged by the same closed-day rules
   'POST /sales/:id/correct': { kind: 'financial', ops: ['sale (shop)', 'sale (telecom)'] },
   'POST /sales/:id/correct-preview': { kind: 'preview' },
+  'POST /print-sales/:id/correct': { kind: 'financial', ops: ['print sale'] },
+  'POST /print-sales/:id/correct-preview': { kind: 'preview' },
+  'POST /reload-sales/:id/correct': { kind: 'financial', ops: ['reload sale'] },
+  'POST /reload-sales/:id/correct-preview': { kind: 'preview' },
+  'POST /ezcash-sales/:id/correct': { kind: 'financial', ops: ['EZCash bill'] },
+  'POST /ezcash-sales/:id/correct-preview': { kind: 'preview' },
   'POST /telecom/topups/:id/correct': { kind: 'financial', ops: ['provider top-up', 'wallet top-up'] },
   'POST /telecom/topups/:id/correct-preview': { kind: 'preview' },
   'POST /printing-supplies/:id/correct': { kind: 'financial', ops: ['printing supplies'] },
@@ -126,10 +132,10 @@ describe('inventory of writes (every registered POST/PUT is classified)', () => 
     }
   });
 
-  it('counts: 74 write routes, of which the financial ones are covered by the matrix', () => {
+  it('counts: 80 write routes, of which the financial ones are covered by the matrix', () => {
     const kinds = Object.values(TABLE).reduce<Record<string, number>>((a, v) => ({ ...a, [v.kind]: (a[v.kind] ?? 0) + 1 }), {});
-    expect(Object.keys(TABLE).length).toBe(74);
-    expect(kinds.financial).toBe(48);
+    expect(Object.keys(TABLE).length).toBe(80);
+    expect(kinds.financial).toBe(51);
   });
 });
 

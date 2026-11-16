@@ -376,18 +376,18 @@ describe('10. capital entries: only kind capital is correctable', () => {
   });
 });
 
-describe('10. cash drawings: only kind cash is correctable', () => {
+describe('10. cash drawings: the replacement keeps the original kind (goods drawings are Phase 2)', () => {
   const k = KINDS[3]!;
-  it('a goods drawing is refused 409 CORRECTION_NOT_SUPPORTED in check, preview and correct (Phase 2), nothing changes', async () => {
+  it('a goods drawing (correctable since Phase 2) cannot be turned into a cash drawing: the replacement kind must equal the original kind, nothing changes', async () => {
     const s = await world();
     const p = await mkProduct(s);
     await buy(s, [{ productId: p.id, packs: 1, packSize: 10, lineTotalCents: 10000 }], { businessDate: D(3) });
     const g = await post(s.app, '/drawings', { kind: 'goods', businessDate: D(2), productId: p.id, qty: 2, clientRef: ref() });
     expect(g.status).toBe(201);
     const fp = fingerprint(s.ctx);
-    expect((await check(s, k, g.body.item.id)).body).toMatchObject({ eligible: false, code: 'CORRECTION_NOT_SUPPORTED' });
+    expect((await check(s, k, g.body.item.id)).body).toEqual({ eligible: true });
     for (const r of [await preview(s, k, g.body.item.id, k.replacement()), await correct(s, k, g.body.item.id, k.replacement())]) {
-      expect([r.status, r.body.error.code]).toEqual([409, 'CORRECTION_NOT_SUPPORTED']);
+      expect([r.status, r.body.error.code]).toEqual([400, 'VALIDATION_ERROR']);
     }
     expect(fingerprint(s.ctx)).toBe(fp);
     expect(row(s, k, g.body.item.id).status).toBe('posted');

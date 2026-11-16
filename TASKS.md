@@ -62,7 +62,7 @@ Each item below was checked in the code.
 ### Awaiting owner approval (designs only, nothing built)
 - Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated cash books: `PROPOSAL_TELECOM_SEGMENTS.md` APPROVED 2026-11-15 (BUSINESS_RULES 13D), to be built after correction Phase 1/2 and the product-name change, before discounts.
 - Product names unique per category instead of shop-wide (small catalog change, requested 2026-11-15; not yet built).
-- Correct-this-entry (void + replacement in one action): `PROPOSAL_TRANSACTION_CORRECTION.md`.
+- (done) Correct-this-entry Phase 1 and Phase 2 (`PROPOSAL_TRANSACTION_CORRECTION.md`, BUSINESS_RULES 13E).
 - Sales discounts (per-item, whole-bill, fixed, percentage, limits): `PROPOSAL_SALES_DISCOUNTS.md`.
 - Real USB drive verification: `USB_VERIFICATION_CHECKLIST.md` (not yet performed).
 

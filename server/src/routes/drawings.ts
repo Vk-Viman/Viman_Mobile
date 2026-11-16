@@ -99,6 +99,6 @@ export function registerDrawingRoutes(app: FastifyInstance, ctx: AppContext): vo
   // ---------- correct this entry (Correction contract, Phase 1): existing void + existing create in ONE transaction ----------
   registerCorrectionEndpoints(app, ctx, 'drawings', drawingCorrection, correctionBodySchema({
     ...createBody, required: createBody.required.filter((k) => k !== 'businessDate'),
-    properties: { ...createBody.properties, kind: { type: 'string', enum: ['cash'] } },
+    properties: createBody.properties, // Phase 2: goods drawings are correctable too; the kind must equal the original's (service)
   }), idParamsSchema);
 }
