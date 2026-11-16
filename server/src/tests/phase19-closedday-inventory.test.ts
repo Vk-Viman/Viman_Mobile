@@ -45,6 +45,16 @@ const TABLE: Record<string, { kind: Kind; ops?: string[]; note?: string }> = {
   // correct this entry = the existing void + the existing create in one transaction: judged by the same closed-day rules
   'POST /sales/:id/correct': { kind: 'financial', ops: ['sale (shop)', 'sale (telecom)'] },
   'POST /sales/:id/correct-preview': { kind: 'preview' },
+  'POST /telecom/topups/:id/correct': { kind: 'financial', ops: ['provider top-up', 'wallet top-up'] },
+  'POST /telecom/topups/:id/correct-preview': { kind: 'preview' },
+  'POST /printing-supplies/:id/correct': { kind: 'financial', ops: ['printing supplies'] },
+  'POST /printing-supplies/:id/correct-preview': { kind: 'preview' },
+  'POST /icecream/payments/:id/correct': { kind: 'financial', ops: ['ice cream payment (materials)'] },
+  'POST /icecream/payments/:id/correct-preview': { kind: 'preview' },
+  'POST /icecream/fund-moves/:id/correct': { kind: 'financial', ops: ['ice cream fund move'] },
+  'POST /icecream/fund-moves/:id/correct-preview': { kind: 'preview' },
+  'POST /stock-losses/:id/correct': { kind: 'financial', ops: ['stock loss (shop)'] },
+  'POST /stock-losses/:id/correct-preview': { kind: 'preview' },
   'POST /sales/:id/returns': { kind: 'financial', ops: ['sale return (shop)', 'sale return damaged (shop)', 'sale return (telecom)'] },
   'POST /sales/:id/returns/:returnId/void': { kind: 'financial', ops: ['sale return (shop)', 'sale return damaged (telecom)'] },
   // --- telecom / printing / expenses
@@ -116,10 +126,10 @@ describe('inventory of writes (every registered POST/PUT is classified)', () => 
     }
   });
 
-  it('counts: 62 write routes, of which the financial ones are covered by the matrix', () => {
+  it('counts: 74 write routes, of which the financial ones are covered by the matrix', () => {
     const kinds = Object.values(TABLE).reduce<Record<string, number>>((a, v) => ({ ...a, [v.kind]: (a[v.kind] ?? 0) + 1 }), {});
-    expect(Object.keys(TABLE).length).toBe(62);
-    expect(kinds.financial).toBe(42);
+    expect(Object.keys(TABLE).length).toBe(74);
+    expect(kinds.financial).toBe(48);
   });
 });
 
