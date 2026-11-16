@@ -20,6 +20,10 @@ import {
 import type { EzCashSaleCreate, ReloadSaleCreate, TopupCreate } from '../services/telecom.service.ts';
 import { checkTopupCorrection, correctTopup, optionalDate, previewTopupCorrection } from '../services/correction-other.ts';
 import type { CorrectionRequest } from '../services/correction-other.ts';
+import {
+  checkEzCashCorrection, checkReloadCorrection, correctEzCash, correctReload, previewEzCashCorrection, previewReloadCorrection,
+} from '../services/correction-telecom.ts';
+import type { TelecomCorrectionRequest } from '../services/correction-telecom.ts';
 import { correctionBodySchema } from './corrections.ts';
 import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
@@ -85,6 +89,14 @@ const topupBody = {
 
 const topupCorrectionBody = correctionBodySchema(optionalDate(topupBody));
 
+/** Reload / EZCash correction body: the shared shape plus `recalculateCommission` (default false = keep the original rate). */
+function telecomCorrectionBody(createBody: { required: readonly string[]; [k: string]: unknown }): object {
+  const base = correctionBodySchema(optionalDate(createBody)) as { properties: Record<string, unknown> };
+  return { ...base, properties: { ...base.properties, recalculateCommission: { type: 'boolean' } } };
+}
+const reloadCorrectionBody = telecomCorrectionBody(reloadBody);
+const ezcashCorrectionBody = telecomCorrectionBody(ezcashBody);
+
 const reloadListQuery = {
   type: 'object',
   additionalProperties: false,
@@ -148,6 +160,18 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
     return { item, warnings };
   });
 
+  // ---------- reload corrections (void the original + enter the replacement, one transaction; original rate kept) ----------
+  app.get('/reload-sales/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkReloadCorrection(ctx, parseId(request.params)));
+
+  app.post('/reload-sales/:id/correct-preview', { schema: { params: idParamsSchema, body: reloadCorrectionBody } }, async (request) =>
+    previewReloadCorrection(ctx, parseId(request.params), request.body as TelecomCorrectionRequest<ReloadSaleCreate>));
+
+  app.post('/reload-sales/:id/correct', { schema: { params: idParamsSchema, body: reloadCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctReload(ctx, parseId(request.params), request.body as TelecomCorrectionRequest<ReloadSaleCreate>);
+    return reply.code(status).send(body);
+  });
+
   // ---------- EZCash ----------
   app.post('/ezcash-sales', { schema: { body: ezcashBody } }, async (request, reply) => {
     const { item, created } = createEzCashSale(ctx, request.body as EzCashSaleCreate);
@@ -172,6 +196,18 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.post('/ezcash-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => {
     const { item, warnings } = voidEzCashSale(ctx, parseId(request.params), request.body as { reason: string });
     return { item, warnings };
+  });
+
+  // ---------- EZCash corrections ----------
+  app.get('/ezcash-sales/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkEzCashCorrection(ctx, parseId(request.params)));
+
+  app.post('/ezcash-sales/:id/correct-preview', { schema: { params: idParamsSchema, body: ezcashCorrectionBody } }, async (request) =>
+    previewEzCashCorrection(ctx, parseId(request.params), request.body as TelecomCorrectionRequest<EzCashSaleCreate>));
+
+  app.post('/ezcash-sales/:id/correct', { schema: { params: idParamsSchema, body: ezcashCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctEzCash(ctx, parseId(request.params), request.body as TelecomCorrectionRequest<EzCashSaleCreate>);
+    return reply.code(status).send(body);
   });
 
   // ---------- top-ups ----------
