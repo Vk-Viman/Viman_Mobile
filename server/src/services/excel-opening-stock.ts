@@ -326,9 +326,12 @@ export async function parseOpeningWorkbook(buffer: Buffer): Promise<ParsedRow[]>
  *
  * @param lookup Finds a product by SKU (case-insensitive) or returns undefined.
  * @param futureDate True when the chosen business date is later than today in Colombo.
+ * @param nameLookup Finds every product with a name (case-insensitive). A product is NEVER matched by name (names are
+ *   only unique per category); it is used just to tell the owner, on a row without a SKU, that the name is ambiguous.
  */
 export function validateRows(
   rows: ParsedRow[], lookup: (sku: string) => ProductRef | undefined, futureDate: boolean,
+  nameLookup?: (name: string) => ProductRef[],
 ): PreviewRow[] {
   // Rows per SKU (case-insensitive) to find duplicates; every occurrence is flagged so the owner sees all of them.
   const bySku = new Map<string, number[]>();
@@ -340,6 +343,14 @@ export function validateRows(
   return rows.map((r): PreviewRow => {
     const issues = [...r.issues];
     let product: ProductRef | undefined;
+    if (r.sku === '' && r.productNameInFile !== '' && nameLookup) {
+      const same = nameLookup(r.productNameInFile);
+      const missing = issues.find((i) => i.code === 'MISSING_SKU');
+      if (missing && same.length > 1) {
+        const cats = same.map((p) => p.categoryName ?? '?').join(', ');
+        missing.message = `Several products are named "${r.productNameInFile}" (categories: ${cats}). Enter the SKU of the one you mean; a name alone is not used.`;
+      }
+    }
     if (r.sku !== '') {
       product = lookup(r.sku);
       if (!product || product.kind !== 'stock') {
