@@ -111,7 +111,8 @@ function mapUniqueAbort(err: unknown): never {
     const message = 'A category with this name already exists in that book.';
     throw new AppError(409, 'DUPLICATE_NAME', message, { name: message });
   }
-  const m = /UNIQUE constraint failed: (categories|products|suppliers)\.(name|code)/.exec(msg);
+  // A product name is unique per category (migration 023), so SQLite names both columns: "products.category_id, products.name".
+  const m = /UNIQUE constraint failed: (?:products\.category_id, )?(categories|products|suppliers)\.(name|code)/.exec(msg);
   if (m) {
     const noun = m[1] === 'categories' ? 'category' : m[1] === 'products' ? 'product' : 'supplier';
     throw m[2] === 'name' ? dupName(noun) : dupCode(noun);
@@ -323,7 +324,7 @@ export function createProduct(ctx: AppContext, body: ProductCreate): Product {
       cat = chooseCategory(conn, body.categoryId!);
       if (!cat.active) throw inactiveCategory();
     }
-    if (findProductByName(conn, name)) throw dupName('product');
+    if (findProductByName(conn, cat.id, name)) throw dupName('product');
     if (code !== null && findProductByCode(conn, code)) throw dupCode('product');
     if (createdCategory) logAudit(conn, 'category', String(cat.id), 'create', null, cat);
     const id = insertProduct(conn, {
@@ -387,8 +388,9 @@ export function updateProductItem(ctx: AppContext, id: number, body: ProductUpda
     }
     if (Object.keys(patch).length === 0) return before;
 
-    if (patch.name !== undefined) {
-      const other = findProductByName(conn, patch.name);
+    if (patch.name !== undefined || patch.categoryId !== undefined) {
+      // Names are unique per category: check the name in the category the product will end up in (a rename, a move, or both).
+      const other = findProductByName(conn, patch.categoryId ?? before.categoryId, patch.name ?? before.name);
       if (other && other.id !== id) throw dupName('product');
     }
     if (patch.code !== undefined && patch.code !== null) {

@@ -124,12 +124,14 @@ export const useProductsByCategory = ({ book, categoryId, q, stockOnly = true, l
  * The product (active or not) whose name equals `name` ignoring case, or null. Used by the product dialog to offer the
  * existing product after a "name already used" answer. Disabled (no request) while `enabled` is false.
  */
-export const useProductNameMatch = (name: string, enabled: boolean) =>
+export const useProductNameMatch = (name: string, enabled: boolean, categoryId?: number) =>
   useQuery({
-    queryKey: [...catalogKeys.products, 'name-match', name.trim().toLowerCase()],
+    queryKey: [...catalogKeys.products, 'name-match', categoryId ?? 'any', name.trim().toLowerCase()],
     queryFn: async () => {
-      const r = await apiGet<ProductList>(`/products${qs({ q: name.trim(), limit: 50 })}`);
-      return r.items.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase()) ?? null;
+      // Names are unique per category: only a product of the SAME category is a clash.
+      const r = await apiGet<ProductList>(`/products${qs({ q: name.trim(), categoryId, limit: 50 })}`);
+      return r.items.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase()
+        && (categoryId === undefined || p.categoryId === categoryId)) ?? null;
     },
     enabled: enabled && name.trim() !== '',
   });

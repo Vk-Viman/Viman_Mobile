@@ -225,8 +225,8 @@ describe('POST /products', () => {
     }
     expect(count(s.ctx, 'products')).toBe(1);
     expect(auditRows(s.ctx)).toHaveLength(n);
-    // duplicate in a different category is still duplicate; two products without code are fine
-    expect((await post(s.app, '/products', body(s.ids, { name: 'CABLE', categoryId: s.ids.Other }))).status).toBe(409);
+    // names are unique PER CATEGORY (migration 023): the same name in a different category is accepted; two products without code are fine
+    expect((await post(s.app, '/products', body(s.ids, { name: 'CABLE', categoryId: s.ids.Other }))).status).toBe(201);
     await mk(s, { name: 'NC1' });
     await mk(s, { name: 'NC2' });
   });
