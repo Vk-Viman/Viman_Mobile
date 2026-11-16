@@ -29,6 +29,8 @@ import { formatLKR } from '../../lib/format';
 import type { PostedStatus } from '../../types/api';
 import type { PrintingSupply, PrintingSupplyQuery } from '../../types/printing';
 import { SupplyDialog } from './SupplyDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { SupplyCorrection } from '../corrections/OtherCorrections';
 
 /** The tab: explanation, filters, purchases table with total, pager and the record / void dialogs. */
 export function SuppliesTab() {
@@ -40,11 +42,13 @@ export function SuppliesTab() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<PrintingSupply | null>(null);
+  const [correcting, setCorrecting] = useState<PrintingSupply | null>(null);
   useEffect(() => { setPage(0); }, [from, to, status]);
 
   const query: PrintingSupplyQuery = { from: from || undefined, to: to || undefined, status: status || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
   const list = usePrintingSupplies(query);
   const filtered = Boolean(from || to || status);
+  const badgesFor = useCorrectionBadges('printing_supplies', (list.data?.items ?? []).map((s) => s.id));
 
   const columns: Column<PrintingSupply>[] = [
     {
@@ -61,13 +65,19 @@ export function SuppliesTab() {
         <span>
           <PostedStatusBadge status={s.status} />
           {s.status === 'void' && s.voidReason && <span className="mt-1 block text-xs text-slate-500">{s.voidReason}</span>}
+          {badgesFor(s.id)}
         </span>
       ),
     },
     {
       key: 'act',
       header: 'Actions',
-      render: (s) => (s.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(s)} aria-label={`Void supplies purchase #${s.id}`}>Void</Button> : null),
+      render: (s) => (s.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="supplies purchase" id={s.id} onClick={() => setCorrecting(s)} />
+          <Button variant="ghost" onClick={() => setVoiding(s)} aria-label={`Void supplies purchase #${s.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -105,6 +115,7 @@ export function SuppliesTab() {
           </>
         )}
       </Card>
+      {correcting && <SupplyCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <SupplyDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

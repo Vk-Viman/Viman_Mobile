@@ -32,6 +32,8 @@ import { formatLKR } from '../../lib/format';
 import type { Book, PostedStatus } from '../../types/api';
 import type { Expense, ExpenseQuery } from '../../types/cashbooks';
 import { ELECTRICITY_NOTE, ExpenseDialog } from './ExpenseDialog';
+import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
+import { ExpenseCorrection } from '../corrections/ExpenseCorrection';
 
 /** The expenses screen. */
 export function ExpensesPage() {
@@ -46,6 +48,7 @@ export function ExpensesPage() {
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
   const [voiding, setVoiding] = useState<Expense | null>(null);
+  const [correcting, setCorrecting] = useState<Expense | null>(null);
 
   // A new filter always starts at the first page.
   useEffect(() => { setPage(0); }, [from, to, book, category, status]);
@@ -56,6 +59,7 @@ export function ExpensesPage() {
   };
   const list = useExpenses(query);
   const filtered = Boolean(from || to || book || category || status);
+  const badgesFor = useCorrectionBadges('expenses', (list.data?.items ?? []).map((e) => e.id));
   const labelOf = (value: string) => categories.data?.items.find((c) => c.value === value)?.label ?? value;
 
   const columns: Column<Expense>[] = [
@@ -69,11 +73,16 @@ export function ExpensesPage() {
     { key: 'amount', header: 'Amount (Rs.)', align: 'right', render: (e) => <Money cents={e.amountCents} /> },
     {
       key: 'status', header: 'Status',
-      render: (e) => (<span><PostedStatusBadge status={e.status} />{e.status === 'void' && e.voidReason && <span className="mt-1 block text-xs text-slate-500">{e.voidReason}</span>}</span>),
+      render: (e) => (<span><PostedStatusBadge status={e.status} />{e.status === 'void' && e.voidReason && <span className="mt-1 block text-xs text-slate-500">{e.voidReason}</span>}{badgesFor(e.id)}</span>),
     },
     {
       key: 'act', header: 'Actions',
-      render: (e) => (e.status === 'posted' ? <Button variant="ghost" onClick={() => setVoiding(e)} aria-label={`Void expense #${e.id}`}>Void</Button> : null),
+      render: (e) => (e.status === 'posted' ? (
+        <span className="inline-flex">
+          <CorrectButton noun="expense" id={e.id} onClick={() => setCorrecting(e)} />
+          <Button variant="ghost" onClick={() => setVoiding(e)} aria-label={`Void expense #${e.id}`}>Void</Button>
+        </span>
+      ) : null),
     },
   ];
 
@@ -113,6 +122,7 @@ export function ExpensesPage() {
           </>
         )}
       </Card>
+      {correcting && <ExpenseCorrection key={correcting.id} original={correcting} onClose={() => setCorrecting(null)} />}
       {creating && <ExpenseDialog onClose={() => setCreating(false)} />}
       {voiding && (
         <VoidRecordDialog

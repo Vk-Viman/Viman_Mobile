@@ -17,6 +17,8 @@ import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging,
   voidBody,
 } from './catalog-query.ts';
+import { registerCorrectionEndpoints, drawingCorrection } from '../services/correction-cash.ts';
+import { correctionBodySchema } from './corrections.ts';
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
@@ -93,4 +95,10 @@ export function registerDrawingRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.post('/drawings/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => ({
     item: voidDrawing(ctx, parseId(request.params), request.body as { reason: string }),
   }));
+
+  // ---------- correct this entry (Correction contract, Phase 1): existing void + existing create in ONE transaction ----------
+  registerCorrectionEndpoints(app, ctx, 'drawings', drawingCorrection, correctionBodySchema({
+    ...createBody, required: createBody.required.filter((k) => k !== 'businessDate'),
+    properties: { ...createBody.properties, kind: { type: 'string', enum: ['cash'] } },
+  }), idParamsSchema);
 }
