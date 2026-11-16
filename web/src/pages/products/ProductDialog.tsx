@@ -172,9 +172,9 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
     ? (cats.data?.items ?? []).find((c) => c.book === book && c.name.toLowerCase() === newCategoryName.trim().toLowerCase())
     : undefined;
 
-  // The same name is already used by another product (names are unique across both books): find it to help the owner.
+  // The same name is already used by another product IN THE SAME CATEGORY (names are unique per category): find it to help the owner.
   const productClash = !editing && serverErr instanceof ApiError && serverErr.code === 'DUPLICATE_NAME' && !categoryClash;
-  const nameMatch = useProductNameMatch(name, productClash);
+  const nameMatch = useProductNameMatch(name, productClash, categoryId ? Number(categoryId) : undefined);
   const clashProduct = productClash ? nameMatch.data ?? null : null;
 
   const fieldErr = (k: string): string | undefined => {

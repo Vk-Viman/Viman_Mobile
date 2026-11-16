@@ -345,6 +345,13 @@ function skuLookup(conn: DatabaseSync): (sku: string) => ProductRef | undefined 
   };
 }
 
+/** Every product with a name, for the "ambiguous name" message on a row without a SKU (names are unique per category only). */
+function nameLookup(conn: DatabaseSync): (name: string) => ProductRef[] {
+  return (name) => listProducts(conn, { q: name, limit: 50, offset: 0 }).items
+    .filter((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())
+    .map((p) => ({ id: p.id, name: p.name, active: p.active, kind: p.kind, categoryName: p.categoryName, book: p.book }));
+}
+
 function summarize(rows: PreviewRow[]): ImportSummary {
   const ok = rows.filter((r) => r.status === 'ok');
   return {
@@ -383,7 +390,7 @@ export async function previewOpeningImport(
   const parsed = await parseOpeningWorkbook(file.buffer); // may take a moment; the database work below is synchronous
   const sha = sha256Of(file.buffer);
   return runWrite(ctx, (conn) => {
-    const rows = validateRows(parsed, skuLookup(conn), date > todayBusinessDate());
+    const rows = validateRows(parsed, skuLookup(conn), date > todayBusinessDate(), nameLookup(conn));
     const summary = summarize(rows);
     const runId = insertImportRun(conn, {
       fileName: file.fileName, fileSha256: sha, businessDate: date, mode: 'preview', status: 'previewed',
@@ -444,7 +451,7 @@ export async function importOpeningStock(
     const again = getBatchByClientRef(conn, clientRef);
     if (again) return { done: repeatedImport(conn, again) };
     assertNotCommitted(conn, sha);
-    const rows = validateRows(parsed, skuLookup(conn), false);
+    const rows = validateRows(parsed, skuLookup(conn), false, nameLookup(conn));
     const summary = summarize(rows);
     if (summary.failed > 0) {
       const runId = insertImportRun(conn, {

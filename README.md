@@ -374,7 +374,7 @@ Anything entered after that backup must be re-entered.
 | `ELECTRICITY_NOT_ALLOWED` | You tried an Electricity expense in Shop or Telecom | Electricity is paid from the Ice Cream book: Ice Cream → Payments → Electricity bill |
 | `RETURN_NOT_NEWEST` | You tried to void a return, but a newer return exists on the same item | Void the newest return first, then this one |
 | `RETURN_STOCK_NOT_AVAILABLE` | The returned items are no longer all in stock (probably resold), so the return cannot be undone | Nothing was changed. If it must be undone, first bring the stock back (for example a purchase) or leave the return as is |
-| `DUPLICATE_NAME` | A product, category or service type with that name already exists (letter case is ignored). Categories are unique within a book | Use the existing one, or choose a different name. An inactive one must be reactivated first |
+| `DUPLICATE_NAME` | A product with that name already exists **in the same category**, or a category or service type with that name already exists (letter case is ignored). Categories are unique within a book; the same product name (for example "100/-") may exist in different categories | Use the existing one, or choose a different name. An inactive one must be reactivated first |
 
 Also useful:
 - **Why can't I lower the cost on a sale?** The cost fills in from stock and can only be raised, to cover extra cost.

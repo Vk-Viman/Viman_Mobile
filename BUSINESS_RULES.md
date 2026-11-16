@@ -254,6 +254,7 @@ The 14 behaviours below were chosen by implementers where the original rules wer
 14. **Negative-cash warning (R13)** — APPROVED: always a warning, never a block (also on voids of sales, print sales, reload, EZCash and sales returns).
 
 ## 13B. Category management (owner request 2026-11-13)
+- **Product names (owner 2026-11-16):** a product name is unique **within its category** (case-insensitive); the same name is allowed in different categories (example: "100/-" under both Dialog Crds and Airtel Crds). Product codes stay unique shop-wide. Excel opening-stock rows are matched by SKU only; a name-only row that matches several categories is refused.
 - Categories are created, renamed and deactivated by the owner in the app (Products → Categories). Each belongs to **Shop or Telecom**; the name is unique **within its book**, ignoring letter case (the same name may exist in both books). Categories are never deleted (deactivate instead). A default category keeps its name and book. A category's book cannot change once it has products. Renaming never moves products. Inactive categories are not offered for new products.
 - A product's book is always its category's book (§1, unchanged). Category-first product selection (book → category → product) in Sales, Purchases, Opening Stock and stock-loss/personal-use entry is a selection aid only: **no accounting behaviour changed**.
 

@@ -264,7 +264,8 @@ describe('migration 020 on a populated database', () => {
     const namesBefore = new Set(masterBefore.map((x) => x.split(':').slice(0, 2).join(':')));
     const namesAfter = new Set(masterAfter.map((x) => x.split(':').slice(0, 2).join(':')));
     for (const n of namesBefore) expect(namesAfter.has(n), `${n} must still exist`).toBe(true);
-    const changed = masterBefore.filter((x) => !masterAfter.includes(x)).map((x) => x.split(':').slice(0, 2).join(':')).sort();
+    // (migration 023, a later workstream, rebuilds `products` for the per-category name rule: its table definition changes, nothing else of 020's scope)
+    const changed = masterBefore.filter((x) => !masterAfter.includes(x)).map((x) => x.split(':').slice(0, 2).join(':')).filter((x) => x !== 'table:products').sort();
     expect(changed).toEqual(['table:stock_movements', 'trigger:trg_cash_entries_return_reversal', 'trigger:trg_stock_movements_return_reversal_cap', 'trigger:trg_stock_movements_return_reversal_void']);
     expect(rows({ database: { conn: c } } as any, 'PRAGMA foreign_key_check')).toEqual([]);
     expect(rows({ database: { conn: c } } as any, 'PRAGMA integrity_check').map((r) => Object.values(r)[0])).toEqual(['ok']);
