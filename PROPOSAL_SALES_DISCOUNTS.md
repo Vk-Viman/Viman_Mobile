@@ -1,6 +1,6 @@
 # Proposal (version 3): sales discounts, Shop products only, typed in rupees
 
-**Status: PROPOSED. Nothing is implemented. This version replaces versions 1 and 2 after the owner's clarifications of 2026-11-15 and 2026-11-16. The formulas below need your explicit approval before any code is written.**
+**Status: PROPOSED. Nothing is implemented. This version replaces versions 1 and 2 after the owner's clarifications of 2026-11-15 and 2026-11-16. The formulas below need your explicit approval before any code is written. Decisions 2, 3 and 4 were answered on 2026-11-16 (largest remainder; Shop typed price below list = discount; Telecom prices stay editable); decisions 5 to 7 remain.**
 
 What changed in this version:
 - **Only SHOP products can be discounted. TELECOM products never receive a discount** (all scratch cards and every Dialog, Mobitel, Hutch and Airtel product).
@@ -141,9 +141,9 @@ Shop: charger list Rs 1,500.00, automatic cost Rs 720.00; cable list Rs 350.00, 
 ## 9. Decisions I need from you
 
 1. ~~Per-item amount~~ **Settled:** per unit (line discount = per-unit x quantity).
-2. **Rounding of the bill discount across Shop lines:** (a) largest remainder (recommended: never exceeds a line, always exact) or (b) every line rounded and the last line takes the remainder (the C5 style).
-3. **Price field (Shop):** a typed price below the list price is recorded automatically as a discount (recommended, as you approved); a price above list is a normal higher price. Confirm.
-4. **Telecom price field:** lock Telecom lines to their list price in the POS (recommended: it cannot be used as a hidden discount) or keep it editable as today and never record it as a discount.
+2. ~~Rounding~~ **Settled 2026-11-16: largest remainder.**
+3. ~~Shop price field~~ **Settled 2026-11-16: yes.** A typed Shop price below the list price is recorded automatically as a discount; a price above list is a normal higher price.
+4. ~~Telecom price field~~ **Settled 2026-11-16: Telecom prices stay editable as today.** A typed Telecom price is an ordinary price: it is never recorded as a discount, never appears in any discount report, and no discount field is offered on Telecom lines.
 5. **Warnings** for "below minimum price" and "below cost" judged on the net unit price and never blocking. Confirm.
 6. **Report wording and split** (Gross sales / Discounts: price reductions, line discounts, bill discounts / Net sales; Shop only). Confirm.
 7. **Migration** (rebuild of `sale_items`, all protections re-created, populated-database test, plus the trigger that keeps Telecom discounts at zero). Confirm.
