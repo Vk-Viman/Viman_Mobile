@@ -17,6 +17,7 @@ import {
 import type { PrintSaleCreate } from '../services/printing.service.ts';
 import { checkSupplyCorrection, correctSupply, optionalDate, previewSupplyCorrection } from '../services/correction-other.ts';
 import type { CorrectionRequest } from '../services/correction-other.ts';
+import { checkPrintSaleCorrection, correctPrintSale, previewPrintSaleCorrection } from '../services/correction-print.ts';
 import { correctionBodySchema } from './corrections.ts';
 import {
   boolQuery, checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseBool, parseId,
@@ -89,6 +90,8 @@ const supplyCreateBody = {
 const supplyCorrectionBody = correctionBodySchema(optionalDate(supplyCreateBody));
 type SupplyCreate = { businessDate: string; amountCents: number; description: string; clientRef: string };
 
+const printSaleCorrectionBody = correctionBodySchema(optionalDate(saleCreateBody));
+
 const supplyListQuery = {
   type: 'object',
   additionalProperties: false,
@@ -139,6 +142,18 @@ export function registerPrintingRoutes(app: FastifyInstance, ctx: AppContext): v
   app.post('/print-sales/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) => {
     const { item, warnings } = voidPrintSale(ctx, parseId(request.params), request.body as { reason: string });
     return { item, warnings };
+  });
+
+  // ---- print sale corrections (void the original + enter the replacement, one transaction) ----
+  app.get('/print-sales/:id/correct-check', { schema: { params: idParamsSchema } }, async (request) =>
+    checkPrintSaleCorrection(ctx, parseId(request.params)));
+
+  app.post('/print-sales/:id/correct-preview', { schema: { params: idParamsSchema, body: printSaleCorrectionBody } }, async (request) =>
+    previewPrintSaleCorrection(ctx, parseId(request.params), request.body as CorrectionRequest<PrintSaleCreate>));
+
+  app.post('/print-sales/:id/correct', { schema: { params: idParamsSchema, body: printSaleCorrectionBody } }, async (request, reply) => {
+    const { status, body } = correctPrintSale(ctx, parseId(request.params), request.body as CorrectionRequest<PrintSaleCreate>);
+    return reply.code(status).send(body);
   });
 
   // ---- printing supplies ----
