@@ -30,7 +30,7 @@ const env = new TestEnv();
 afterEach(async () => { blind.on = false; await env.cleanup(); });
 
 const NAME_MSG = 'Another product already uses this name.';
-const prod = (cat: number, name: string, over: Record<string, unknown> = {}) =>
+const prod = (cat: number | undefined, name: string, over: Record<string, unknown> = {}) =>
   ({ name, categoryId: cat, kind: 'stock', sellPriceCents: 1000, minPriceCents: 500, ...over });
 async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom'): Promise<number> {
   const r = await post(s.app, '/categories', { name, book });
@@ -119,7 +119,7 @@ describe('product name unique per category - API', () => {
     expect(r.status).toBe(409);
     expect(r.body.error).toMatchObject({ code: 'DUPLICATE_NAME', fields: { name: NAME_MSG } });
     expect(rows(s.ctx, 'SELECT COUNT(*) n FROM products')[0]!.n).toBe(before);
-    expect(() => s.ctx.database.conn.prepare("INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('cable', ?, 'stock', 'shop', 1, 1)").run(s.ids.Electronics))
+    expect(() => s.ctx.database.conn.prepare("INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('cable', ?, 'stock', 'shop', 1, 1)").run(s.ids.Electronics!))
       .toThrow(/UNIQUE constraint failed: products\.category_id, products\.name/);
   });
 });
@@ -192,7 +192,7 @@ describe('migration 023 on a populated database', () => {
     expect(all(raw, 'PRAGMA foreign_key_check')).toEqual([]);
     expect(all(raw, "SELECT sql FROM sqlite_master WHERE name = 'products'")[0]!.sql).toBe(tableSql);
     const dupOld = "INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('GEL PEN', ?, 'stock', 'shop', 1, 1)";
-    expect(() => raw.prepare(dupOld).run(s1.ids.Electronics)).toThrow(/UNIQUE constraint failed: products\.name/); // really the old global rule
+    expect(() => raw.prepare(dupOld).run(s1.ids.Electronics!)).toThrow(/UNIQUE constraint failed: products\.name/); // really the old global rule
     raw.close();
 
     // ---- start the app on it: migration 023 runs on real data
@@ -235,10 +235,10 @@ describe('migration 023 on a populated database', () => {
     // the triggers still fire
     const c = s2.ctx.database.conn;
     expect(() => c.prepare("UPDATE products SET book = 'telecom' WHERE id = ?").run(twinA.id)).toThrow(/PRODUCT_BOOK_MISMATCH|PRODUCT_KIND_IMMUTABLE/);
-    expect(() => c.prepare("UPDATE products SET category_id = ? WHERE id = ?").run(s2.ids['Scratch Cards'], twinA.id)).toThrow(/PRODUCT_BOOK_MISMATCH/);
+    expect(() => c.prepare("UPDATE products SET category_id = ? WHERE id = ?").run(s2.ids["Scratch Cards"]!, twinA.id)).toThrow(/PRODUCT_BOOK_MISMATCH/);
     expect(() => c.prepare("UPDATE products SET qty_on_hand = 0, stock_value_cents = 5 WHERE id = ?").run(twinA.id)).toThrow(/STOCK_VALUE_WITHOUT_QTY/);
     expect(() => c.prepare("UPDATE products SET kind = 'service' WHERE id = ?").run(twinA.id)).toThrow(/PRODUCT_KIND_IMMUTABLE/);
-    expect(() => c.prepare("INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('Bad', ?, 'stock', 'telecom', 1, 1)").run(s2.ids.Electronics)).toThrow(/PRODUCT_BOOK_MISMATCH/);
+    expect(() => c.prepare("INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('Bad', ?, 'stock', 'telecom', 1, 1)").run(s2.ids.Electronics!)).toThrow(/PRODUCT_BOOK_MISMATCH/);
     await assertGlobalInvariants(s2);
   });
 
