@@ -255,7 +255,7 @@ describe('migration 020 on a populated database', () => {
     expect(perTableAfter.schema_migrations!.startsWith(perTableBefore.schema_migrations!.slice(0, -1))).toBe(true);
     for (const t of Object.keys(before).filter((x) => x !== 'schema_migrations')) expect(perTableAfter[t], `table ${t} changed`).toBe(perTableBefore[t]);
     // migrate() applies every pending migration, so migration 021 (external_backup_state, a later workstream) also ran: only that table is new
-    expect(tables(c).filter((t) => t !== 'external_backup_state')).toEqual(Object.keys(before));
+    expect(tables(c).filter((t) => t !== 'external_backup_state' && t !== 'corrections')).toEqual(Object.keys(before));
     expect(cols(c, 'stock_movements')).toEqual([...before.stock_movements!, 'reverses_movement_id']);
     expect(scalar(c, 'SELECT COUNT(*) FROM stock_movements WHERE reverses_movement_id IS NOT NULL')).toBe(0);
     // sqlite_master: nothing was dropped except the triggers migration 020 re-creates; the rest is added

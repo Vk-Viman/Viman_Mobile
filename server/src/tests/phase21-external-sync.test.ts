@@ -501,7 +501,7 @@ describe('migration 021 on a populated database', () => {
     else db.prepare("INSERT INTO external_backup_log (source_name, target_name, status, created_at) VALUES ('viman-x.db','viman-x.db','skipped',?)").run(at);
   };
   const dump = (db: DatabaseSync): string => {
-    const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'external_backup_state' AND name <> 'schema_migrations' ORDER BY name").all() as any[]).map((r) => r.name);
+    const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'external_backup_state' AND name <> 'schema_migrations' AND name <> 'corrections' ORDER BY name").all() as any[]).map((r) => r.name);
     return JSON.stringify(names.map((n) => [n, db.prepare(`SELECT * FROM "${n}" ORDER BY rowid`).all()]));
   };
 
