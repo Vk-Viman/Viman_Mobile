@@ -56,8 +56,11 @@ describe('GET /cashbooks/:book - ledger, running balance, opening / in / out / c
     ]);
     expect(r.body.closedDates).toEqual([]);
     expect(r.body.funds).toBeUndefined();
+    // 13D: every ledger row also carries its `segment` (null outside Telecom) and the ledger names the segment it shows
     expect(Object.keys(r.body.items[0]).sort()).toEqual(['amountCents', 'businessDate', 'fund', 'id', 'note', 'postedAt', 'refId', 'refTable',
-      'reversesEntryId', 'runningBalanceCents', 'type']);
+      'reversesEntryId', 'runningBalanceCents', 'segment', 'type']);
+    expect(r.body.segment).toBeNull();
+    expect(r.body.items.every((i: any) => i.segment === null)).toBe(true);
     expect(r.body.closingCents).toBe(bookBal(s, 'shop'));
   });
 
@@ -126,7 +129,10 @@ describe('GET /cashbooks/:book - ledger, running balance, opening / in / out / c
     await closeOk(s, 'telecom', daysAgo(3));
     expect((await ledgerGet(s, 'shop')).body.closedDates).toEqual([daysAgo(4), daysAgo(3)]);
     expect((await ledgerGet(s, 'shop', `?from=${daysAgo(3)}`)).body.closedDates).toEqual([daysAgo(3)]);
-    expect((await ledgerGet(s, 'telecom')).body.closedDates).toEqual([daysAgo(3)]);
+    // 13D: a Telecom day is closed per segment (the helper closes dialog_reloads); the read-only total ledger has no closed days of its own
+    expect((await ledgerGet(s, 'telecom', '?segment=dialog_reloads')).body.closedDates).toEqual([daysAgo(3)]);
+    expect((await ledgerGet(s, 'telecom', '?segment=mobitel_cards')).body.closedDates).toEqual([]);
+    expect((await ledgerGet(s, 'telecom')).body.closedDates).toEqual([]);
     await reopenNew(s, c4.id);
     expect((await ledgerGet(s, 'shop')).body.closedDates).toEqual([daysAgo(3)]);
   });
@@ -144,7 +150,12 @@ describe('GET /cashbooks - balances and warnings', () => {
     expect(r.status).toBe(200);
     expect(r.body.books.map((b: any) => b.book)).toEqual(['shop', 'telecom', 'icecream']);
     expect(r.body.books[0]).toEqual({ book: 'shop', balanceCents: 679500, lastClosedDate: daysAgo(4) });
-    expect(r.body.books[1]).toEqual({ book: 'telecom', balanceCents: 0, lastClosedDate: null });
+    // 13D: Telecom also lists its eight segments (no "before segments" entry on a fresh database); the total is their sum
+    expect(r.body.books[1]).toEqual({
+      book: 'telecom', balanceCents: 0, lastClosedDate: null,
+      segments: ['Dialog Cards', 'Dialog Reloads', 'Mobitel Cards', 'Mobitel Reloads', 'Airtel Cards', 'Airtel Reloads', 'Hutch Cards', 'Hutch Reloads']
+        .map((label, i) => ({ segment: ['dialog_cards', 'dialog_reloads', 'mobitel_cards', 'mobitel_reloads', 'airtel_cards', 'airtel_reloads', 'hutch_cards', 'hutch_reloads'][i], label, balanceCents: 0, lastClosedDate: null })),
+    });
     expect(r.body.books[2]).toEqual({ book: 'icecream', balanceCents: 700000, funds: { cost: 500000, electricity: 0, profit: 200000 }, lastClosedDate: null });
     expect(r.body.warnings).toEqual([]);
   });
@@ -509,7 +520,14 @@ describe('daily closings', () => {
     expect(r.body.count).toBeNull();
     expect((await get(s.app, `/daily-closings/status?book=shop&businessDate=${daysAgo(3)}`)).body).toEqual({ isClosed: true });
     expect((await get(s.app, `/daily-closings/status?book=shop&businessDate=${daysAgo(2)}`)).body).toEqual({ isClosed: false });
-    expect((await get(s.app, `/daily-closings/status?book=telecom&businessDate=${daysAgo(3)}`)).body).toEqual({ isClosed: false });
+    expect((await get(s.app, `/daily-closings/status?book=telecom&segment=dialog_reloads&businessDate=${daysAgo(3)}`)).body).toEqual({ isClosed: false });
+    // 13D: a Telecom day question must name its segment; Shop and Ice Cream refuse one
+    const noSeg = await get(s.app, `/daily-closings/status?book=telecom&businessDate=${daysAgo(3)}`);
+    expect(noSeg.status).toBe(400);
+    expect(noSeg.body.error.code).toBe('SEGMENT_REQUIRED');
+    const shopSeg = await get(s.app, `/daily-closings/status?book=shop&segment=dialog_reloads&businessDate=${daysAgo(3)}`);
+    expect(shopSeg.status).toBe(400);
+    expect(shopSeg.body.error.code).toBe('SEGMENT_NOT_ALLOWED');
     expect(auditRows(s.ctx, 'daily_closing').map((a) => a.action)).toEqual(['close']);
     expect(sql(s, "SELECT business_date, backdated FROM audit_logs WHERE entity = 'daily_closing'")[0]).toMatchObject({ business_date: daysAgo(3), backdated: 1 });
   });
