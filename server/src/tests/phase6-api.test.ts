@@ -22,11 +22,11 @@ const setup = async (): Promise<ApiBase & { P: Record<string, number> }> => {
 };
 
 const RELOAD_KEYS = ['backdated', 'businessDate', 'clientRef', 'commissionBp', 'commissionCents', 'extraCents', 'id', 'notes', 'postedAt',
-  'providerId', 'providerName', 'salesCents', 'status', 'voidReason', 'voidedAt'];
+  'providerId', 'providerName', 'salesCents', 'segment', 'status', 'voidReason', 'voidedAt'];
 const EZ_KEYS = ['backdated', 'billTotalCents', 'businessDate', 'clientRef', 'commissionBp', 'commissionCents', 'id', 'notes', 'postedAt',
-  'providerId', 'providerName', 'status', 'voidReason', 'voidedAt'];
+  'providerId', 'providerName', 'segment', 'status', 'voidReason', 'voidedAt'];
 const TOPUP_KEYS = ['amountCents', 'backdated', 'businessDate', 'clientRef', 'id', 'kind', 'notes', 'postedAt', 'providerId', 'providerName',
-  'status', 'voidReason', 'voidedAt'];
+  'segment', 'status', 'voidReason', 'voidedAt'];
 
 // ---------------------------------------------------------------------------------------------
 describe('GET/PUT /reload-providers', () => {

@@ -19,15 +19,21 @@ const db = (): DatabaseSync => memDb(open);
 let seq = 0;
 const cref = (): string => `db-ref-${seq++}-${Math.random().toString(36).slice(2, 8)}`;
 const pid = (c: DatabaseSync, name: string): number => scalar(c, 'SELECT id FROM reload_providers WHERE name = ?', name);
+/** Telecom segments (13D): the provider's Reloads segment, which every reload / top-up row must carry (EZCash and the wallet: Dialog). */
+const reloadsSegment = (c: DatabaseSync, providerId: number | null | unknown): string =>
+  providerId === null || providerId === undefined
+    ? 'dialog_reloads'
+    : `${((c.prepare('SELECT lower(name) AS n FROM reload_providers WHERE id = ?').get(providerId as number) as { n: string } | undefined)?.n) ?? 'dialog'}_reloads`;
 
 /** Inserts a reload row; every column can be overridden. Commission defaults to the correct value. */
 function reload(c: DatabaseSync, o: Record<string, unknown> = {}): number {
   const v = { business_date: today(), provider_id: pid(c, 'Dialog'), sales_cents: 1_000_000, commission_bp: 600, extra_cents: 0, ...o } as any;
   const commission = o.commission_cents ?? refBase(v.sales_cents, v.commission_bp) + v.extra_cents;
   const r = c.prepare(
-    `INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, extra_cents, commission_cents, notes, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(v.business_date, v.provider_id, v.sales_cents, v.commission_bp, v.extra_cents, commission as number, v.notes ?? '', v.client_ref ?? cref());
+    `INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, extra_cents, commission_cents, notes, client_ref, segment)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(v.business_date, v.provider_id, v.sales_cents, v.commission_bp, v.extra_cents, commission as number, v.notes ?? '', v.client_ref ?? cref(),
+    v.segment ?? reloadsSegment(c, v.provider_id));
   return Number(r.lastInsertRowid);
 }
 
@@ -35,17 +41,18 @@ function ezcash(c: DatabaseSync, o: Record<string, unknown> = {}): number {
   const v = { business_date: today(), provider_id: pid(c, 'Dialog'), bill_total_cents: 1_000_000, commission_bp: 80, ...o } as any;
   const commission = o.commission_cents ?? refBase(v.bill_total_cents, v.commission_bp);
   const r = c.prepare(
-    `INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, notes, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(v.business_date, v.provider_id, v.bill_total_cents, v.commission_bp, commission as number, v.notes ?? '', v.client_ref ?? cref());
+    `INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, notes, client_ref, segment)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(v.business_date, v.provider_id, v.bill_total_cents, v.commission_bp, commission as number, v.notes ?? '', v.client_ref ?? cref(),
+    v.segment ?? reloadsSegment(c, v.provider_id));
   return Number(r.lastInsertRowid);
 }
 
 function topup(c: DatabaseSync, o: Record<string, unknown> = {}): number {
   const v = { business_date: today(), kind: 'wallet_topup', provider_id: null, amount_cents: 100_000, ...o } as any;
   const r = c.prepare(
-    `INSERT INTO telecom_topups (business_date, kind, provider_id, amount_cents, notes, client_ref) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(v.business_date, v.kind, v.provider_id, v.amount_cents, v.notes ?? '', v.client_ref ?? cref());
+    `INSERT INTO telecom_topups (business_date, kind, provider_id, amount_cents, notes, client_ref, segment) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(v.business_date, v.kind, v.provider_id, v.amount_cents, v.notes ?? '', v.client_ref ?? cref(), v.segment ?? reloadsSegment(c, v.provider_id));
   return Number(r.lastInsertRowid);
 }
 
@@ -126,8 +133,9 @@ describe('reload_sales - constraints', () => {
 
   it('refuses a missing provider, an unknown provider, a missing or duplicate client_ref', () => {
     const c = db();
-    expect(() => reload(c, { provider_id: null })).toThrow(/NOT NULL/);
-    expect(() => reload(c, { provider_id: 999 })).toThrow(/FOREIGN KEY/);
+    // 13D: the segment-vs-provider trigger (migration 026) fires before the NOT NULL / FOREIGN KEY check; either refusal keeps the row out.
+    expect(() => reload(c, { provider_id: null })).toThrow(/NOT NULL|SEGMENT_MISMATCH/);
+    expect(() => reload(c, { provider_id: 999 })).toThrow(/FOREIGN KEY|SEGMENT_MISMATCH/);
     expect(() => reload(c, { client_ref: null as unknown as string, notes: '' })).not.toThrow(); // default branch generates a ref
     reload(c, { client_ref: 'same-client-ref' });
     expect(() => reload(c, { client_ref: 'same-client-ref' })).toThrow(/UNIQUE/);
@@ -135,11 +143,11 @@ describe('reload_sales - constraints', () => {
 
   it('a void row must carry voided_at and void_reason; the status is posted or void only', () => {
     const c = db();
-    const base = `INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, extra_cents, commission_cents, status, voided_at, void_reason, client_ref)`;
+    const base = `INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, extra_cents, commission_cents, status, voided_at, void_reason, client_ref, segment)`;
     const d = pid(c, 'Dialog');
-    expect(() => c.prepare(`${base} VALUES (?, ?, 100, 600, 0, 6, 'void', NULL, NULL, 'v-ref-1')`).run(today(), d)).toThrow(/CHECK/);
-    expect(() => c.prepare(`${base} VALUES (?, ?, 100, 600, 0, 6, 'void', '2026-01-01T00:00:00.000Z', NULL, 'v-ref-2')`).run(today(), d)).toThrow(/CHECK/);
-    expect(() => c.prepare(`${base} VALUES (?, ?, 100, 600, 0, 6, 'gone', NULL, NULL, 'v-ref-3')`).run(today(), d)).toThrow(/CHECK/);
+    expect(() => c.prepare(`${base} VALUES (?, ?, 100, 600, 0, 6, 'void', NULL, NULL, 'v-ref-1', 'dialog_reloads')`).run(today(), d)).toThrow(/CHECK/);
+    expect(() => c.prepare(`${base} VALUES (?, ?, 100, 600, 0, 6, 'void', '2026-01-01T00:00:00.000Z', NULL, 'v-ref-2', 'dialog_reloads')`).run(today(), d)).toThrow(/CHECK/);
+    expect(() => c.prepare(`${base} VALUES (?, ?, 100, 600, 0, 6, 'gone', NULL, NULL, 'v-ref-3', 'dialog_reloads')`).run(today(), d)).toThrow(/CHECK/);
   });
 });
 
@@ -251,7 +259,7 @@ describe('ezcash_sales - constraints and triggers', () => {
     for (const name of ['Mobitel', 'Hutch', 'Airtel']) {
       expect(() => ezcash(c, { provider_id: pid(c, name) }), name).toThrow(/EZCASH_PROVIDER_NOT_DIALOG/);
     }
-    expect(() => ezcash(c, { provider_id: 999 })).toThrow(/EZCASH_PROVIDER_NOT_DIALOG|FOREIGN KEY/);
+    expect(() => ezcash(c, { provider_id: 999 })).toThrow(/EZCASH_PROVIDER_NOT_DIALOG|FOREIGN KEY|SEGMENT_MISMATCH/);
     expect(scalar(c, 'SELECT COUNT(*) FROM ezcash_sales')).toBe(0);
   });
 
@@ -304,7 +312,7 @@ describe('telecom_topups - constraints and triggers', () => {
     expect(() => topup(c, { kind: 'purchase', provider_id: pid(c, 'Dialog') })).toThrow(/CHECK/);
     expect(() => topup(c, { kind: 'provider_topup', provider_id: null })).toThrow(/CHECK/);
     expect(() => topup(c, { kind: 'wallet_topup', provider_id: pid(c, 'Dialog') })).toThrow(/CHECK/);
-    expect(() => topup(c, { kind: 'provider_topup', provider_id: 999 })).toThrow(/FOREIGN KEY/);
+    expect(() => topup(c, { kind: 'provider_topup', provider_id: 999 })).toThrow(/FOREIGN KEY|SEGMENT_MISMATCH/);
     expect(scalar(c, 'SELECT COUNT(*) FROM telecom_topups')).toBe(0);
   });
 
