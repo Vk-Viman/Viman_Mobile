@@ -19,9 +19,7 @@ import type { StoredSegment } from './segments';
  *    retried/double-submitted request is recognised by the server and does not post twice (idempotency).
  *  - `backdated` is set by the server when the business date is earlier than the day it was posted.
  */
-import type { StoredSegment } from './segments';
 import type { CashWarning } from './cashbooks';
-import type { StoredSegment } from './segments';
 
 /** Reply of GET /health. `today` is the server's business date (Asia/Colombo) and is the date-picker maximum (R-FD). */
 export interface Health { status: 'ok'; appVersion: string; schemaVersion: number; time: string; today: string }
