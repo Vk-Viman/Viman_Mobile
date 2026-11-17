@@ -13,6 +13,8 @@ import { usePnl } from '../../api/reportsFinancial';
 import type { CombinedPnl, ExpenseLines, IceCreamPnl, PnlSegment, ShopPnl, TelecomPnl } from '../../types/reportsFinancial';
 import { ExcessCostBlock, FinState, FinSwitch, FinTile, FinTiles, FinWarnings, useUrlChoice } from './finParts';
 import { ReportTableView, ReportToolbar, useReportPeriod } from './shared';
+import { SEGMENT_FILTER_VALUES, SegmentFilter } from './SegmentFilter';
+import type { StoredSegment } from '../../types/segments';
 
 const SEGMENTS: ReadonlyArray<{ value: PnlSegment; label: string }> = [
   { value: 'shop', label: 'Shop' }, { value: 'telecom', label: 'Telecom' }, { value: 'icecream', label: 'Ice Cream' }, { value: 'combined', label: 'Combined' },
@@ -75,6 +77,12 @@ function TelecomView({ data }: { data: TelecomPnl }) {
         </ul>
       </Card>
       <ExpenseBreakdown expenses={t.expenses} />
+      <Card title="By Telecom segment" className="mb-4">
+        <p className="mb-3 text-sm text-slate-600">
+          One column per segment (provider and Reloads / Cards); the last column is the whole Telecom book and equals the sum of the segments for every line.
+        </p>
+        <ReportTableView table={data.segmentTable} />
+      </Card>
     </>
   );
 }
@@ -132,11 +140,14 @@ function CombinedView({ data }: { data: CombinedPnl }) {
 export function PnlTab() {
   const { period, set } = useReportPeriod();
   const [segment, setSegment] = useUrlChoice<PnlSegment>('segment', ['shop', 'telecom', 'icecream', 'combined'], 'combined');
-  const query = usePnl(segment, period);
+  const [tseg, setTseg] = useUrlChoice<string>('tseg', SEGMENT_FILTER_VALUES.map((v) => v || 'all'), 'all');
+  const telecomSegment = (tseg === 'all' ? '' : tseg) as StoredSegment | '';
+  const query = usePnl(segment, period, telecomSegment);
   return (
     <div>
       <FinSwitch label="Segment" options={SEGMENTS} value={segment} onChange={setSegment} />
-      <ReportToolbar period={period} set={set} downloadPath={`/reports/pnl/${segment}`} />
+      {segment === 'telecom' && <div className="mb-3 max-w-xs"><SegmentFilter value={telecomSegment} onChange={(v) => setTseg(v || 'all')} /></div>}
+      <ReportToolbar period={period} set={set} downloadPath={`/reports/pnl/${segment}`} downloadExtra={segment === 'telecom' && telecomSegment ? { segment: telecomSegment } : {}} />
       <FinState query={query}>
         {(data) => (
           <>

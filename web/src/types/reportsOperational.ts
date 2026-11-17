@@ -65,4 +65,4 @@ export interface BackdatedReport extends OpsReportBase {
   total: number; limit: number; offset: number;
   byType: Array<{ recordType: string; recordLabel: string; count: number }>;
 }
-export interface BackdatedQuery { from: string; to: string; book?: OpsBook | ''; limit?: number; offset?: number }
+export interface BackdatedQuery { from: string; to: string; book?: OpsBook | ''; segment?: string; limit?: number; offset?: number }

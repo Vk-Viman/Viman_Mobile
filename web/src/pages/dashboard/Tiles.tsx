@@ -131,10 +131,10 @@ export function ClosingsCard({ closings }: { closings: Dashboard['closings'] }) 
       )}
       <dl className="text-sm">
         {closings.openDaysBehind.map((b) => (
-          <div key={b.book} className="border-b border-slate-100 py-2 last:border-0">
+          <div key={`${b.book}:${b.segment ?? ''}`} className="border-b border-slate-100 py-2 last:border-0">
             <div className="flex items-center justify-between gap-3">
-              <dt><SegmentName color={SEGMENT_COLOR[b.book]} name={SEGMENT_LABEL[b.book]} /></dt>
-              <dd className="num text-slate-600">Last closed: {closings.lastClosedByBook[b.book] ?? 'never'}</dd>
+              <dt><SegmentName color={SEGMENT_COLOR[b.book]} name={b.label ? `${SEGMENT_LABEL[b.book]} - ${b.label}` : SEGMENT_LABEL[b.book]} /></dt>
+              <dd className="num text-slate-600">Last closed: {(b.segment ? b.lastClosedDate : closings.lastClosedByBook[b.book]) ?? 'never'}</dd>
             </div>
             {b.dates.length > 0 && <p className="mt-1 text-xs text-amber-800">Not closed: <span className="num">{b.dates.join(', ')}</span></p>}
           </div>
