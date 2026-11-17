@@ -21,6 +21,7 @@
 import ExcelJS from 'exceljs';
 import { AppError } from '../lib/errors.ts';
 import { mulDivRound, rupeesToCents } from '../lib/money.ts';
+import type { StoredSegment } from './segments.ts';
 
 /** Name of the sheet the importer reads. */
 export const OPENING_SHEET = 'Opening stock';
@@ -49,7 +50,7 @@ export const MAX_LINE_VALUE_CENTS = 99_999_999_999;
 /** The row problems the importer can report (API_CONTRACTS "Phase 13"). */
 export type IssueCode =
   | 'MISSING_SKU' | 'UNKNOWN_SKU' | 'INACTIVE_PRODUCT' | 'BAD_QTY' | 'BAD_COST'
-  | 'DUPLICATE_SKU_IN_FILE' | 'FUTURE_DATE_NOT_ALLOWED';
+  | 'DUPLICATE_SKU_IN_FILE' | 'FUTURE_DATE_NOT_ALLOWED' | 'LEGACY_PRODUCT';
 
 /** One problem on one row; `column` is the header of the cell to fix ('' when it concerns the whole row). */
 export interface RowIssue { code: IssueCode; message: string; column: string }
@@ -70,6 +71,8 @@ export interface ParsedRow {
 export interface ProductRef {
   id: number; name: string; active: boolean; kind: 'stock' | 'service';
   categoryName?: string; book?: 'shop' | 'telecom';
+  /** 13D: the product's Cards segment (null for Shop, `legacy` while its category has no provider) and its category's provider. */
+  segment?: StoredSegment | null; providerName?: string | null;
 }
 
 /** One row of the preview: the parsed values plus the product it matched and its final status. */
@@ -81,6 +84,9 @@ export interface PreviewRow {
   /** Category and book of the matched product (null when no product matched). */
   categoryName: string | null;
   book: 'shop' | 'telecom' | null;
+  /** 13D: segment and provider of the matched product (null for Shop products or when no product matched). */
+  segment: StoredSegment | null;
+  providerName: string | null;
   qty: number | null;
   unitCostCents: number | null;
   totalValueCents: number | null;
@@ -364,6 +370,14 @@ export function validateRows(
       } else if (!product.active) {
         issues.push({ code: 'INACTIVE_PRODUCT', column: HEADERS.sku, message: `${product.name} is inactive. Reactivate it first.` });
       }
+      if (product && product.book === 'telecom' && product.segment === 'legacy') {
+        // 13D: a Telecom product whose category has no provider is "legacy": it cannot receive new stock until the category has a provider.
+        issues.push({
+          code: 'LEGACY_PRODUCT', column: HEADERS.sku,
+          message: `${product.name} is in a Telecom category without a provider (${product.categoryName ?? 'no category'}), so it has no Cards segment. `
+            + 'Link the category to Dialog, Mobitel, Airtel or Hutch in Products > Categories first.',
+        });
+      }
       const same = bySku.get(r.sku.toUpperCase()) ?? [];
       if (same.length > 1) {
         const others = same.filter((n) => n !== r.rowNo).join(', ');
@@ -385,6 +399,7 @@ export function validateRows(
       rowNo: r.rowNo, sku: r.sku, productId: product ? product.id : null,
       productName: product ? product.name : r.productNameInFile,
       categoryName: product?.categoryName ?? null, book: product?.book ?? null,
+      segment: product?.segment ?? null, providerName: product?.providerName ?? null,
       qty: r.qty, unitCostCents: unit, totalValueCents: r.totalValueCents, notes: r.notes,
       status: issues.length === 0 ? 'ok' : 'error',
       issues: issues.map((i) => ({ code: i.code, message: i.message })),
@@ -396,7 +411,9 @@ export function validateRows(
 // ---------- the template ----------
 
 /** A product line of the "Products" reference sheet. */
-export interface TemplateProduct { sku: string | null; name: string; categoryName: string; book: 'shop' | 'telecom' }
+export interface TemplateProduct {
+  sku: string | null; name: string; categoryName: string; book: 'shop' | 'telecom'; providerName?: string | null;
+}
 
 /**
  * Builds the template workbook: the "Opening stock" sheet (exact headers, one sample row, input checks and header
@@ -449,10 +466,11 @@ export async function buildTemplate(products: TemplateProduct[]): Promise<Buffer
     { header: 'Product name', key: 'name', width: 38 },
     { header: 'Category', key: 'cat', width: 22 },
     { header: 'Book', key: 'book', width: 12 },
+    { header: 'Provider', key: 'provider', width: 12 },
   ];
   ref.getRow(1).font = { bold: true };
   for (const p of products) {
-    ref.addRow({ sku: p.sku ?? '(no SKU - add one in Products)', name: p.name, cat: p.categoryName, book: p.book });
+    ref.addRow({ sku: p.sku ?? '(no SKU - add one in Products)', name: p.name, cat: p.categoryName, book: p.book, provider: p.providerName ?? '' });
   }
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
