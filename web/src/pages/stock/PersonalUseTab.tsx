@@ -14,6 +14,7 @@ import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { BookFilterSelect, DateRangeFields, PostedStatusFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
 import { Pager } from '../../components/Pager';
@@ -78,6 +79,7 @@ export function PersonalUseTab() {
     },
     { key: 'prod', header: 'Product', render: (d) => <span className="font-medium text-slate-900">{d.productName ?? '—'}</span> },
     { key: 'book', header: 'Book', render: (d) => <BookBadge book={d.book} /> },
+    { key: 'segment', header: 'Segment', render: (d) => (d.segment ? SEGMENT_LABEL[d.segment] : '�') },
     { key: 'qty', header: 'Qty', align: 'right', render: (d) => d.qty ?? '—' },
     { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (d) => <Money cents={d.amountCents} /> },
     { key: 'note', header: 'Note', render: (d) => d.note || '—' },

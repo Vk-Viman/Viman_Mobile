@@ -17,6 +17,7 @@
  *    retried/double-submitted request is recognised by the server and does not post twice (idempotency).
  *  - `backdated` is set by the server when the business date is earlier than the day it was posted.
  */
+import type { StoredSegment } from './segments';
 import type { CashWarning } from './cashbooks';
 
 /** Reply of GET /health. `today` is the server's business date (Asia/Colombo) and is the date-picker maximum (R-FD). */
@@ -213,6 +214,8 @@ export interface Purchase {
   supplierName: string | null;
   billNo: string;
   book: Book;
+  /** Telecom Cards segment of the bill (one provider); null for Shop. */
+  segment: StoredSegment | null;
   totalCents: number;
   status: PurchaseStatus;
   notes: string;
@@ -306,6 +309,8 @@ export interface Stocktake {
   postedAt: string;
   backdated: boolean;
   book: Book;
+  /** A Telecom stocktake counts ONE provider's Cards segment; null for Shop. */
+  segment: StoredSegment | null;
   status: StocktakeStatus;
   notes: string;
   completedAt: string | null;
@@ -316,10 +321,10 @@ export interface Stocktake {
 }
 export interface StocktakeList { items: Stocktake[]; total: number }
 export interface StocktakeOne { item: Stocktake }
-export interface StocktakeQuery { from?: string; to?: string; book?: Book; status?: StocktakeStatus; limit?: number; offset?: number }
+export interface StocktakeQuery { from?: string; to?: string; book?: Book; segment?: StoredSegment; status?: StocktakeStatus; limit?: number; offset?: number }
 /** A counted quantity; `gainUnitCostCents` is the cost to give units found beyond what the system expected. */
 export interface StocktakeItemInput { productId: number; countedQty: number; gainUnitCostCents?: number }
-export interface StocktakeCreate { businessDate: string; book: Book; notes?: string; items?: StocktakeItemInput[]; clientRef: string }
+export interface StocktakeCreate { businessDate: string; book: Book; segment?: StoredSegment; notes?: string; items?: StocktakeItemInput[]; clientRef: string }
 export interface StocktakeUpdate { notes?: string; items?: StocktakeItemInput[] }
 
 export type StockLossReason = 'damaged' | 'lost' | 'expired' | 'other';
@@ -333,6 +338,7 @@ export interface StockLoss {
   productId: number;
   productName: string;
   book: Book;
+  segment: StoredSegment | null;
   qty: number;
   costCents: number;
   unitCostCents: number;
@@ -364,6 +370,7 @@ export interface Drawing {
   postedAt: string;
   backdated: boolean;
   book: Book;
+  segment: StoredSegment | null;
   kind: 'goods' | 'cash';
   amountCents: number;
   productId: number | null;
@@ -391,17 +398,23 @@ export interface ValuationItem {
   categoryId: number;
   categoryName: string;
   book: Book;
+  segment: StoredSegment | null;
   active: boolean;
   qty: number;
   valueCents: number;
   avgUnitCostCents: number | null;
 }
+export interface ValuationSegment { segment: StoredSegment; label: string; qty: number; valueCents: number }
 export interface BookTotals { qty: number; valueCents: number }
 /** Stock valuation report; `asOf` null means "now". Totals are summed by the server, never by the browser. */
 export interface Valuation {
   asOf: string | null;
   items: ValuationItem[];
-  totals: { qty: number; valueCents: number; byBook: { shop: BookTotals; telecom: BookTotals } };
+  totals: {
+    qty: number; valueCents: number; byBook: { shop: BookTotals; telecom: BookTotals };
+    /** The four Cards segments (+ `legacy` only when it holds stock); sums to byBook.telecom. */
+    byTelecomSegment: ValuationSegment[];
+  };
 }
 export interface ValuationQuery { book?: Book; categoryId?: number; asOf?: string; includeZero?: boolean; includeInactive?: boolean }
 
