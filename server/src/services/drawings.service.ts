@@ -30,7 +30,7 @@ import type { CashWarning } from './cash-warnings.ts';
 import { issueStock, outflowValue, reverseMovements } from './inventory.service.ts';
 import { assertDayOpen } from './day-closing.ts';
 import { assertFundMatchesBook } from './fund-rules.ts';
-import { segmentOfProduct } from './segments.ts';
+import { resolveEntrySegment, segmentOfProduct } from './segments.ts';
 import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
@@ -70,7 +70,7 @@ export function getDrawing(ctx: AppContext, id: number): Drawing {
  * `totals` splits that sum into the stock cost of goods drawings and the money of cash drawings.
  */
 export function listDrawings(ctx: AppContext, q: {
-  kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; productId?: number; status?: DrawingStatus;
+  kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; segment?: StoredSegment; productId?: number; status?: DrawingStatus;
   limit: number; offset: number;
 }): { items: Drawing[]; total: number; totalAmountCents: number; totals: { amountCents: number; goodsCents: number; cashCents: number } } {
   const r = listDrawingRows(ctx.database.conn, q);
@@ -85,7 +85,7 @@ export function listDrawings(ctx: AppContext, q: {
  * for Ice Cream only, `fund`.
  */
 export interface DrawingCreate {
-  kind: DrawingKind; businessDate: string; productId?: number; qty?: number; book?: DrawingBook; fund?: DrawingFund;
+  kind: DrawingKind; businessDate: string; productId?: number; qty?: number; book?: DrawingBook; segment?: StoredSegment; fund?: DrawingFund;
   amountCents?: number; note?: string; clientRef: string;
 }
 
@@ -179,30 +179,31 @@ function createCashDrawing(ctx: AppContext, body: DrawingCreate, note: string): 
   const book = body.book as DrawingBook;
   const amountCents = body.amountCents as number;
   assertFundMatchesBook(book, body.fund);
+  const segment = resolveEntrySegment(book, body.segment); // 13D: Telecom requires one of the eight, others forbid
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
   const fund = book === 'icecream' ? (body.fund as DrawingFund) : null;
 
   return runWrite(ctx, (conn) => {
     const existing = getDrawingByClientRef(conn, body.clientRef);
     if (existing) {
-      if (existing.kind !== 'cash' || existing.book !== book) {
+      if (existing.kind !== 'cash' || existing.book !== book || existing.segment !== segment) {
         throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different record.');
       }
       return { item: toDrawing(existing), warnings: [], created: false };
     }
 
-    assertDayOpen(conn, [book], body.businessDate); // R9
+    assertDayOpen(conn, [{ book, segment }], body.businessDate); // R9, that segment only
     const id = insertDrawing(conn, {
-      businessDate: body.businessDate, book, fund, kind: 'cash', amountCents, note, clientRef: body.clientRef,
+      businessDate: body.businessDate, book, segment, fund, kind: 'cash', amountCents, note, clientRef: body.clientRef,
     });
     postCash(conn, {
-      book, fund, businessDate: body.businessDate, type: 'drawing_cash', amountCents: -amountCents,
+      book, fund, segment, businessDate: body.businessDate, type: 'drawing_cash', amountCents: -amountCents,
       refTable: 'owner_drawings', refId: id, fundKind: 'drawing', note: note || null,
     });
     const item = loadDrawing(conn, id);
     logAudit(conn, 'drawing', String(id), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, warnings: negativeCashWarnings(conn, [book]), created: true }; // R13: warn, never block
+    return { item, warnings: negativeCashWarnings(conn, [{ book, segment }]), created: true }; // R13: warn, never block
   });
 }
 

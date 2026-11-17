@@ -28,10 +28,18 @@ function insert(c: DatabaseSync, table: string, defaults: Row, over: Row): numbe
   return Number(c.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((k) => row[k] as string | number | null)).lastInsertRowid);
 }
 /** A valid Shop -> Telecom transfer of 1,000 cents; any column can be overridden. */
-const transfer = (c: DatabaseSync, o: Row = {}) =>
-  insert(c, 'cash_transfers', { business_date: today(), from_book: 'shop', to_book: 'telecom', amount_cents: 1000, client_ref: uniq() }, o);
+// Phase 26 (13D): a Telecom side names its segment (defaults: Dialog Reloads, or Dialog Cards on the receiving side of a Telecom-to-Telecom transfer).
+const transfer = (c: DatabaseSync, o: Row = {}) => {
+  const from = (o.from_book ?? 'shop') as string;
+  const to = (o.to_book ?? 'telecom') as string;
+  return insert(c, 'cash_transfers', {
+    business_date: today(), from_book: 'shop', to_book: 'telecom', amount_cents: 1000, client_ref: uniq(),
+    from_segment: from === 'telecom' ? 'dialog_reloads' : null,
+    to_segment: to === 'telecom' ? (from === 'telecom' ? 'dialog_cards' : 'dialog_reloads') : null,
+  }, o);
+};
 const leg = (c: DatabaseSync, o: Row = {}) =>
-  insert(c, 'cash_entries', { book: 'shop', business_date: today(), type: 'transfer_out', amount_cents: -1000, transfer_id: null }, o);
+  insert(c, 'cash_entries', { book: 'shop', segment: o.book === 'telecom' ? 'dialog_reloads' : null, business_date: today(), type: 'transfer_out', amount_cents: -1000, transfer_id: null }, o);
 const upd = (c: DatabaseSync, set: string, id: number, ...p: Array<string | number | null>) =>
   c.prepare(`UPDATE cash_transfers SET ${set} WHERE id = ?`).run(...p, id);
 
@@ -57,7 +65,10 @@ describe('cash_transfers - constraints', () => {
 
   it('from_book <> to_book: the same book on both sides is refused (every book)', () => {
     const c = memDb(conns);
-    for (const book of ['shop', 'telecom']) expect(msgOf(() => transfer(c, { from_book: book, to_book: book })), book).toMatch(/CHECK constraint/);
+    expect(msgOf(() => transfer(c, { from_book: 'shop', to_book: 'shop' }))).toMatch(/CHECK constraint/);
+    // Phase 26: Telecom to Telecom is allowed between two DIFFERENT segments only
+    expect(msgOf(() => transfer(c, { from_book: 'telecom', to_book: 'telecom', from_segment: 'dialog_reloads', to_segment: 'dialog_reloads' }))).toMatch(/CHECK constraint/);
+    expect(transfer(c, { from_book: 'telecom', to_book: 'telecom', from_segment: 'dialog_reloads', to_segment: 'mobitel_reloads' })).toBeGreaterThan(0);
     expect(msgOf(() => transfer(c, { from_book: 'icecream', to_book: 'icecream', from_fund: 'cost', to_fund: 'profit' }))).toMatch(/CHECK constraint/);
   });
 

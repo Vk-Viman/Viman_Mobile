@@ -17,6 +17,8 @@ import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging,
   voidBody,
 } from './catalog-query.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { registerCorrectionEndpoints, drawingCorrection } from '../services/correction-cash.ts';
 import { correctionBodySchema } from './corrections.ts';
 
@@ -42,6 +44,7 @@ const createBody = {
     productId: { type: 'integer', minimum: 1 },
     qty: { type: 'integer', minimum: 1, maximum: 1000000000 },
     book: bookEnum,
+    segment: STORED_SEGMENT_SCHEMA,
     fund: fundEnum,
     amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS },
     note: { type: 'string' },
@@ -57,6 +60,7 @@ const listQuery = {
     from: dateQuery,
     to: dateQuery,
     book: bookEnum,
+    segment: STORED_SEGMENT_SCHEMA,
     productId: intQuery,
     status: { type: 'string', enum: ['posted', 'void'] },
     limit: intQuery,
@@ -73,7 +77,7 @@ export function registerDrawingRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   app.get('/drawings', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      kind?: 'goods' | 'cash'; from?: string; to?: string; book?: 'shop' | 'telecom' | 'icecream'; productId?: string;
+      kind?: 'goods' | 'cash'; from?: string; to?: string; book?: 'shop' | 'telecom' | 'icecream'; segment?: StoredSegment; productId?: string;
       status?: 'posted' | 'void'; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
@@ -83,6 +87,7 @@ export function registerDrawingRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.productId !== undefined) q.productId = Number(raw.productId);
     if (raw.status !== undefined) q.status = raw.status;
     return listDrawings(ctx, q);

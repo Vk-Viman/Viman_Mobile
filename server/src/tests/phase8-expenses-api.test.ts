@@ -160,11 +160,11 @@ describe('POST /expenses - create', () => {
     // exact boundary: spending everything that is left leaves exactly 0 -> no warning
     expect((await expNew(s, { amountCents: 850000 })).body.warnings).toEqual([]);
     expect(bookBal(s, 'shop')).toBe(0);
-    // telecom is judged on its own book
+    // telecom is judged on its own segment (Phase 26: expNew defaults the Telecom segment to Dialog Reloads)
     const t = await expNew(s, { book: 'telecom', amountCents: 100 });
     expect(t.body.warnings).toEqual([{
-      code: 'NEGATIVE_CASH_BALANCE', book: 'telecom', balanceCents: -100,
-      message: 'The Telecom cash book is now below zero (-Rs. 1.00). Check that the opening balance and sales are recorded.',
+      code: 'NEGATIVE_CASH_BALANCE', book: 'telecom', segment: 'dialog_reloads', balanceCents: -100,
+      message: 'The Telecom - Dialog Reloads cash book is now below zero (-Rs. 1.00). Check that the opening balance and sales are recorded.',
     }]);
   });
 });

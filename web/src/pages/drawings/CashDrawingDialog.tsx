@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { FormDialog } from '../../components/FormDialog';
 import { MoneyInput } from '../../components/MoneyInput';
+import { SegmentSelect } from '../../components/SegmentSelect';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useCreateCashDrawing } from '../../api/transfers';
@@ -20,6 +21,7 @@ import { MAX_NOTE, parseMoney } from '../../lib/amounts';
 import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner, fieldError } from '../../lib/errors';
 import type { CashBook, IceFund } from '../../types/cashbooks';
+import type { TelecomSegment } from '../../types/segments';
 import { CASHBOOK_LABEL } from '../cashbooks/shared';
 import { BookFundFields, fundFor } from './BookFundFields';
 
@@ -30,18 +32,19 @@ export function CashDrawingDialog({ onClose }: { onClose: () => void }) {
   const clientRef = useClientRef();
   const { today, date, setDate } = useBusinessDate();
   const [book, setBook] = useState<CashBook>('shop');
+  const [segment, setSegment] = useState<TelecomSegment | ''>('');
   const [fund, setFund] = useState<IceFund>('profit');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [showErrors, setShowErrors] = useState(false);
 
   const amountCents = parseMoney(amount);
-  const canSubmit = Boolean(date) && amountCents !== null && note.length <= MAX_NOTE && !create.isPending;
+  const canSubmit = Boolean(date) && (book !== 'telecom' || segment !== '') && amountCents !== null && note.length <= MAX_NOTE && !create.isPending;
 
   const submit = () => {
     if (!canSubmit || amountCents === null) { setShowErrors(true); return; }
     create.mutate(
-      { kind: 'cash', businessDate: date, book, ...fundFor(book, fund), amountCents, note: note.trim() || undefined, clientRef },
+      { kind: 'cash', businessDate: date, book, ...(book === 'telecom' && segment ? { segment } : {}), ...fundFor(book, fund), amountCents, note: note.trim() || undefined, clientRef },
       {
         onSuccess: (r) => {
           toast.success('Cash drawing recorded.');
@@ -55,13 +58,14 @@ export function CashDrawingDialog({ onClose }: { onClose: () => void }) {
   const err = create.error;
   return (
     <FormDialog title="Record cash drawing" submitLabel="Save" canSubmit={canSubmit} loading={create.isPending}
-      error={errorBanner(err, ['businessDate', 'book', 'fund', 'amountCents', 'note'])} onSubmit={submit} onClose={onClose}>
+      error={errorBanner(err, ['businessDate', 'book', 'segment', 'fund', 'amountCents', 'note'])} onSubmit={submit} onClose={onClose}>
       <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
         Money you take out of the {CASHBOOK_LABEL[book]} cash book for yourself. It is not a business expense and does not change profit.
       </p>
       <TextField label="Date" type="date" value={date} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(err, 'businessDate')} />
       <BookFundFields bookLabel="Taken from" book={book} fund={fund} onBook={setBook} onFund={setFund}
         bookError={fieldError(err, 'book')} fundError={fieldError(err, 'fund')} />
+      {book === 'telecom' && <SegmentSelect value={segment} onChange={setSegment} error={fieldError(err, 'segment') ?? (showErrors && segment === '' ? 'Choose the Telecom segment.' : undefined)} />}
       <MoneyInput label="Amount (Rs.)" value={amount} onChange={setAmount}
         error={fieldError(err, 'amountCents') ?? (showErrors && amountCents === null ? 'Enter an amount above zero, such as 2500 or 2500.50.' : undefined)} />
       <TextField label="Note (optional)" value={note} maxLength={MAX_NOTE} onChange={(e) => setNote(e.target.value)} autoComplete="off" error={fieldError(err, 'note')} />

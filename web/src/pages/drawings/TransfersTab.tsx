@@ -64,9 +64,9 @@ export function TransfersTab() {
       key: 'move', header: 'From → To',
       render: (t) => (
         <span className="inline-flex flex-wrap items-center gap-2">
-          <CashBookBadge book={t.fromBook} fund={t.fromFund} />
+          <CashBookBadge book={t.fromBook} fund={t.fromFund} segment={t.fromSegment} />
           <ArrowRight size={14} className="text-slate-400" aria-label="to" />
-          <CashBookBadge book={t.toBook} fund={t.toFund} />
+          <CashBookBadge book={t.toBook} fund={t.toFund} segment={t.toSegment} />
         </span>
       ),
     },
@@ -123,7 +123,7 @@ export function TransfersTab() {
       {voiding && (
         <VoidRecordDialog
           title={`Void transfer #${voiding.id}`}
-          intro={`This cancels the ${formatLKR(voiding.amountCents)} transfer of ${voiding.businessDate}: the money goes back from ${bookFundLabel(voiding.toBook, voiding.toFund)} to ${bookFundLabel(voiding.fromBook, voiding.fromFund)}. It cannot be undone.`}
+          intro={`This cancels the ${formatLKR(voiding.amountCents)} transfer of ${voiding.businessDate}: the money goes back from ${bookFundLabel(voiding.toBook, voiding.toFund, voiding.toSegment)} to ${bookFundLabel(voiding.fromBook, voiding.fromFund, voiding.fromSegment)}. It cannot be undone.`}
           submitLabel="Void transfer"
           pending={voidMut.isPending}
           run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, { onSuccess: (r) => { notifyCashWarnings(toast, r.warnings); cb.onSuccess(); }, onError: cb.onError })}

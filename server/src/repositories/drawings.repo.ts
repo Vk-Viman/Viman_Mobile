@@ -70,7 +70,7 @@ export function getDrawingByClientRef(conn: DatabaseSync, ref: string): DrawingR
  * (goods = stock cost removed, cash = money out of a book; voided rows are listed but not summed). `from`/`to` are inclusive business dates.
  */
 export function listDrawings(conn: DatabaseSync, q: {
-  kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; productId?: number; status?: DrawingStatus;
+  kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; segment?: StoredSegment; productId?: number; status?: DrawingStatus;
   limit: number; offset: number;
 }): { items: DrawingRow[]; total: number; totalAmountCents: number; goodsCents: number; cashCents: number } {
   const where: string[] = [];
@@ -79,6 +79,7 @@ export function listDrawings(conn: DatabaseSync, q: {
   if (q.from !== undefined) { where.push('d.business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('d.business_date <= ?'); params.push(q.to); }
   if (q.book !== undefined) { where.push('d.book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('d.segment = ?'); params.push(q.segment); }
   if (q.productId !== undefined) { where.push('d.product_id = ?'); params.push(q.productId); }
   if (q.status !== undefined) { where.push('d.status = ?'); params.push(q.status); }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';

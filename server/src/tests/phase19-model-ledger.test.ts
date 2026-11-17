@@ -24,22 +24,33 @@ afterEach(async () => { await env.cleanup(); });
 const BOOKS: Book[] = ['shop', 'telecom', 'icecream'];
 const FUNDS: Fund[] = ['cost', 'electricity', 'profit'];
 
+// Phase 26 (13D): the model keeps one ledger per SCOPE: 'shop', 'icecream' or 'telecom:<segment>'. Three Telecom segments are exercised (the
+// two Dialog segments the reload / top-up flows write to, and Mobitel Reloads); the Telecom book is the sum of its segments.
+type Scope = string;
+const TELECOM_SEGS = ['dialog_reloads', 'dialog_cards', 'mobitel_reloads'] as const;
+const SCOPES: Scope[] = ['shop', ...TELECOM_SEGS.map((x) => `telecom:${x}`), 'icecream'];
+const bookOf = (sc: Scope): Book => sc.split(':')[0] as Book;
+const segOf = (sc: Scope): string | undefined => sc.split(':')[1];
+/** Request fragment naming the segment of a Telecom scope. */
+const segBody = (sc: Scope): Record<string, unknown> => (segOf(sc) ? { segment: segOf(sc) } : {});
+const scopesOfBook = (book: Book): Scope[] => SCOPES.filter((sc) => bookOf(sc) === book);
+
 /** One ledger row of the model: the date, the signed amount, the fund (Ice Cream) and the posting order. */
 interface MEntry { date: string; amount: number; fund: Fund | null; seq: number }
-interface MRecord { id: number; book: Book; date: string; amount: number; fund?: Fund | null; voided: boolean; kind: string }
+interface MRecord { id: number; book: Scope; date: string; amount: number; fund?: Fund | null; voided: boolean; kind: string }
 
 class Model {
   seq = 0;
-  entries: Record<Book, MEntry[]> = { shop: [], telecom: [], icecream: [] };
+  entries: Record<Scope, MEntry[]> = Object.fromEntries(SCOPES.map((sc) => [sc, [] as MEntry[]]));
   closed = new Set<string>();
   closingId = new Map<string, number>();
   records: MRecord[] = [];
-  push(book: Book, date: string, amount: number, fund: Fund | null = null): void {
-    this.entries[book].push({ date, amount, fund, seq: this.seq++ });
+  push(book: Scope, date: string, amount: number, fund: Fund | null = null): void {
+    this.entries[book]!.push({ date, amount, fund, seq: this.seq++ });
   }
-  isClosed(book: Book, date: string): boolean { return this.closed.has(`${book}|${date}`); }
+  isClosed(book: Scope, date: string): boolean { return this.closed.has(`${book}|${date}`); }
   /** The latest currently-closed date of a book, or null (closed-day ordering protection, section 8). */
-  latest(book: Book): string | null {
+  latest(book: Scope): string | null {
     let best: string | null = null;
     for (const k of this.closed) { const [b, d] = k.split('|'); if (b === book && (best === null || (d as string) > best)) best = d as string; }
     return best;
@@ -48,25 +59,31 @@ class Model {
    * Why a write dated `date` in `book` is refused, or null. `money` = the write posts a cash entry (a count that matches, or the void of one, posts
    * none and only needs an open day): DAY_CLOSED on a closed day, BACKDATE_BEFORE_CLOSED_DAY when a later day is closed.
    */
-  refusal(book: Book, date: string, money = true): 'DAY_CLOSED' | 'BACKDATE_BEFORE_CLOSED_DAY' | null {
+  refusal(book: Scope, date: string, money = true): 'DAY_CLOSED' | 'BACKDATE_BEFORE_CLOSED_DAY' | null {
     if (this.isClosed(book, date)) return 'DAY_CLOSED';
     const l = this.latest(book);
     return money && l !== null && l > date ? 'BACKDATE_BEFORE_CLOSED_DAY' : null;
   }
   /** Balance of the book at the END of `date` (every entry dated on or before it). */
-  expected(book: Book, date: string): number {
-    return this.entries[book].filter((e) => e.date <= date).reduce((a, e) => a + e.amount, 0);
+  expected(book: Scope, date: string): number {
+    return this.entries[book]!.filter((e) => e.date <= date).reduce((a, e) => a + e.amount, 0);
   }
-  balance(book: Book): number { return this.entries[book].reduce((a, e) => a + e.amount, 0); }
+  balance(book: Scope): number { return this.entries[book]!.reduce((a, e) => a + e.amount, 0); }
+  /** A whole book: the sum of its scopes (the Telecom total is the sum of its segments). */
+  bookBalance(book: Book): number { return scopesOfBook(book).reduce((a, sc) => a + this.balance(sc), 0); }
   funds(): Record<Fund, number> {
     const f: Record<Fund, number> = { cost: 0, electricity: 0, profit: 0 };
-    for (const e of this.entries.icecream) f[e.fund as Fund] += e.amount;
+    for (const e of this.entries.icecream!) f[e.fund as Fund] += e.amount;
     return f;
   }
-  sorted(book: Book): MEntry[] {
-    return [...this.entries[book]].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.seq - b.seq));
+  sorted(book: Scope): MEntry[] {
+    return [...this.entries[book]!].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.seq - b.seq));
   }
-  hasOpening(book: Book, fund: Fund | null): boolean {
+  /** Rows of a whole book (every scope of it) in (date, posting) order. */
+  sortedBook(book: Book): MEntry[] {
+    return scopesOfBook(book).flatMap((sc) => this.entries[sc]!).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.seq - b.seq));
+  }
+  hasOpening(book: Scope, fund: Fund | null): boolean {
     return this.records.some((r) => r.kind === 'opening' && !r.voided && r.book === book && (r.fund ?? null) === fund);
   }
 }
@@ -88,30 +105,31 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
   let lastExpense: { body: Record<string, unknown>; id: number } | null = null;
   const at = (i: number, what: string) => `seed ${seed} step ${i}: ${what}`;
   /** A date for a write touching `book`: usually one the model knows is permitted, sometimes any (possibly blocked) date. */
-  const dateFor = (book: Book): string => biased(rnd, DATES, (d) => m.refusal(book, d) === null);
+  const dateFor = (book: Scope): string => biased(rnd, DATES, (d) => m.refusal(book, d) === null);
   /** A record to void: usually one whose void is permitted, sometimes any. */
-  const pickRec = <T extends { book: Book; date: string }>(xs: T[]): T => {
+  const pickRec = <T extends { book: Scope; date: string }>(xs: T[]): T => {
     const ok = xs.filter((r) => m.refusal(r.book, r.date) === null);
     return ok.length > 0 && rnd() < 0.78 ? pick(ok) : pick(xs);
   };
 
   /** Expects the answer the model predicts for a refused write dated `date` in `book` (409 DAY_CLOSED, or BACKDATE_BEFORE_CLOSED_DAY before a closed day). */
-  const expectClosed = (i: number, r: { status: number; body: any }, book: Book, date: string, what: string, money = true): void => {
+  const expectClosed = (i: number, r: { status: number; body: any }, scope: Scope, date: string, what: string, money = true): void => {
+    const book = bookOf(scope);
     expect(r.status, at(i, `${what} ${JSON.stringify(r.body)}`)).toBe(409);
-    if (m.refusal(book, date, money) === 'DAY_CLOSED') expect(err(r), at(i, what)).toMatchObject({ code: 'DAY_CLOSED', book, businessDate: date });
-    else expect(err(r), at(i, what)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book, businessDate: date, closedDate: m.latest(book) });
+    if (m.refusal(scope, date, money) === 'DAY_CLOSED') expect(err(r), at(i, what)).toMatchObject({ code: 'DAY_CLOSED', book, businessDate: date });
+    else expect(err(r), at(i, what)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book, businessDate: date, closedDate: m.latest(scope) });
     stats.closedRejections++;
-    cov.hit(`${m.refusal(book, date, money)}:${what}`);
+    cov.hit(`${m.refusal(scope, date, money)}:${what}`);
   };
 
   async function oneStep(i: number): Promise<void> {
     const op = int(0, 99);
 
     if (op < 12) { // expense create (shop/telecom)
-      const book = pick(['shop', 'telecom'] as const);
+      const book: Scope = pick(['shop', ...TELECOM_SEGS.map((x) => `telecom:${x}`)]);
       const date = dateFor(book);
       const amount = int(100, 9999);
-      const body = { businessDate: date, book, category: 'other', amountCents: amount, description: 'E', clientRef: ref() };
+      const body = { businessDate: date, book: bookOf(book), ...segBody(book), category: 'other', amountCents: amount, description: 'E', clientRef: ref() };
       const r = await expNew(s, body);
       if (m.refusal(book, date)) return expectClosed(i, r, book, date, 'expense');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
@@ -159,23 +177,23 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
       cov.hit('ok:print');
       m.records.push({ id: r.body.item.id, book: 'shop', date, amount: qty * 1500, voided: false, kind: 'print' });
     } else if (op < 36) { // reload (telecom cash in the FULL collection)
-      const date = dateFor('telecom');
+      const date = dateFor('telecom:dialog_reloads');
       const amount = int(1000, 50000);
       const r = await post(s.app, '/reload-sales', { businessDate: date, providerId: prov.Dialog, salesCents: amount, clientRef: ref() });
-      if (m.refusal('telecom', date)) return expectClosed(i, r, 'telecom', date, 'reload');
+      if (m.refusal('telecom:dialog_reloads', date)) return expectClosed(i, r, 'telecom:dialog_reloads', date, 'reload');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
-      m.push('telecom', date, amount);
+      m.push('telecom:dialog_reloads', date, amount);
       cov.hit('ok:reload');
-      m.records.push({ id: r.body.item.id, book: 'telecom', date, amount, voided: false, kind: 'reload' });
+      m.records.push({ id: r.body.item.id, book: 'telecom:dialog_reloads', date, amount, voided: false, kind: 'reload' });
     } else if (op < 40) { // wallet top-up (telecom cash out)
-      const date = dateFor('telecom');
+      const date = dateFor('telecom:dialog_reloads');
       const amount = int(500, 20000);
       const r = await post(s.app, '/telecom/topups', { businessDate: date, kind: 'wallet_topup', amountCents: amount, clientRef: ref() });
-      if (m.refusal('telecom', date)) return expectClosed(i, r, 'telecom', date, 'topup');
+      if (m.refusal('telecom:dialog_reloads', date)) return expectClosed(i, r, 'telecom:dialog_reloads', date, 'topup');
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
-      m.push('telecom', date, -amount);
+      m.push('telecom:dialog_reloads', date, -amount);
       cov.hit('ok:topup');
-      m.records.push({ id: r.body.item.id, book: 'telecom', date, amount, voided: false, kind: 'topup' });
+      m.records.push({ id: r.body.item.id, book: 'telecom:dialog_reloads', date, amount, voided: false, kind: 'topup' });
     } else if (op < 43) { // shop purchase (cash out)
       const date = dateFor('shop');
       const total = int(1000, 90000);
@@ -186,11 +204,11 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
       cov.hit('ok:purchase');
       m.records.push({ id: r.body.item.id, book: 'shop', date, amount: total, voided: false, kind: 'purchase' });
     } else if (op < 53) { // opening balance
-      const book = pick(BOOKS);
+      const book = pick(SCOPES);
       const date = dateFor(book);
       const fund = book === 'icecream' ? pick(FUNDS) : null;
       const amount = int(1000, 99999);
-      const r = await openNew(s, book, { businessDate: date, amountCents: amount, ...(fund ? { fund } : {}) });
+      const r = await openNew(s, bookOf(book), { businessDate: date, amountCents: amount, ...segBody(book), ...(fund ? { fund } : {}) });
       if (m.refusal(book, date)) return expectClosed(i, r, book, date, 'opening');
       if (m.hasOpening(book, fund)) {
         expect(r.status, at(i, 'opening exists')).toBe(409);
@@ -214,14 +232,14 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
       cov.hit('ok:void opening');
       r.voided = true;
     } else if (op < 72) { // cash count with over/short
-      const book = pick(BOOKS);
+      const book = pick(SCOPES);
       const date = dateFor(book);
       const expected = m.expected(book, date);
       const delta = pick([0, 0, 1, -1, int(-5000, 5000), int(-300, 300)]);
       const counted = Math.max(0, expected + delta);
       const diff = counted - expected;
       const fund = book === 'icecream' ? pick(FUNDS) : undefined;
-      const r = await countNew(s, book, counted, { businessDate: date, note: 'n', ...(fund ? { fund } : {}) });
+      const r = await countNew(s, bookOf(book), counted, { businessDate: date, note: 'n', ...segBody(book), ...(fund ? { fund } : {}) });
       if (m.refusal(book, date, diff !== 0)) return expectClosed(i, r, book, date, 'count', diff !== 0);
       expect(r.status, at(i, JSON.stringify(r.body))).toBe(201);
       expect(r.body.item, at(i, 'count figures')).toMatchObject({ expectedCents: expected, countedCents: counted, differenceCents: diff });
@@ -239,7 +257,7 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
       cov.hit('ok:void count');
       r.voided = true;
     } else if (op < 90) { // close a day (optionally with a count)
-      const book = pick(BOOKS);
+      const book = pick(SCOPES);
       // closings lean to the older days so they leave the newer days open for permitted writes (still any day 20% of the time)
       const date = rnd() < 0.8 ? pick(DATES.slice(3)) : pick(DATES);
       const withCount = rnd() < 0.45;
@@ -247,7 +265,7 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
       const counted = Math.max(0, expected + pick([0, 3, -3, int(-2000, 2000)]));
       const diff = counted - expected;
       const fund = book === 'icecream' ? pick(FUNDS) : undefined;
-      const r = await closeNew(s, book, date, { ...(withCount ? { countedCents: counted, note: 'n' } : {}), ...(fund && withCount ? { fund } : {}) });
+      const r = await closeNew(s, bookOf(book), date, { ...segBody(book), ...(withCount ? { countedCents: counted, note: 'n' } : {}), ...(fund && withCount ? { fund } : {}) });
       if (m.isClosed(book, date)) {
         expect(r.status, at(i, 'already closed')).toBe(409);
         expect(err(r).code, at(i, 'already closed')).toBe('DAY_ALREADY_CLOSED');
@@ -285,12 +303,24 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
 
   async function verify(i: number): Promise<void> {
     const sum = (await get(s.app, '/cashbooks')).body;
+    // Telecom segments: each segment ledger, balance and summary entry equals the model's scope; the Telecom total is their sum
+    const tele = sum.books.find((b: any) => b.book === 'telecom');
+    for (const x of TELECOM_SEGS) {
+      const sc = `telecom:${x}`;
+      expect(num(s, "SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = 'telecom' AND segment = ?", x), at(i, `${sc} ledger sum`)).toBe(m.balance(sc));
+      expect(tele.segments.find((g: any) => g.segment === x)?.balanceCents ?? 0, at(i, `${sc} summary`)).toBe(m.balance(sc));
+      const rowsS = m.sorted(sc);
+      const ledS = (await get(s.app, `/cashbooks/telecom?segment=${x}&limit=200`)).body;
+      let runS = 0;
+      expect(ledS.items.map((r: any) => [r.businessDate, r.amountCents, r.runningBalanceCents]), at(i, `${sc} ledger rows`)).toEqual(
+        rowsS.map((r) => { runS += r.amount; return [r.date, r.amount, runS]; }));
+    }
     for (const book of BOOKS) {
-      const modelBal = m.balance(book);
+      const modelBal = m.bookBalance(book);
       expect(bookBal(s, book), at(i, `${book} ledger sum`)).toBe(modelBal);
       expect(sum.books.find((b: any) => b.book === book).balanceCents, at(i, `${book} summary`)).toBe(modelBal);
       // the paged ledger = the model rows in (date, posting) order, with running balances
-      const rows = m.sorted(book);
+      const rows = m.sortedBook(book);
       const got: any[] = [];
       for (let off = 0; ; off += 13) {
         const p = (await get(s.app, `/cashbooks/${book}?limit=13&offset=${off}`)).body;
@@ -311,19 +341,26 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
       const inC = inP.filter((r) => r.amount > 0).reduce((x, r) => x + r.amount, 0);
       const outC = inP.filter((r) => r.amount < 0).reduce((x, r) => x - r.amount, 0);
       expect({ o: per.openingCents, i: per.inCents, u: per.outCents, c: per.closingCents }, at(i, `${book} period ${from}..${to}`)).toEqual({ o: opening, i: inC, u: outC, c: opening + inC - outC });
-      expect(per.closedDates, at(i, `${book} closed dates`)).toEqual(DATES.filter((d) => d >= from && d <= to && m.isClosed(book, d)).sort());
+      if (book !== 'telecom') expect(per.closedDates, at(i, `${book} closed dates`)).toEqual(DATES.filter((d) => d >= from && d <= to && m.isClosed(book, d)).sort());
+      else {
+        // Telecom: closed days are per segment (the total ledger has no closed days of its own)
+        for (const x of TELECOM_SEGS) {
+          const ps = (await get(s.app, `/cashbooks/telecom?segment=${x}&from=${from}&to=${to}&limit=200`)).body;
+          expect(ps.closedDates, at(i, `telecom:${x} closed dates`)).toEqual(DATES.filter((d) => d >= from && d <= to && m.isClosed(`telecom:${x}`, d)).sort());
+        }
+      }
     }
     // Ice Cream funds
     const mf = m.funds();
     expect(fundBal(s), at(i, 'fund balances')).toEqual(mf);
-    expect(mf.cost + mf.electricity + mf.profit, at(i, 'model funds = book')).toBe(m.balance('icecream'));
+    expect(mf.cost + mf.electricity + mf.profit, at(i, 'model funds = book')).toBe(m.bookBalance('icecream'));
     expect(reconcileIceCream(s.ctx.database.conn), at(i, 'reconcile')).toMatchObject({ ok: true, differenceCents: 0, byFund: mf });
     expect(sum.books.find((b: any) => b.book === 'icecream').funds, at(i, 'summary funds')).toEqual(mf);
     // closed set
-    for (const book of BOOKS) {
+    for (const sc of SCOPES) {
       for (const d of DATES) {
-        const st = (await get(s.app, `/daily-closings/status?book=${book}&businessDate=${d}`)).body.isClosed;
-        expect(st, at(i, `status ${book} ${d}`)).toBe(m.isClosed(book, d));
+        const st = (await get(s.app, `/daily-closings/status?book=${bookOf(sc)}${segOf(sc) ? `&segment=${segOf(sc)}` : ''}&businessDate=${d}`)).body.isClosed;
+        expect(st, at(i, `status ${sc} ${d}`)).toBe(m.isClosed(sc, d));
       }
     }
   }
@@ -336,9 +373,9 @@ async function run(seed: number, steps: number): Promise<{ stats: Stats; cov: Co
   }
   await verify(steps);
   // every ledger row has its source record: no orphan cash entries, and each Ice Cream cash entry has exactly one same-amount fund row
-  expect(num(s, "SELECT COUNT(*) FROM cash_entries WHERE book = 'icecream'"), `seed ${seed} icecream cash rows`).toBe(m.entries.icecream.length);
-  expect(num(s, 'SELECT COUNT(*) FROM icecream_fund_entries'), `seed ${seed} fund rows`).toBe(m.entries.icecream.length);
-  expect(num(s, 'SELECT COUNT(*) FROM cash_entries'), `seed ${seed} all cash rows`).toBe(BOOKS.reduce((a, b) => a + m.entries[b].length, 0));
+  expect(num(s, "SELECT COUNT(*) FROM cash_entries WHERE book = 'icecream'"), `seed ${seed} icecream cash rows`).toBe(m.entries.icecream!.length);
+  expect(num(s, 'SELECT COUNT(*) FROM icecream_fund_entries'), `seed ${seed} fund rows`).toBe(m.entries.icecream!.length);
+  expect(num(s, 'SELECT COUNT(*) FROM cash_entries'), `seed ${seed} all cash rows`).toBe(SCOPES.reduce((a, b) => a + m.entries[b]!.length, 0));
   console.log(statsLine(`ledger seed ${seed}/${steps}`, { ...stats }));
   console.log(cov.line(`[phase19m] ledger seed ${seed} coverage`));
   return { stats, cov };
