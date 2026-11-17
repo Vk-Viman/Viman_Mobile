@@ -127,11 +127,13 @@ describe('POST /cash-transfers - validation', () => {
   it('SAME_BOOK: the same book on both sides is refused (also Ice Cream to Ice Cream), nothing written', async () => {
     const s = await setup();
     const before = snap9(s);
-    for (const book of ['shop', 'telecom'] as const) {
-      const r = await tr(s, book, book, 100);
-      expect(r.status).toBe(400);
-      expect(err(r)).toMatchObject({ code: 'SAME_BOOK', fields: { toBook: expect.any(String) } });
-    }
+    const r = await tr(s, 'shop', 'shop', 100);
+    expect(r.status).toBe(400);
+    expect(err(r)).toMatchObject({ code: 'SAME_BOOK', fields: { toBook: expect.any(String) } });
+    // Phase 26 (13D): Telecom to Telecom is a move between two segments, so only the SAME segment on both sides is refused
+    const seg = await tr(s, 'telecom', 'telecom', 100, { fromSegment: 'dialog_reloads', toSegment: 'dialog_reloads' });
+    expect(seg.status).toBe(400);
+    expect(err(seg)).toMatchObject({ code: 'SAME_SEGMENT', fields: { toSegment: expect.any(String) } });
     const ice = await tr(s, 'icecream', 'icecream', 100, { fromFund: 'cost', toFund: 'profit' });
     expect(err(ice).code).toBe('SAME_BOOK'); // moving money between funds is a fund move (Phase 10), not a transfer
     expect(snap9(s)).toEqual(before);
