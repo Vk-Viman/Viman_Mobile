@@ -205,10 +205,11 @@ BEGIN
                            THEN 'CATEGORY_PROVIDER_NOT_ALLOWED' ELSE 'CATEGORY_PROVIDER_LOCKED' END);
 END;
 
--- a NEW Telecom stock product needs a category that has a provider (existing provider-less products stay legacy)
+-- a NEW Telecom stock product needs a category that has a provider (existing provider-less products stay legacy; a book mismatch keeps its own error)
 CREATE TRIGGER trg_products_needs_provider
 BEFORE INSERT ON products
-WHEN NEW.book = 'telecom' AND NEW.kind = 'stock' AND (SELECT provider_id FROM categories WHERE id = NEW.category_id) IS NULL
+WHEN NEW.book = 'telecom' AND NEW.kind = 'stock'
+ AND EXISTS (SELECT 1 FROM categories c WHERE c.id = NEW.category_id AND c.book = 'telecom' AND c.provider_id IS NULL)
 BEGIN
   SELECT RAISE(ABORT, 'PRODUCT_NEEDS_PROVIDER');
 END;

@@ -145,7 +145,8 @@ describe('migration 015 on a database that already holds data', () => {
     const seqBefore = all(db, "SELECT seq FROM sqlite_sequence WHERE name = 'categories'")[0]!.seq;
     // 015 and every later migration (016 ... ) are applied on top of the schema-14 database
     expect(migrate(db).applied).toEqual(loadMigrations().filter((m) => m.version >= 15).map((m) => m.name));
-    expect(all(db, 'SELECT * FROM categories ORDER BY id')).toEqual(catsBefore);
+    // migration 024 (Telecom segments) later added categories.provider_id: every pre-existing category has NULL there; nothing else changed
+    expect(all(db, 'SELECT * FROM categories ORDER BY id')).toEqual(catsBefore.map((r) => ({ ...r, provider_id: null })));
     expect(all(db, 'SELECT * FROM products ORDER BY id')).toEqual(prodsBefore);
     expect(all(db, "SELECT seq FROM sqlite_sequence WHERE name = 'categories'")[0]!.seq).toBe(seqBefore);
     expect(all(db, 'SELECT product_id, qty_delta FROM stock_movements ORDER BY id').map((r) => [r.product_id, r.qty_delta])).toEqual([[1, 3], [2, 4]]);

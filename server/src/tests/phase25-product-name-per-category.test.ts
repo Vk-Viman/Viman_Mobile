@@ -259,6 +259,8 @@ describe('migration 023 on a populated database', () => {
     expect(all(db, "SELECT seq FROM sqlite_sequence WHERE name = 'products'")[0]!.seq).toBe(3);
     expect(all(db, 'PRAGMA foreign_key_check')).toEqual([]);
     expect(all(db, 'PRAGMA integrity_check')).toEqual([{ integrity_check: 'ok' }]);
+    // migration 024 (Telecom segments): a NEW Telecom stock product needs a category with a provider (it has no products yet, so it may get one)
+    db.exec(`UPDATE categories SET provider_id = (SELECT id FROM reload_providers WHERE name = 'Dialog') WHERE id = ${cat('Other tel')}`);
     db.exec(`INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('a', ${cat('Other tel')}, 'stock', 'telecom', 1, 1)`); // now allowed
     expect(Number(all(db, "SELECT id FROM products WHERE name = 'a' ORDER BY id DESC")[0]!.id)).toBe(4);
     expect(() => db.exec(`INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('A', ${cat('Mine')}, 'stock', 'shop', 1, 1)`)).toThrow(/UNIQUE/);
