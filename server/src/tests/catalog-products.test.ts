@@ -11,8 +11,11 @@ import type { FastifyInstance } from 'fastify';
 import { TestEnv } from './helpers/tmp.ts';
 import type { AppContext } from '../app.ts';
 import {
-  auditRows, breakAudit, catIds, count, get, post, PRODUCT_KEYS, put, raw,
+  auditRows, breakAudit, catIds, count, get, post, PRODUCT_KEYS as BASE_PRODUCT_KEYS, put, raw,
 } from './helpers/catalog.ts';
+
+// 13D: a product also carries its Cards segment and the provider of its category (extends the frozen list of the helper).
+const PRODUCT_KEYS = [...BASE_PRODUCT_KEYS, 'providerId', 'providerName', 'segment'].sort();
 
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });

@@ -102,6 +102,8 @@ describe('product name unique per category - API', () => {
   it('product CODE uniqueness is still global (across categories and books)', async () => {
     const s = await apiBase(await env.build());
     await post(s.app, '/products', prod(s.ids.Electronics, 'A', { code: 'Same' }));
+    // 13D: the default Scratch Cards category needs a provider before it can hold a stock product
+    await put(s.app, `/categories/${s.ids['Scratch Cards']}`, { providerId: (await providerIdByName(s.app)).Dialog });
     for (const cat of [s.ids.Electronics, s.ids.Other, s.ids['Scratch Cards']]) {
       const r = await post(s.app, '/products', prod(cat, `B${cat}`, { code: 'SAME' }));
       expect(r.status).toBe(409);

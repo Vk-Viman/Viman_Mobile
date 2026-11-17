@@ -203,8 +203,10 @@ describe('POST /products: categoryId or newCategory', () => {
     const a = await post(s.app, '/products', prodBody({ name: 'Shop item', newCategory: { name: '  Fresh Shop  ', book: 'shop' } }));
     expect(a.status, JSON.stringify(a.body)).toBe(201);
     expect(a.body.item).toMatchObject({ categoryName: 'Fresh Shop', book: 'shop' });
-    const b = await post(s.app, '/products', prodBody({ name: 'Tel item', newCategory: { name: 'Fresh Tel', book: 'telecom' } }));
-    expect(b.status).toBe(201);
+    // 13D: a Telecom newCategory for a stock product names its provider
+    const dialog = (await providerIdByName(s.app)).Dialog;
+    const b = await post(s.app, '/products', prodBody({ name: 'Tel item', newCategory: { name: 'Fresh Tel', book: 'telecom', providerId: dialog } }));
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
     expect(b.body.item).toMatchObject({ categoryName: 'Fresh Tel', book: 'telecom' });
     expect(count(s.ctx, 'categories')).toBe(before + 2);
     const cats = (await get(s.app, '/categories')).body.items;
@@ -231,8 +233,8 @@ describe('POST /products: categoryId or newCategory', () => {
     expect(d.body.error).toMatchObject({ code: 'DUPLICATE_NAME', existingCategoryId: def.id });
     expect([count(s.ctx, 'categories'), count(s.ctx, 'products'), count(s.ctx, 'audit_logs')]).toEqual(before);
     // the same name in the OTHER book is a different category and is created
-    const other = await post(s.app, '/products', prodBody({ newCategory: { name: 'Taken', book: 'telecom' } }));
-    expect(other.status).toBe(201);
+    const other = await post(s.app, '/products', prodBody({ newCategory: { name: 'Taken', book: 'telecom', providerId: (await providerIdByName(s.app)).Dialog } }));
+    expect(other.status, JSON.stringify(other.body)).toBe(201);
     expect(other.body.item.book).toBe('telecom');
   });
 
