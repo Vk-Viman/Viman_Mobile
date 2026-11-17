@@ -7,6 +7,7 @@ import { apiBase, mkProduct } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
 import { auditRows, count, get, post, put } from './helpers/catalog.ts';
 import { importFile, previewFile, xlsx } from './helpers/phase13.ts';
+import { providerIdByName } from './helpers/segments.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
@@ -16,7 +17,9 @@ const TEL_DUP = 'A Telecom category with this name already exists.';
 
 async function setup(): Promise<ApiBase> { return apiBase(await env.build()); }
 const mkCat = async (s: ApiBase, name: string, book: 'shop' | 'telecom') => {
-  const r = await post(s.app, '/categories', { name, book });
+  // 13D: a Telecom category that may hold card products is linked to a provider (Dialog here); Shop categories have none
+  const providerId = book === 'telecom' ? (await providerIdByName(s.app)).Dialog : undefined;
+  const r = await post(s.app, '/categories', { name, book, ...(providerId !== undefined ? { providerId } : {}) });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return r.body.item;
 };

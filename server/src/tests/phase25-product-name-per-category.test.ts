@@ -13,6 +13,7 @@ import { writeFileSync } from 'node:fs';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase, buy, mkProduct } from './helpers/inventory.ts';
 import { get, post, put } from './helpers/catalog.ts';
+import { providerIdByName } from './helpers/segments.ts';
 import { assertGlobalInvariants, buildWorld14, diffSnapshots, rows, snapshotAll } from './helpers/phase14.ts';
 import { rl, returnOk, sellOne } from './helpers/phase5.ts';
 import { importFile, mkSku, previewFile, xlsx } from './helpers/phase13.ts';
@@ -32,8 +33,10 @@ afterEach(async () => { blind.on = false; await env.cleanup(); });
 const NAME_MSG = 'Another product already uses this name.';
 const prod = (cat: number | undefined, name: string, over: Record<string, unknown> = {}) =>
   ({ name, categoryId: cat, kind: 'stock', sellPriceCents: 1000, minPriceCents: 500, ...over });
-async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom'): Promise<number> {
-  const r = await post(s.app, '/categories', { name, book });
+async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom', provider?: 'Dialog' | 'Airtel'): Promise<number> {
+  // 13D: a Telecom category that will hold card products is linked to a provider (the product trigger of migration 024 needs it)
+  const providerId = provider ? (await providerIdByName(s.app))[provider] : undefined;
+  const r = await post(s.app, '/categories', { name, book, ...(providerId !== undefined ? { providerId } : {}) });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return r.body.item.id;
 }
@@ -41,8 +44,8 @@ async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom'): 
 describe('product name unique per category - API', () => {
   it('the same name is accepted in two categories of one book and in categories of different books', async () => {
     const s = await apiBase(await env.build());
-    const dialog = await newCat(s, 'Dialog Crds', 'telecom');
-    const airtel = await newCat(s, 'Airtel Crds', 'telecom');
+    const dialog = await newCat(s, 'Dialog Crds', 'telecom', 'Dialog');
+    const airtel = await newCat(s, 'Airtel Crds', 'telecom', 'Airtel');
     const a = await post(s.app, '/products', prod(dialog, '100/-'));
     const b = await post(s.app, '/products', prod(airtel, '100/-'));
     expect([a.status, b.status]).toEqual([201, 201]);
@@ -50,6 +53,8 @@ describe('product name unique per category - API', () => {
     // same book (shop), two categories; and a shop vs a telecom category
     expect((await post(s.app, '/products', prod(s.ids.Electronics, 'Cable'))).status).toBe(201);
     expect((await post(s.app, '/products', prod(s.ids.Other, 'cable'))).status).toBe(201);
+    // the default Scratch Cards category needs a provider before it can hold a new card product (13D; allowed while it has no products)
+    expect((await put(s.app, `/categories/${s.ids['Scratch Cards']}`, { providerId: (await providerIdByName(s.app)).Dialog })).status).toBe(200);
     expect((await post(s.app, '/products', prod(s.ids['Scratch Cards'], ' CABLE '))).status).toBe(201);
     expect((await get(s.app, '/products?q=cable&limit=50')).body.items).toHaveLength(3);
   });
