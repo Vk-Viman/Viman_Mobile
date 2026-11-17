@@ -18,6 +18,7 @@
  *  - `backdated` is set by the server when the business date is earlier than the day it was posted.
  */
 import type { CashWarning } from './cashbooks';
+import type { StoredSegment } from './segments';
 
 /** Reply of GET /health. `today` is the server's business date (Asia/Colombo) and is the date-picker maximum (R-FD). */
 export interface Health { status: 'ok'; appVersion: string; schemaVersion: number; time: string; today: string }
@@ -468,6 +469,8 @@ export interface Sale {
   postedAt: string;
   backdated: boolean;
   book: Book;
+  /** 13D: null for Shop; the provider's Cards segment for Telecom ('legacy' for sales from before the segments). */
+  segment: StoredSegment | null;
   totalCents: number;
   /** Automatic (weighted-average) cost. */
   cogsCents: number;
@@ -502,7 +505,7 @@ export interface SaleOne { item: Sale }
 /** POST /sales/:id/void: the voided sale plus the non-blocking R13 cash warnings. */
 export interface SaleVoidResult { item: Sale; warnings: CashWarning[] }
 export interface SaleQuery {
-  from?: string; to?: string; book?: Book; status?: PostedStatus; productId?: number; limit?: number; offset?: number;
+  from?: string; to?: string; book?: Book; segment?: StoredSegment; status?: PostedStatus; productId?: number; limit?: number; offset?: number;
 }
 export interface SaleCreateLine {
   productId: number;
