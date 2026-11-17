@@ -502,7 +502,11 @@ describe('migration 021 on a populated database', () => {
   };
   const dump = (db: DatabaseSync): string => {
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'external_backup_state' AND name <> 'schema_migrations' AND name <> 'corrections' ORDER BY name").all() as any[]).map((r) => r.name);
-    return JSON.stringify(names.map((n) => [n, db.prepare(`SELECT * FROM "${n}" ORDER BY rowid`).all()]));
+    // Migrations 024-026 (Telecom segments) ADD the columns `segment` (many tables) and `categories.provider_id`; every OTHER column of every
+    // existing row must stay byte-identical, so the dump leaves out just those added columns.
+    const cols = (n: string): string => (db.prepare(`SELECT name FROM pragma_table_info('${n}')`).all() as any[])
+      .map((c) => c.name as string).filter((c) => c !== 'segment' && !(n === 'categories' && c === 'provider_id')).map((c) => `"${c}"`).join(', ');
+    return JSON.stringify(names.map((n) => [n, db.prepare(`SELECT ${cols(n)} FROM "${n}" ORDER BY rowid`).all()]));
   };
 
   it('carries the last success / sync and the trailing failure series over; every other table and the log are unchanged', () => {
