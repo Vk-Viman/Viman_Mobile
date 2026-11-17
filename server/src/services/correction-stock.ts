@@ -5,7 +5,7 @@
  * Layer: service (route -> SERVICE -> existing services). Contract: API_CONTRACTS.md "Correction contract, Phase 2".
  * A purchase is corrected by the EXISTING `voidPurchase` + the EXISTING `createPurchase` inside ONE transaction
  * (`applyCorrection` / `previewCorrection` / `checkCorrectable`). Nothing here re-implements a rule: HAS_RETURNS, INSUFFICIENT_STOCK
- * (part of the goods already sold), R9 closed day, backdating, R11 one book, supplier / product guards and the negative-cash
+ * (part of the goods already sold), R9 closed day, backdating, R11 one book, MIXED_SEGMENTS, supplier / product guards and the negative-cash
  * warning are all decided by the unchanged void/create services. Consequences that come from those rules, not from this file:
  *  - the void removes the old units at min(line cost, pool value) (R4) and the create receives the new ones at the new line totals,
  *    so the weighted average of every product on the bill changes from that point on; earlier sale snapshots stay;
@@ -73,6 +73,13 @@ function steps(ctx: AppContext, id: number, reason: string, replacement: Replace
       const body = { ...replacement, businessDate: replacement.businessDate ?? date } as PurchaseCreate;
       const c = createPurchase(ctx, body);
       if (!c.created) throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This reference was already used for a different record.');
+      // 13D: a Telecom purchase is corrected inside its own provider Cards segment (the replacement keeps the original's scope).
+      const was = captured.original;
+      if (was && was.book === 'telecom' && (c.item.book !== was.book || c.item.segment !== was.segment)) {
+        throw new AppError(400, 'SEGMENT_MISMATCH',
+          'A Telecom purchase can only be corrected with cards of the same provider (the same segment). Void it and record a new bill instead.',
+          { items: 'The replacement must contain cards of the original provider.' });
+      }
       captured.replacement = c.item;
       captured.createWarnings = c.warnings;
       return c.item;
