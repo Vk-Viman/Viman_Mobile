@@ -454,24 +454,28 @@ BEGIN
   SELECT RAISE(ABORT, 'SEGMENT_MISMATCH');
 END;
 
--- reload / EZCash / top-up rows: the segment comes from the provider (EZCash and wallet top-ups are Dialog Reloads)
+-- reload / EZCash / top-up rows: the segment comes from the provider (EZCash and wallet top-ups are Dialog Reloads). A missing or legacy segment is
+-- reported by the INSERT rule of 024, so these triggers only judge a well-formed segment
 CREATE TRIGGER trg_reload_sales_segment_provider
 BEFORE INSERT ON reload_sales
-WHEN NEW.segment IS NOT (SELECT lower(p.name) || '_reloads' FROM reload_providers p WHERE p.id = NEW.provider_id)
+WHEN NEW.segment IS NOT NULL AND NEW.segment <> 'legacy'
+ AND NEW.segment IS NOT (SELECT lower(p.name) || '_reloads' FROM reload_providers p WHERE p.id = NEW.provider_id)
 BEGIN
   SELECT RAISE(ABORT, 'SEGMENT_MISMATCH');
 END;
 
 CREATE TRIGGER trg_ezcash_sales_segment_provider
 BEFORE INSERT ON ezcash_sales
-WHEN NEW.segment IS NOT (SELECT lower(p.name) || '_reloads' FROM reload_providers p WHERE p.id = NEW.provider_id)
+WHEN NEW.segment IS NOT NULL AND NEW.segment <> 'legacy'
+ AND NEW.segment IS NOT (SELECT lower(p.name) || '_reloads' FROM reload_providers p WHERE p.id = NEW.provider_id)
 BEGIN
   SELECT RAISE(ABORT, 'SEGMENT_MISMATCH');
 END;
 
 CREATE TRIGGER trg_telecom_topups_segment_provider
 BEFORE INSERT ON telecom_topups
-WHEN NEW.segment IS NOT CASE WHEN NEW.provider_id IS NULL THEN 'dialog_reloads'
+WHEN NEW.segment IS NOT NULL AND NEW.segment <> 'legacy'
+ AND NEW.segment IS NOT CASE WHEN NEW.provider_id IS NULL THEN 'dialog_reloads'
                              ELSE (SELECT lower(p.name) || '_reloads' FROM reload_providers p WHERE p.id = NEW.provider_id) END
 BEGIN
   SELECT RAISE(ABORT, 'SEGMENT_MISMATCH');
@@ -504,7 +508,8 @@ END;
 
 CREATE TRIGGER trg_stock_losses_segment_matches
 BEFORE INSERT ON stock_losses
-WHEN EXISTS (SELECT 1 FROM v_product_segment v WHERE v.product_id = NEW.product_id AND (v.book IS NOT NEW.book OR v.segment IS NOT NEW.segment))
+WHEN (NEW.book = 'telecom') = (NEW.segment IS NOT NULL) AND NEW.segment IS NOT 'legacy'
+ AND EXISTS (SELECT 1 FROM v_product_segment v WHERE v.product_id = NEW.product_id AND (v.book IS NOT NEW.book OR v.segment IS NOT NEW.segment))
 BEGIN
   SELECT RAISE(ABORT, 'SEGMENT_MISMATCH');
 END;
