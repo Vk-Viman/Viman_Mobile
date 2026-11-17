@@ -60,7 +60,8 @@ export function OpeningCard({ book, segment }: { book: CashBook; segment: Stored
 
   const all = openings.data?.items ?? [];
   const everyFundSet = book === 'icecream' && ['cost', 'electricity', 'profit'].every((f) => all.some((e) => e.status === 'posted' && e.fund === f));
-  const alreadySet = book !== 'icecream' && all.some((e) => e.status === 'posted');
+  // One posted opening balance per scope: the book (Shop), or the selected Telecom segment. The Telecom total lists many scopes at once.
+  const alreadySet = book !== 'icecream' && !isTotal && all.some((e) => e.status === 'posted');
 
   return (
     <Card title="Opening balance"
