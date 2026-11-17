@@ -74,6 +74,17 @@ export function useUpdateCategory() {
   });
 }
 
+/** The four fixed Telecom providers (Dialog, Mobitel, Airtel, Hutch) as offered by the category provider picker. */
+export interface CatalogProvider { id: number; name: string }
+
+/** GET /reload-providers, reduced to id + name: the provider picker of the category and product dialogs (13D). */
+export const useCatalogProviders = () =>
+  useQuery({
+    queryKey: [...catalogKeys.categories, 'providers'],
+    queryFn: async () => (await apiGet<{ items: CatalogProvider[] }>('/reload-providers')).items.map((p) => ({ id: p.id, name: p.name })),
+    staleTime: 5 * 60 * 1000,
+  });
+
 // ---- Products ----
 
 /** GET /products (search / category / active filters in `query`). */

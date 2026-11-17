@@ -1,3 +1,5 @@
+import type { StoredSegment } from './segments';
+
 /**
  * TypeScript shapes of everything the server API sends and receives (the "contract" in API_CONTRACTS.md).
  *
@@ -81,14 +83,17 @@ export interface Category {
   book: Book;
   isDefault: boolean;
   active: boolean;
+  /** 13D: the provider a Telecom category is linked to (its card products belong to that provider's Cards segment); null for Shop and for a Telecom category without one. */
+  providerId: number | null;
+  providerName: string | null;
   productCount: number;
   createdAt: string;
   updatedAt: string;
 }
 export interface CategoryList { items: Category[] }
 export interface CategoryItem { item: Category }
-export interface CategoryCreate { name: string; book: Book }
-export interface CategoryUpdate { name?: string; book?: Book; active?: boolean }
+export interface CategoryCreate { name: string; book: Book; /** Telecom only. */ providerId?: number | null }
+export interface CategoryUpdate { name?: string; book?: Book; active?: boolean; /** Telecom only; locked once the category has products. */ providerId?: number | null }
 
 export interface Product {
   id: number;
@@ -112,6 +117,11 @@ export interface Product {
   /** Average cost per unit in cents; null when there is no stock to average. */
   avgUnitCostCents: number | null;
   lowStock: boolean;
+  /** 13D: the Cards segment of a Telecom product (`legacy` while its category has no provider); null for Shop products. */
+  segment: StoredSegment | null;
+  /** Provider of the product's category (Telecom only). */
+  providerId: number | null;
+  providerName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -125,6 +135,9 @@ export interface ProductQuery {
   active?: boolean;
   /** Stock items only or services only (omit for both). */
   kind?: ProductKind;
+  /** 13D: one Cards segment (or `legacy`) / one provider. */
+  segment?: StoredSegment;
+  providerId?: number;
   limit?: number;
   offset?: number;
 }
@@ -135,7 +148,7 @@ export interface ProductCreate {
   /** Send exactly one of `categoryId` or `newCategory`. */
   categoryId?: number;
   /** Creates the category (in `book`) in the same request as the product. */
-  newCategory?: { name: string; book: Book };
+  newCategory?: { name: string; book: Book; /** Telecom: required for a stock product. */ providerId?: number | null };
   kind: ProductKind;
   sellPriceCents: number;
   minPriceCents: number;

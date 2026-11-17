@@ -24,7 +24,7 @@ import {
 } from '../repositories/categories.repo.ts';
 import type { CategoryRow } from '../repositories/categories.repo.ts';
 import {
-  findProductByCode, findProductByName, getProduct, insertProduct, listProducts, updateProduct,
+  findProductByCode, findProductByName, getProduct, insertProduct, listProducts, productHasMovements, updateProduct,
 } from '../repositories/products.repo.ts';
 import type { ProductRow } from '../repositories/products.repo.ts';
 import {
@@ -32,7 +32,8 @@ import {
 } from '../repositories/suppliers.repo.ts';
 import type { SupplierRow } from '../repositories/suppliers.repo.ts';
 import { logAudit } from './audit.service.ts';
-import { mapSegmentAbort } from './segments.ts';
+import { SEGMENT_LABEL, mapSegmentAbort } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import {
   NOTE_MAX_LENGTH, assertNoFieldErrors, notFound, trimmed, validationError,
 } from './validation.ts';
@@ -52,6 +53,10 @@ export interface Product {
   sellPriceCents: number; minPriceCents: number; reorderLevel: number; active: boolean;
   qtyOnHand: number; stockValueCents: number; avgUnitCostCents: number | null; lowStock: boolean;
   createdAt: string; updatedAt: string;
+  /** 13D: Cards segment (`null` for Shop products, `legacy` for a Telecom product whose category has no provider). */
+  segment: StoredSegment | null;
+  /** The provider of the product's category (Telecom only), else null. */
+  providerId: number | null; providerName: string | null;
 }
 
 // ---------- limits (shared by the checks below) ----------
@@ -251,11 +256,15 @@ function toProduct(r: ProductRow): Product {
     avgUnitCostCents: r.qtyOnHand > 0 ? mulDivRound(r.stockValueCents, 1, r.qtyOnHand) : null,
     lowStock: r.kind === 'stock' && r.active && r.reorderLevel > 0 && r.qtyOnHand <= r.reorderLevel,
     createdAt: r.createdAt, updatedAt: r.updatedAt,
+    segment: r.segment, providerId: r.providerId, providerName: r.providerName,
   };
 }
 
 export interface ProductListQuery {
-  q?: string; book?: Book; categoryId?: number; kind?: Kind; lowStock?: boolean; active?: boolean; limit: number; offset: number;
+  q?: string; book?: Book; categoryId?: number; kind?: Kind; lowStock?: boolean; active?: boolean;
+  /** 13D filters: the Cards segment (or `legacy`) and the provider of the category. */
+  segment?: StoredSegment; providerId?: number;
+  limit: number; offset: number;
 }
 
 /** Lists products A-Z with the total match count; filters as in `ProductListQuery`. */
@@ -311,8 +320,15 @@ function inactiveCategory(): AppError {
   return new AppError(400, 'CATEGORY_INACTIVE', message, { categoryId: message });
 }
 
+/** 400 PRODUCT_NEEDS_PROVIDER: a Telecom STOCK product must live in a category linked to a provider (13D). Answers before the database trigger. */
+function needsProvider(): AppError {
+  const message = 'Choose a Telecom category that is linked to a provider (Dialog, Mobitel, Airtel or Hutch) first.';
+  return new AppError(400, 'PRODUCT_NEEDS_PROVIDER', message, { categoryId: message });
+}
+
 export interface ProductCreate {
-  code?: string; name: string; description?: string; categoryId?: number; newCategory?: { name: string; book: Book }; kind: Kind;
+  code?: string; name: string; description?: string; categoryId?: number;
+  newCategory?: { name: string; book: Book; providerId?: number | null }; kind: Kind;
   sellPriceCents: number; minPriceCents: number; reorderLevel?: number;
 }
 
@@ -354,13 +370,17 @@ export function createProduct(ctx: AppContext, body: ProductCreate): Product {
         const dup = dupCategory(body.newCategory.book);
         throw new AppError(409, 'DUPLICATE_NAME', dup.message, dup.fields, { existingCategoryId: existing.id });
       }
-      const catId = insertCategory(conn, { name: newName, book: body.newCategory.book });
+      const newProviderId = body.newCategory.providerId ?? null;
+      checkProvider(conn, body.newCategory.book, newProviderId);
+      const catId = insertCategory(conn, { name: newName, book: body.newCategory.book, providerId: newProviderId });
       cat = getCategory(conn, catId)!;
       createdCategory = true;
     } else {
       cat = chooseCategory(conn, body.categoryId!);
       if (!cat.active) throw inactiveCategory();
     }
+    // 13D: a Telecom stock product needs a provider category (services and Shop products are unaffected).
+    if (cat.book === 'telecom' && body.kind === 'stock' && cat.providerId === null) throw needsProvider();
     if (findProductByName(conn, cat.id, name)) throw dupName('product');
     if (code !== null && findProductByCode(conn, code)) throw dupCode('product');
     if (createdCategory) logAudit(conn, 'category', String(cat.id), 'create', null, cat);
@@ -421,6 +441,16 @@ export function updateProductItem(ctx: AppContext, id: number, body: ProductUpda
         throw new AppError(400, 'CATEGORY_BOOK_MISMATCH', message, { categoryId: message });
       }
       if (!cat.active) throw inactiveCategory();
+      if (before.book === 'telecom' && before.kind === 'stock' && cat.providerId !== before.providerId) {
+        // 13D: the provider decides the segment. A provider-less target would make the product legacy.
+        if (cat.providerId === null) throw needsProvider();
+        if (productHasMovements(conn, id)) {
+          const from = before.segment ? SEGMENT_LABEL[before.segment] : 'its segment';
+          const message = `This product already has stock history in ${from}, so it cannot move to a category of another provider. `
+            + 'Choose a category of the same provider, or create a new product.';
+          throw new AppError(409, 'PRODUCT_SEGMENT_LOCKED', message, { categoryId: 'Choose a category of the same provider.' });
+        }
+      }
       patch.categoryId = categoryId;
     }
     if (Object.keys(patch).length === 0) return before;
