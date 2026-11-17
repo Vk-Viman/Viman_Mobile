@@ -2,11 +2,11 @@
  * routes/sales.ts - HTTP endpoints for POS sales, sales history, sale voids and sales returns.
  *
  * Layer: route (thin). Validates the request shape with JSON schema (no type coercion), calls
- * `sales.service.ts`, shapes the response. All business rules (cart split by book, weighted-average COGS,
+ * `sales.service.ts`, shapes the response. All business rules (cart split by scope: Shop / one sale per card segment, weighted-average COGS,
  * C13 extra cost, R13 warnings, R1 void, C5 return values, R-FD, R-RD) are in the services.
  *
  *   POST /sales                  save a cart (201 { sales, warnings }; 200 when `clientRef` was already used)
- *   GET  /sales                  list with filters and totals     GET /sales/:id   one sale
+ *   GET  /sales                  list with filters (`book`, `segment`, dates, status, product) and totals     GET /sales/:id   one sale
  *   POST /sales/:id/void         void (R1)
  *   POST /sales/:id/returns      return goods (201 { item, sale }; 200 on a repeated `clientRef`)
  *   POST /sales/:id/returns/:returnId/void   void a return (R-VR; 200 { item, sale, warnings })
@@ -19,6 +19,8 @@ import {
 import type { SaleCreate, SaleReturnCreate } from '../services/sales.service.ts';
 import { checkSaleCorrectable, correctSale, previewSaleCorrection } from '../services/sales-correction.ts';
 import type { SaleCorrectionBody } from '../services/sales-correction.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { correctionBodySchema } from './corrections.ts';
 import {
   bookQuery, checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging,
@@ -41,6 +43,7 @@ const listQuery = {
     from: dateQuery,
     to: dateQuery,
     book: bookQuery,
+    segment: STORED_SEGMENT_SCHEMA,
     status: { type: 'string', enum: ['posted', 'void'] },
     productId: intQuery,
     limit: intQuery,
@@ -124,7 +127,7 @@ export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void 
 
   app.get('/sales', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      from?: string; to?: string; book?: 'shop' | 'telecom'; status?: 'posted' | 'void'; productId?: string;
+      from?: string; to?: string; book?: 'shop' | 'telecom'; segment?: StoredSegment; status?: 'posted' | 'void'; productId?: string;
       limit?: string; offset?: string;
     };
     checkQueryDates(raw);
@@ -133,6 +136,7 @@ export function registerSaleRoutes(app: FastifyInstance, ctx: AppContext): void 
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.status !== undefined) q.status = raw.status;
     if (raw.productId !== undefined) q.productId = Number(raw.productId);
     return listSales(ctx, q);

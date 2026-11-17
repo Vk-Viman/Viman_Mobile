@@ -12,6 +12,7 @@ import { Money } from '../../components/Money';
 import { Spinner } from '../../components/Spinner';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSales } from '../../api/sales';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { formatDateTime } from '../../lib/format';
 import type { Sale } from '../../types/api';
 
@@ -30,7 +31,7 @@ export function TodaySales({ today }: { today: string }) {
         </span>
       ),
     },
-    { key: 'book', header: 'Book', render: (s) => <BookBadge book={s.book} /> },
+    { key: 'book', header: 'Book', render: (s) => <span><BookBadge book={s.book} />{s.segment && <span className="ml-2 text-xs text-slate-600">{SEGMENT_LABEL[s.segment]}</span>}</span> },
     { key: 'total', header: 'Total', align: 'right', render: (s) => <Money cents={s.totalCents} /> },
     { key: 'status', header: 'Status', render: (s) => <PostedStatusBadge status={s.status} /> },
   ];

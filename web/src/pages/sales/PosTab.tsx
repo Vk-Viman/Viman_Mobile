@@ -4,7 +4,8 @@
  *
  * Rules reflected here (the server enforces them and is authoritative):
  *  - Money is integer cents; totals shown are integer sums, the server recomputes COGS, profit and everything else.
- *  - A mixed cart (Shop goods + Telecom scratch cards) is saved as one Shop sale and one Telecom sale.
+ *  - A mixed cart is saved as ONE SALE PER SCOPE (13D): Shop goods, and one sale per provider's Cards (Dialog, Mobitel, Airtel, Hutch);
+ *    the cart table shows the groups and each saved sale shows its segment.
  *  - Sale date: default today (from GET /health), `max = today` (R-FD); backdating is allowed and audited.
  *  - C13: each line shows the automatic cost per unit (editable upward only). `unitCostCents` is sent ONLY for lines
  *    whose cost the cashier changed; otherwise it is omitted so the server uses its exact automatic cost.
@@ -30,6 +31,7 @@ import { cartIsValid, costToSend, lineFromProduct, linePriceCents, lineQty, MAX_
 import type { CartLine } from './cart';
 import { ProductPicker } from './ProductPicker';
 import { SaleResult } from './SaleResult';
+import { useProviderByCategory } from './scope';
 import { TodaySales } from './TodaySales';
 
 /** Longest sale note the server accepts. */
@@ -49,6 +51,7 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
   const clientRef = useClientRef();
   const create = useCreateSale();
   const { today, date: effDate, picked: pickedDate, setDate } = useBusinessDate();
+  const providerByCategory = useProviderByCategory();
   const [lines, setLines] = useState<CartLine[]>([]);
   const [notes, setNotes] = useState('');
   const [err, setErr] = useState<ApiError | Error | null>(null);
@@ -143,7 +146,7 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
             {lines.length === 0 ? (
               <EmptyState title="The cart is empty" hint="Search for a product and press Enter, or click it in the list." />
             ) : (
-              <CartTable lines={lines} onChange={changeLine} onRemove={removeLine} lineErrors={lineErrors} costErrors={costErrors} disabled={create.isPending} />
+              <CartTable lines={lines} onChange={changeLine} onRemove={removeLine} lineErrors={lineErrors} costErrors={costErrors} disabled={create.isPending} providerByCategory={providerByCategory} />
             )}
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -159,7 +162,7 @@ function PosSession({ onNewSale }: { onNewSale: () => void }) {
               <TextField label="Notes (optional)" value={notes} maxLength={MAX_NOTES} onChange={(e) => setNotes(e.target.value)} autoComplete="off" />
             </div>
 
-            <p className="mt-3 text-xs text-slate-500">Mixed carts are saved as one Shop sale and one Telecom sale. Payment is cash.</p>
+            <p className="mt-3 text-xs text-slate-500">A mixed cart is saved as one sale per group above (Shop, and each provider's Cards). Payment is cash.</p>
             {banner && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{banner}</p>}
             <div className="mt-4 flex justify-end">
               <Button onClick={save} disabled={!canSave} loading={create.isPending}>Save sale</Button>

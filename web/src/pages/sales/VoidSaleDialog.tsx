@@ -8,7 +8,7 @@ import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useToast } from '../../components/Toast';
 import { useVoidSale } from '../../api/sales';
 import { notifyCashWarnings } from '../../lib/cashWarnings';
-import { BOOK_LABEL } from '../../lib/constants';
+import { saleScopeLabel } from './scope';
 import type { Sale } from '../../types/api';
 
 /** @param sale the sale to void. Mount only while open. */
@@ -19,7 +19,7 @@ export function VoidSaleDialog({ sale, onClose }: { sale: Sale; onClose: () => v
   return (
     <VoidRecordDialog
       title={`Void sale #${sale.id}`}
-      intro={`This puts the sold items back into stock at their original cost and takes the money out of the ${BOOK_LABEL[sale.book]} cash book. It cannot be undone.`}
+      intro={`This puts the sold items back into stock at their original cost and takes the money out of the ${saleScopeLabel(sale)} cash book. It cannot be undone.`}
       submitLabel="Void sale"
       pending={voidMut.isPending}
       run={(reason, cb) => voidMut.mutate({ id: sale.id, body: { reason } }, { onSuccess: (r) => { notifyCashWarnings(toast, r.warnings); cb.onSuccess(); }, onError: cb.onError })}

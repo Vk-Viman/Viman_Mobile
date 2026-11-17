@@ -13,7 +13,8 @@
  *         revenue and COGS reversal alone would otherwise hide it.
  *  - Section 2: one cash refund entry (`sale_refund` Shop / `card_refund` Telecom) dated the return's date.
  *  - R-FD: no future dates. R-RD: a return may not be dated before its sale. A voided sale cannot be returned.
- *  - R9: a closed day of the sale's book refuses the return (judged on the RETURN's date); R13: the refund is a
+ *  - 13D: a return belongs to the sale's scope (book + segment): its refund entry and a damaged-return loss carry the sale's segment.
+ *  - R9: a closed day of the sale's scope refuses the return (judged on the RETURN's date); R13: the refund is a
  *         cash-out, so it returns the shared negative-cash warning.
  *  - Section 12: `clientRef` makes a repeat return the saved return; the whole return is audited.
  * Validation order (contract): schema -> R-FD -> sale lookup 404 -> R-RD -> DAY_CLOSED -> SALE_VOID -> quantities.
@@ -24,20 +25,18 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
 import { insertCashEntry } from '../repositories/cash-entries.repo.ts';
-import { getProduct } from '../repositories/products.repo.ts';
 import {
-  addReturnedQty, getSale as getSaleRow, getSaleItem, getSaleReturn, getSaleReturnByClientRef, insertSaleReturn,
-  insertSaleReturnItem, returnedAmountsSoFar,
+  addReturnedQty, getSale as getSaleRow, getSaleItem, getSaleReturn, getSaleReturnByClientRef, insertDamagedReturnLoss,
+  insertSaleReturn, insertSaleReturnItem, returnedAmountsSoFar,
 } from '../repositories/sales.repo.ts';
 import type { SaleItemRow, SaleRow } from '../repositories/sales.repo.ts';
-import { insertStockLoss } from '../repositories/stock-losses.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayOpen } from './day-closing.ts';
 import { receiveStock } from './inventory.service.ts';
 import { returnBeforeOriginalError, returnPortion } from './return-rules.ts';
-import { REFUND_CASH_TYPE, loadSale, runSalesWrite, toSaleReturn } from './sales-common.ts';
+import { REFUND_CASH_TYPE, loadSale, runSalesWrite, saleScope, toSaleReturn } from './sales-common.ts';
 import type { Sale, SaleReturn } from './sales-common.ts';
 import {
   NOTE_MAX_LENGTH, assertNoFieldErrors, checkBusinessDate, notFound, trimmed,
@@ -120,12 +119,10 @@ function applyStockEffect(
     });
     return;
   }
-  const product = getProduct(conn, line.item.productId);
-  if (!product) throw new Error(`Product #${line.item.productId} of sale #${sale.id} is missing`);
-  insertStockLoss(conn, {
-    businessDate, productId: product.id, book: product.book, qty: line.qty, costCents: line.cogsCents,
-    reason: 'damaged', note: `Damaged return #${returnId} (sale #${sale.id})`, clientRef: `${clientRef}-loss-${lossNo}`,
-    source: 'damaged_return', salesReturnId: returnId,
+  // The loss stays in the SALE's scope (book + segment; a legacy sale keeps `legacy`), 13D.
+  insertDamagedReturnLoss(conn, {
+    businessDate, productId: line.item.productId, book: sale.book, segment: sale.segment, qty: line.qty, costCents: line.cogsCents,
+    note: `Damaged return #${returnId} (sale #${sale.id})`, clientRef: `${clientRef}-loss-${lossNo}`, salesReturnId: returnId,
   });
 }
 
@@ -156,7 +153,8 @@ function writeReturn(
   // No cash entry for a zero refund (e.g. a free item came back).
   if (refundCents > 0) {
     insertCashEntry(conn, {
-      book: sale.book, businessDate: body.businessDate, type: REFUND_CASH_TYPE[sale.book], amountCents: -refundCents,
+      book: sale.book, segment: sale.segment, businessDate: body.businessDate, type: REFUND_CASH_TYPE[sale.book],
+      amountCents: -refundCents,
       refTable: 'sales_returns', refId: returnId,
     });
   }
@@ -198,7 +196,7 @@ export function createSaleReturn(
     if (!sale) throw notFound('Sale');
     originalDate = sale.businessDate;
     if (body.businessDate < sale.businessDate) throw returnBeforeOriginalError('sale', sale.businessDate); // R-RD
-    assertDayOpen(conn, [sale.book], body.businessDate); // R9: judged on the RETURN's date
+    assertDayOpen(conn, [saleScope(sale)], body.businessDate); // R9: judged on the RETURN's date
     if (sale.status === 'void') {
       throw new AppError(409, 'SALE_VOID', 'This sale has been voided, so it cannot be returned.');
     }
@@ -211,6 +209,6 @@ export function createSaleReturn(
     const item = toSaleReturn(conn, getSaleReturn(conn, returnId) as NonNullable<ReturnType<typeof getSaleReturn>>);
     logAudit(conn, 'sale_return', String(returnId), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, sale: loadSale(conn, saleId), warnings: item.refundCents > 0 ? negativeCashWarnings(conn, [sale.book]) : [], created: true };
+    return { item, sale: loadSale(conn, saleId), warnings: item.refundCents > 0 ? negativeCashWarnings(conn, [saleScope(sale)]) : [], created: true };
   }, () => originalDate);
 }

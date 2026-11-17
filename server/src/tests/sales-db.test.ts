@@ -236,8 +236,10 @@ describe('sale_items table', () => {
     sqlSaleItem(c, telSale, telP);                         // card / telecom / telecom product: fine
     expect(msgOf(() => sqlSaleItem(c, telSale, telP, { lineNo: 2, type: 'goods' }))).toMatch(/SALE_ITEM_BOOK_MISMATCH/);   // goods line in telecom sale
     expect(msgOf(() => sqlSaleItem(c, shopSale, shopP, { lineNo: 2, type: 'card' }))).toMatch(/SALE_ITEM_BOOK_MISMATCH/);  // card line in shop sale
-    expect(msgOf(() => sqlSaleItem(c, shopSale, telP, { lineNo: 2 }))).toMatch(/SALE_ITEM_BOOK_MISMATCH/);                 // telecom product in shop sale
-    expect(msgOf(() => sqlSaleItem(c, telSale, shopP, { lineNo: 2 }))).toMatch(/SALE_ITEM_BOOK_MISMATCH/);                 // shop product in telecom sale
+    // 13D: migration 026's segment trigger (trg_sale_items_segment_matches) now fires before the older book trigger, so a product of
+    // another scope is refused with SEGMENT_MISMATCH instead of SALE_ITEM_BOOK_MISMATCH; either way the line is NOT written.
+    expect(msgOf(() => sqlSaleItem(c, shopSale, telP, { lineNo: 2 }))).toMatch(/SALE_ITEM_BOOK_MISMATCH|SEGMENT_MISMATCH/);  // telecom product in shop sale
+    expect(msgOf(() => sqlSaleItem(c, telSale, shopP, { lineNo: 2 }))).toMatch(/SALE_ITEM_BOOK_MISMATCH|SEGMENT_MISMATCH/);  // shop product in telecom sale
     expect(scalar(c, 'SELECT COUNT(*) FROM sale_items')).toBe(2);
   });
 

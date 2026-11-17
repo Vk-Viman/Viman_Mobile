@@ -29,6 +29,8 @@ export interface CartLine {
   name: string;
   code: string | null;
   book: Book;
+  /** The product's category (a Telecom card category carries the provider, which decides the sale's segment). */
+  categoryId: number;
   /** Stock on hand when the product was added (hint only; the server checks the live pool). */
   onHand: number;
   /** Product's minimum price in cents (0 = none); below it we warn, never block. */
@@ -50,6 +52,7 @@ export function lineFromProduct(p: Product): CartLine {
     name: p.name,
     code: p.code,
     book: p.book,
+    categoryId: p.categoryId,
     onHand: p.qtyOnHand,
     minPriceCents: p.minPriceCents,
     qty: '1',

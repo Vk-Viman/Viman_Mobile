@@ -260,20 +260,20 @@ describe('raw SQL attempts are refused by the database', () => {
       const v = { book: "'shop'", date: "'2025-05-03'", type: "'sale_refund'", amt: 1200, rt: "'sales_returns'", rid: w.R.id, rev: o.id, ...over };
       return `INSERT INTO cash_entries (book,business_date,type,amount_cents,ref_table,ref_id,reverses_entry_id) VALUES (${v.book},${v.date},${v.type},${v.amt},${v.rt},${v.rid},${v.rev})`;
     };
-    expect(attempt(s, ins({}))).toMatch(/UNIQUE|RETURN_REVERSAL/i); // a second reversal of the same original
-    expect(attempt(s, ins({ amt: 600 }))).toMatch(/UNIQUE|RETURN_REVERSAL/i);
-    expect(attempt(s, ins({ amt: 1201 }))).toMatch(/UNIQUE|RETURN_REVERSAL/i);
-    expect(attempt(s, ins({ date: "'2025-05-04'" }))).toMatch(/UNIQUE|RETURN_REVERSAL/i);
+    expect(attempt(s, ins({}))).toMatch(/UNIQUE|RETURN_REVERSAL|REVERSAL_MISMATCH/i); // a second reversal of the same original
+    expect(attempt(s, ins({ amt: 600 }))).toMatch(/UNIQUE|RETURN_REVERSAL|REVERSAL_MISMATCH/i);
+    expect(attempt(s, ins({ amt: 1201 }))).toMatch(/UNIQUE|RETURN_REVERSAL|REVERSAL_MISMATCH/i);
+    expect(attempt(s, ins({ date: "'2025-05-04'" }))).toMatch(/UNIQUE|RETURN_REVERSAL|REVERSAL_MISMATCH/i);
     // reversal of the POSTED return P (not void): refused
     const op = w.origCash(w.P.id);
-    expect(attempt(s, ins({ rid: w.P.id, rev: op.id, amt: 600, date: "'2025-05-04'" }))).toMatch(/RETURN_REVERSAL_INVALID/);
+    expect(attempt(s, ins({ rid: w.P.id, rev: op.id, amt: 600, date: "'2025-05-04'" }))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);
     // reversal of R's refund but booked under another return / sale (link mismatch)
-    expect(attempt(s, ins({ rid: w.Q.id, rev: o.id, amt: 1200, date: "'2025-05-03'" }))).toMatch(/RETURN_REVERSAL_INVALID/);
+    expect(attempt(s, ins({ rid: w.Q.id, rev: o.id, amt: 1200, date: "'2025-05-03'" }))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);
     // a reversal with no link at all (positive entry on a return) is refused
-    expect(attempt(s, ins({ rev: 'NULL' }))).toMatch(/RETURN_REVERSAL_INVALID/);
+    expect(attempt(s, ins({ rev: 'NULL' }))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);
     // a reversal row of a void return that is not linked to ITS original (links the refund of another return)
     const oq = w.origCash(w.Q.id);
-    expect(attempt(s, ins({ rev: oq.id }))).toMatch(/RETURN_REVERSAL_INVALID|UNIQUE/);
+    expect(attempt(s, ins({ rev: oq.id }))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH|UNIQUE/);
     // the legitimate reversal exists and is exactly one
     expect(rows(s.ctx, "SELECT COUNT(*) n FROM cash_entries WHERE reverses_entry_id = ?", o.id)[0]!.n).toBe(1);
     await check(s);

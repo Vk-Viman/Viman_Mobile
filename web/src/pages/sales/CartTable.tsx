@@ -10,15 +10,16 @@
  *  - cost per unit is filled from the product's automatic (average) cost and may only be raised (BUSINESS_RULES C13);
  *    typing less shows an inline message and Save stays disabled; the read-only "Extra cost" is (typed - automatic) x qty
  *    as an integer estimate (the server's figure is authoritative);
- *  - line totals and per-book subtotals are integer sums (cart.ts).
+ *  - the cart is grouped by SCOPE, one group per future sale (13D): Shop, then each provider's Cards (scope.ts); line totals and
+ *    per-scope subtotals are integer sums (cart.ts).
  */
+import { Fragment } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Money } from '../../components/Money';
 import { BookBadge } from '../../components/StatusBadges';
 import { TextField } from '../../components/TextField';
-import { BOOK_LABEL } from '../../lib/constants';
-import type { Book } from '../../types/api';
-import { bookSubtotalCents, lineCostError, lineExtraCostCents, linePriceCents, lineQty, lineTotalCents } from './cart';
+import { cartScopes, scopeOfLine } from './scope';
+import { lineCostError, lineExtraCostCents, linePriceCents, lineQty, lineTotalCents } from './cart';
 import type { CartLine } from './cart';
 
 interface Props {
@@ -32,13 +33,15 @@ interface Props {
   costErrors?: Record<number, string>;
   /** Disables editing while the sale is being saved. */
   disabled?: boolean;
+  /** categoryId -> provider name (from the category list); decides the Cards group of a Telecom line. */
+  providerByCategory?: Record<number, string>;
 }
 
-const BOOKS: Book[] = ['shop', 'telecom'];
-
-/** Cart rows plus the per-book subtotals and the grand total. */
-export function CartTable({ lines, onChange, onRemove, lineErrors, costErrors = {}, disabled }: Props) {
-  const grand = BOOKS.reduce((sum, b) => sum + bookSubtotalCents(lines, b), 0);
+/** Cart rows grouped by scope, the per-scope subtotals and the grand total. */
+export function CartTable({ lines, onChange, onRemove, lineErrors, costErrors = {}, disabled, providerByCategory = {} }: Props) {
+  const scopes = cartScopes(lines, providerByCategory);
+  const subtotal = (key: string) => lines.reduce((sum, l) => sum + (scopeOfLine(l, providerByCategory).key === key ? (lineTotalCents(l) ?? 0) : 0), 0);
+  const grand = scopes.reduce((sum, s) => sum + subtotal(s.key), 0);
   return (
     <div className="space-y-3">
       <div className="overflow-x-auto">
@@ -54,7 +57,11 @@ export function CartTable({ lines, onChange, onRemove, lineErrors, costErrors = 
             </tr>
           </thead>
           <tbody>
+            {scopes.map((scope) => (
+              <Fragment key={scope.key}>
+            <tr className="bg-slate-100"><th scope="colgroup" colSpan={6} className="px-2 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">{scope.label} sale</th></tr>
             {lines.map((l, i) => {
+              if (scopeOfLine(l, providerByCategory).key !== scope.key) return null;
               const qty = lineQty(l);
               const price = linePriceCents(l);
               const total = lineTotalCents(l);
@@ -131,21 +138,19 @@ export function CartTable({ lines, onChange, onRemove, lineErrors, costErrors = 
                 </tr>
               );
             })}
+              </Fragment>
+            ))}
           </tbody>
         </table>
       </div>
 
       <dl className="ml-auto max-w-xs space-y-1 text-sm">
-        {BOOKS.map((b) => {
-          const present = lines.some((l) => l.book === b);
-          if (!present) return null;
-          return (
-            <div key={b} className="flex justify-between gap-4">
-              <dt className="text-slate-600">{BOOK_LABEL[b]} subtotal</dt>
-              <dd><Money cents={bookSubtotalCents(lines, b)} /></dd>
-            </div>
-          );
-        })}
+        {scopes.map((s) => (
+          <div key={s.key} className="flex justify-between gap-4">
+            <dt className="text-slate-600">{s.label} subtotal</dt>
+            <dd><Money cents={subtotal(s.key)} /></dd>
+          </div>
+        ))}
         <div className="flex justify-between gap-4 border-t border-slate-200 pt-1 text-base font-semibold">
           <dt>Total</dt>
           <dd><Money cents={grand} /></dd>

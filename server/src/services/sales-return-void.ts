@@ -41,7 +41,7 @@ import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayOpen } from './day-closing.ts';
 import { getPool } from './inventory.service.ts';
-import { REFUND_CASH_TYPE, loadSale, runSalesWrite, toSaleReturn } from './sales-common.ts';
+import { REFUND_CASH_TYPE, loadSale, runSalesWrite, saleScope, toSaleReturn } from './sales-common.ts';
 import type { Sale, SaleReturn } from './sales-common.ts';
 import {
   REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, isBackdatedToday, notFound, trimmed,
@@ -126,7 +126,7 @@ export function voidSaleReturn(
         `Return #${newer.id} was made after this one on the same item(s). Void return #${newer.id} first.`,
         undefined, { newerReturnId: newer.id });
     }
-    assertDayOpen(conn, [sale.book], ret.businessDate); // R9 + closed-day ordering: judged on the RETURN's date
+    assertDayOpen(conn, [saleScope(sale)], ret.businessDate); // R9 + closed-day ordering: judged on the RETURN's date
 
     const before = toSaleReturn(conn, ret);
     const resalable = listSaleReturnItems(conn, returnId).filter((l) => l.resalable);
@@ -159,7 +159,7 @@ export function voidSaleReturn(
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
     return {
       item: after, sale: loadSale(conn, saleId),
-      warnings: ret.refundCents > 0 ? negativeCashWarnings(conn, [sale.book]) : [],
+      warnings: ret.refundCents > 0 ? negativeCashWarnings(conn, [saleScope(sale)]) : [],
     };
   });
 }
