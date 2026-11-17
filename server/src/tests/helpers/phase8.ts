@@ -8,45 +8,58 @@ import { get, post } from './catalog.ts';
 import { ref, today } from './inventory.ts';
 import type { ApiBase } from './inventory.ts';
 import { num, sql } from './phase4.ts';
+import { withSeg } from './segments.ts';
 
 export type Book = 'shop' | 'telecom' | 'icecream';
 export type Fund = 'cost' | 'electricity' | 'profit';
 
-/** Exact, sorted field list of an expense in API responses. */
+/** Exact, sorted field list of an expense in API responses (13D: `segment`, null outside Telecom). */
 export const EXPENSE_KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'category', 'clientRef', 'description', 'id', 'notes',
-  'postedAt', 'status', 'voidReason', 'voidedAt'];
+  'postedAt', 'segment', 'status', 'voidReason', 'voidedAt'];
 /** Exact, sorted field list of a cash count in API responses. */
 export const COUNT_KEYS = ['backdated', 'book', 'businessDate', 'cashEntryId', 'clientRef', 'countedCents', 'differenceCents', 'expectedCents',
-  'fund', 'id', 'note', 'postedAt', 'status', 'voidReason', 'voidedAt'];
+  'fund', 'id', 'note', 'postedAt', 'segment', 'status', 'voidReason', 'voidedAt'];
 /** Exact, sorted field list of a daily closing in API responses. */
 export const CLOSING_KEYS = ['book', 'businessDate', 'cashCountId', 'closedAt', 'countedCents', 'expectedCents', 'id', 'isClosed', 'overShortCents',
-  'postedAt', 'reopenReason', 'reopenedAt'];
+  'postedAt', 'reopenReason', 'reopenedAt', 'segment'];
 
 // ---------- API builders ----------
+// Telecom (13D): every builder below that takes a book adds `segment: 'dialog_reloads'` for book 'telecom' unless the test passes its own
+// `segment` (see helpers/segments.ts). Shop and Ice Cream bodies are unchanged.
 
-/** Records an expense (default: shop rent Rs 500.00, today). Raw response. */
+/** Records an expense (default: shop rent Rs 500.00, today; a Telecom expense defaults to segment dialog_reloads). Raw response. */
 export const expNew = (s: ApiBase, over: Record<string, unknown> = {}) =>
-  post(s.app, '/expenses', { businessDate: today(), book: 'shop', category: 'rent', amountCents: 50000, description: 'Shop rent', clientRef: ref(), ...over });
+  post(s.app, '/expenses', {
+    businessDate: today(), book: 'shop', category: 'rent', amountCents: 50000, description: 'Shop rent', clientRef: ref(),
+    ...withSeg(over.book, over), ...over,
+  });
 /** Voids an expense. */
 export const expVoid = (s: ApiBase, id: number, reason = 'test void') => post(s.app, `/expenses/${id}/void`, { reason });
 
-/** Sets the opening balance of a book (default Rs 10,000.00, today; Ice Cream defaults to the Cost fund). Raw response. */
+/**
+ * Sets the opening balance of a book (default Rs 10,000.00, today; Ice Cream defaults to the Cost fund; Telecom defaults to the
+ * segment dialog_reloads: one opening balance per scope). Raw response.
+ */
 export const openNew = (s: ApiBase, book: Book, over: Record<string, unknown> = {}) =>
   post(s.app, `/cashbooks/${book}/opening`, {
-    businessDate: today(), amountCents: 1000000, ...(book === 'icecream' ? { fund: 'cost' } : {}), clientRef: ref(), ...over,
+    businessDate: today(), amountCents: 1000000, ...(book === 'icecream' ? { fund: 'cost' } : {}), clientRef: ref(),
+    ...withSeg(book, over), ...over,
   });
 /** Voids an opening balance / capital entry. */
 export const capVoid = (s: ApiBase, id: number, reason = 'test void') => post(s.app, `/capital-entries/${id}/void`, { reason });
 
-/** Records a cash count (dated today unless overridden). Raw response. */
+/** Records a cash count (dated today unless overridden; Telecom: the drawer of `over.segment`, default dialog_reloads). Raw response. */
 export const countNew = (s: ApiBase, book: Book, countedCents: number, over: Record<string, unknown> = {}) =>
-  post(s.app, '/cash-counts', { businessDate: today(), book, countedCents, clientRef: ref(), ...over });
+  post(s.app, '/cash-counts', { businessDate: today(), book, countedCents, clientRef: ref(), ...withSeg(book, over), ...over });
 /** Voids a cash count. */
 export const countVoid = (s: ApiBase, id: number, reason = 'test void') => post(s.app, `/cash-counts/${id}/void`, { reason });
 
-/** Closes a book's day (default today). Raw response. */
+/**
+ * Closes a book's day (default today). Telecom closes ONE segment (`over.segment`, default dialog_reloads): the other seven stay
+ * open (use `seg.closeAll` to close the whole Telecom day). Raw response.
+ */
 export const closeNew = (s: ApiBase, book: Book, businessDate = today(), over: Record<string, unknown> = {}) =>
-  post(s.app, '/daily-closings', { book, businessDate, clientRef: ref(), ...over });
+  post(s.app, '/daily-closings', { book, businessDate, clientRef: ref(), ...withSeg(book, over), ...over });
 /** Closes a day and returns the closing (throws unless 201). */
 export async function closeOk(s: ApiBase, book: Book, businessDate = today(), over: Record<string, unknown> = {}): Promise<any> {
   const r = await closeNew(s, book, businessDate, over);
@@ -56,12 +69,12 @@ export async function closeOk(s: ApiBase, book: Book, businessDate = today(), ov
 /** Reopens a closed day. */
 export const reopenNew = (s: ApiBase, id: number, reason = 'fix a mistake') => post(s.app, `/daily-closings/${id}/reopen`, { reason });
 
-/** The ledger of a book (`qs` such as `?from=2026-01-01&limit=2`). */
+/** The ledger of a book (`qs` such as `?from=2026-01-01&limit=2`; Telecom: add `segment=dialog_reloads`, or none for the total ledger). */
 export const ledgerGet = (s: ApiBase, book: Book, qs = '') => get(s.app, `/cashbooks/${book}${qs}`);
 
 // ---------- ledger readers ----------
 
-/** Balance of a cash book straight from the ledger (sum of every row). */
+/** Balance of a cash book straight from the ledger (sum of every row; Telecom: the total of all segments). */
 export const bookBal = (s: { ctx: AppContext }, book: Book): number =>
   num(s, 'SELECT COALESCE(SUM(amount_cents),0) FROM cash_entries WHERE book = ?', book);
 

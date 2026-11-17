@@ -9,41 +9,59 @@ import { ref, today } from './inventory.ts';
 import type { ApiBase } from './inventory.ts';
 import { num, sql } from './phase4.ts';
 import { bookBal, fundBal, openNew } from './phase8.ts';
+import { DEFAULT_CARD_SEGMENT, DEFAULT_SEGMENT, withSeg } from './segments.ts';
 import type { Book, Fund } from './phase8.ts';
 
 /** Exact, sorted field list of a transfer in API responses. */
-export const TRANSFER_KEYS = ['amountCents', 'backdated', 'businessDate', 'clientRef', 'fromBook', 'fromFund', 'id', 'note', 'postedAt', 'status',
-  'toBook', 'toFund', 'voidReason', 'voidedAt'];
+export const TRANSFER_KEYS = ['amountCents', 'backdated', 'businessDate', 'clientRef', 'fromBook', 'fromFund', 'fromSegment', 'id', 'note', 'postedAt',
+  'status', 'toBook', 'toFund', 'toSegment', 'voidReason', 'voidedAt'];
 /** Exact, sorted field list of a capital entry in API responses. */
-export const CAPITAL_KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'fund', 'id', 'kind', 'note', 'postedAt', 'status',
-  'voidReason', 'voidedAt'];
+export const CAPITAL_KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'fund', 'id', 'kind', 'note', 'postedAt', 'segment',
+  'status', 'voidReason', 'voidedAt'];
 
 // ---------- API builders ----------
+// Telecom (13D): a Telecom side of a transfer takes `fromSegment` / `toSegment`, every other Telecom entry takes `segment`; the helpers add
+// 'dialog_reloads' when the test names none (a transfer between two Telecom sides: the receiving side defaults to 'dialog_cards').
+
+/** Segment fields of a transfer body for the Telecom sides that the test did not name. */
+function transferSegments(over: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const fromBook = over.fromBook ?? 'shop';
+  const toBook = over.toBook ?? 'telecom';
+  const from = over.fromSegment ?? (fromBook === 'telecom' ? DEFAULT_SEGMENT : undefined);
+  if (fromBook === 'telecom' && over.fromSegment === undefined) out.fromSegment = from;
+  if (toBook === 'telecom' && over.toSegment === undefined) out.toSegment = fromBook === 'telecom' && from === DEFAULT_SEGMENT ? DEFAULT_CARD_SEGMENT : DEFAULT_SEGMENT;
+  return out;
+}
 
 /**
- * Transfers money between books (default: Shop -> Telecom, Rs 100.00, today). Pass `fromFund` / `toFund` for Ice Cream sides.
- * Raw response.
+ * Transfers money between books (default: Shop -> Telecom, Rs 100.00, today). Pass `fromFund` / `toFund` for Ice Cream sides and
+ * `fromSegment` / `toSegment` for Telecom sides (default dialog_reloads). Raw response.
  */
 export const trNew = (s: ApiBase, over: Record<string, unknown> = {}) =>
-  post(s.app, '/cash-transfers', { businessDate: today(), fromBook: 'shop', toBook: 'telecom', amountCents: 10000, clientRef: ref(), ...over });
+  post(s.app, '/cash-transfers', {
+    businessDate: today(), fromBook: 'shop', toBook: 'telecom', amountCents: 10000, clientRef: ref(), ...transferSegments(over), ...over,
+  });
 /** Transfer with short arguments: `tr(s, 'shop', 'icecream', 5000, { toFund: 'profit' })`. Raw response. */
 export const tr = (s: ApiBase, fromBook: Book, toBook: Book, amountCents: number, over: Record<string, unknown> = {}) =>
   trNew(s, { fromBook, toBook, amountCents, ...over });
 /** Voids a transfer. */
 export const trVoid = (s: ApiBase, id: number, reason = 'test void') => post(s.app, `/cash-transfers/${id}/void`, { reason });
 
-/** Records a cash drawing (default: Shop, Rs 100.00, today). Raw response. */
+/** Records a cash drawing (default: Shop, Rs 100.00, today; a Telecom drawing defaults to segment dialog_reloads). Raw response. */
 export const drawCash = (s: ApiBase, over: Record<string, unknown> = {}) =>
-  post(s.app, '/drawings', { kind: 'cash', businessDate: today(), book: 'shop', amountCents: 10000, clientRef: ref(), ...over });
-/** Records capital (default: Shop, Rs 100.00, today; Ice Cream defaults to the Cost fund). Raw response. */
+  post(s.app, '/drawings', { kind: 'cash', businessDate: today(), book: 'shop', amountCents: 10000, clientRef: ref(), ...withSeg(over.book, over), ...over });
+/** Records capital (default: Shop, Rs 100.00, today; Ice Cream defaults to the Cost fund; Telecom to segment dialog_reloads). Raw response. */
 export const capNew = (s: ApiBase, over: Record<string, unknown> = {}) =>
   post(s.app, '/capital', {
-    businessDate: today(), book: 'shop', amountCents: 10000, ...(over.book === 'icecream' ? { fund: 'cost' } : {}), clientRef: ref(), ...over,
+    businessDate: today(), book: 'shop', amountCents: 10000, ...(over.book === 'icecream' ? { fund: 'cost' } : {}), clientRef: ref(),
+    ...withSeg(over.book, over), ...over,
   });
 
 /**
  * Gives every book and fund a starting balance through the real opening-balance endpoint, dated `date`.
- * Shop and Telecom take one amount each; Ice Cream takes one per fund.
+ * Shop and Telecom take one amount each (Telecom: into the segment dialog_reloads, one opening balance per scope); Ice Cream takes one
+ * per fund. For per-segment Telecom starting balances use `seg.seed` (helpers/seg.ts).
  */
 export async function seedBooks(s: ApiBase, a: { shop?: number; telecom?: number; cost?: number; electricity?: number; profit?: number }, date = today()): Promise<void> {
   const put = async (book: Book, amountCents: number | undefined, fund?: Fund) => {
