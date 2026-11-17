@@ -71,7 +71,7 @@ export function shopProduct(c: DatabaseSync, stock = true): number {
 
 // ---- one constructor per table: complete valid rows (overrides win) ----------------------------------------------------------------
 export type Maker = (c: DatabaseSync, o?: Row) => number;
-const withDefaults = (table: string, base: (c: DatabaseSync) => Row): Maker => (c, o = {}) => ins(c, table, { ...base(c), ...o });
+const withDefaults = (table: string, base: (c: DatabaseSync, o: Row) => Row): Maker => (c, o = {}) => ins(c, table, { ...base(c, o), ...o });
 
 export const MAKE: Record<string, Maker> = {
   cash_entries: withDefaults('cash_entries', () => ({ book: 'shop', business_date: D, type: 'cash_adjustment', amount_cents: 100 })),
@@ -80,7 +80,7 @@ export const MAKE: Record<string, Maker> = {
   owner_drawings: withDefaults('owner_drawings', () => ({ book: 'shop', business_date: D, kind: 'cash', amount_cents: 100, client_ref: uniq() })),
   expenses: withDefaults('expenses', () => ({ book: 'shop', business_date: D, category: 'other', amount_cents: 100, description: 'x', client_ref: uniq() })),
   purchases: withDefaults('purchases', () => ({ book: 'shop', business_date: D, total_cents: 100, client_ref: uniq() })),
-  stock_losses: withDefaults('stock_losses', (c) => ({ book: 'shop', business_date: D, product_id: shopProduct(c), qty: 1, cost_cents: 100, reason: 'lost', client_ref: uniq() })),
+  stock_losses: withDefaults('stock_losses', (c, o) => ({ book: 'shop', business_date: D, product_id: o.product_id ?? shopProduct(c), qty: 1, cost_cents: 100, reason: 'lost', client_ref: uniq() })),
   stocktakes: withDefaults('stocktakes', () => ({ book: 'shop', business_date: D, status: 'draft', client_ref: uniq() })),
   reload_sales: withDefaults('reload_sales', (c) => ({ business_date: D, provider_id: providerId(c, 'Dialog'), sales_cents: 10000, commission_bp: 600, extra_cents: 0, commission_cents: 600, client_ref: uniq() })),
   ezcash_sales: withDefaults('ezcash_sales', (c) => ({ business_date: D, provider_id: providerId(c, 'Dialog'), bill_total_cents: 10000, commission_bp: 80, commission_cents: 80, client_ref: uniq() })),
