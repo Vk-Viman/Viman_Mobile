@@ -20,7 +20,7 @@ import type { AppContext } from '../app.ts';
 import { AppError } from '../lib/errors.ts';
 import { mulDivRound } from '../lib/money.ts';
 import {
-  findCategoryByBookName, getCategory, insertCategory, listCategories, updateCategory,
+  findCategoryByBookName, getCategory, getProviderRow, insertCategory, listCategories, updateCategory,
 } from '../repositories/categories.repo.ts';
 import type { CategoryRow } from '../repositories/categories.repo.ts';
 import {
@@ -32,6 +32,7 @@ import {
 } from '../repositories/suppliers.repo.ts';
 import type { SupplierRow } from '../repositories/suppliers.repo.ts';
 import { logAudit } from './audit.service.ts';
+import { mapSegmentAbort } from './segments.ts';
 import {
   NOTE_MAX_LENGTH, assertNoFieldErrors, notFound, trimmed, validationError,
 } from './validation.ts';
@@ -106,6 +107,7 @@ function dupCode(noun: string): AppError {
  * only fires if two requests raced (the database UNIQUE constraint is the final guard).
  */
 function mapUniqueAbort(err: unknown): never {
+  mapSegmentAbort(err); // 13D: category provider / product provider triggers (migration 024)
   const msg = err instanceof Error ? err.message : '';
   if (/UNIQUE constraint failed: index 'ux_categories_book_name'/.test(msg)) {
     const message = 'A category with this name already exists in that book.';
@@ -137,17 +139,34 @@ export function listCategoryItems(ctx: AppContext, q: { active?: boolean; book?:
 }
 
 /**
- * Creates a category.
- *
- * @throws AppError 400 VALIDATION_ERROR (empty/too long name), 409 DUPLICATE_NAME.
+ * 13D: checks a category's provider link. Only a Telecom category may have a provider (CATEGORY_PROVIDER_NOT_ALLOWED) and the
+ * provider must be one of the fixed reload providers (VALIDATION_ERROR on `providerId`).
  */
-export function createCategory(ctx: AppContext, body: { name: string; book: Book }): Category {
+function checkProvider(conn: DatabaseSync, book: Book, providerId: number | null): void {
+  if (providerId === null) return;
+  if (book !== 'telecom') {
+    throw new AppError(400, 'CATEGORY_PROVIDER_NOT_ALLOWED', 'Only a Telecom category can be linked to a provider.',
+      { providerId: 'Only Telecom categories have a provider.' });
+  }
+  if (!getProviderRow(conn, providerId)) throw validationError({ providerId: 'Choose a provider.' });
+}
+
+/**
+ * Creates a category. A Telecom category may be linked to a provider (`providerId`): its card products then sell and stock in
+ * that provider's Cards segment (13D). A Telecom category WITHOUT a provider cannot hold new card products.
+ *
+ * @throws AppError 400 VALIDATION_ERROR (empty/too long name, unknown provider), 400 CATEGORY_PROVIDER_NOT_ALLOWED (Shop
+ *   category with a provider), 409 DUPLICATE_NAME.
+ */
+export function createCategory(ctx: AppContext, body: { name: string; book: Book; providerId?: number | null }): Category {
   const fields: Fields = {};
   const name = reqText(fields, 'name', 'Name', body.name, CATEGORY_NAME_MAX);
   assertNoFieldErrors(fields);
   return runWrite(ctx, (conn) => {
+    const providerId = body.providerId ?? null;
+    checkProvider(conn, body.book, providerId);
     if (findCategoryByBookName(conn, body.book, name)) throw dupCategory(body.book);
-    const id = insertCategory(conn, { name, book: body.book });
+    const id = insertCategory(conn, { name, book: body.book, providerId });
     const after = getCategory(conn, id)!;
     logAudit(conn, 'category', String(id), 'create', null, after);
     return after;
@@ -155,13 +174,16 @@ export function createCategory(ctx: AppContext, body: { name: string; book: Book
 }
 
 /**
- * Renames, moves to another book, or (de)activates a category. Nothing is written when nothing changed.
+ * Renames, moves to another book, (de)activates a category, or sets / clears its Telecom provider (13D). Nothing is written when
+ * nothing changed. The provider is locked once the category has products (their segment would change); the default "Scratch
+ * Cards" category may be given a provider while it has none. Moving a category to Shop clears its provider.
  *
  * @throws AppError 404 NOT_FOUND; 409 DEFAULT_CATEGORY_LOCKED (name/book of a built-in category);
- *   409 CATEGORY_HAS_PRODUCTS (book change while products use it); 409 DUPLICATE_NAME; 400 VALIDATION_ERROR.
+ *   409 CATEGORY_HAS_PRODUCTS (book change while products use it); 409 CATEGORY_PROVIDER_LOCKED (provider change while products
+ *   use it); 400 CATEGORY_PROVIDER_NOT_ALLOWED; 409 DUPLICATE_NAME; 400 VALIDATION_ERROR.
  */
 export function updateCategoryItem(
-  ctx: AppContext, id: number, body: { name?: string; book?: Book; active?: boolean },
+  ctx: AppContext, id: number, body: { name?: string; book?: Book; active?: boolean; providerId?: number | null },
 ): Category {
   return runWrite(ctx, (conn) => {
     const before = getCategory(conn, id);
@@ -171,11 +193,24 @@ export function updateCategoryItem(
     assertNoFieldErrors(fields);
 
     // Build a patch of only the values that really differ from what is stored.
-    const patch: { name?: string; book?: Book; active?: boolean } = {};
+    const patch: { name?: string; book?: Book; active?: boolean; providerId?: number | null } = {};
     if (name !== undefined && name !== before.name) patch.name = name;
     if (body.book !== undefined && body.book !== before.book) patch.book = body.book;
     if (body.active !== undefined && body.active !== before.active) patch.active = body.active;
+    if (body.providerId !== undefined && body.providerId !== before.providerId) patch.providerId = body.providerId;
+    // A category leaving Telecom cannot keep a provider (only Telecom categories have one).
+    if (patch.book !== undefined && patch.book !== 'telecom' && before.providerId !== null && patch.providerId === undefined) {
+      patch.providerId = null;
+    }
     if (Object.keys(patch).length === 0) return before;
+    if (patch.providerId !== undefined) {
+      const targetBook = patch.book ?? before.book;
+      checkProvider(conn, targetBook, patch.providerId);
+      if (before.productCount > 0) {
+        throw new AppError(409, 'CATEGORY_PROVIDER_LOCKED',
+          'The provider of a category that already has products cannot be changed.', { providerId: 'Locked: this category has products.' });
+      }
+    }
 
     if (before.isDefault && (patch.name !== undefined || patch.book !== undefined)) {
       throw new AppError(409, 'DEFAULT_CATEGORY_LOCKED', 'The name and book of a default category cannot be changed.');

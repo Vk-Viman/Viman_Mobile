@@ -4,7 +4,8 @@
  *   GET /categories?active=&book=   list       POST /categories   create (201)       PUT /categories/:id   edit
  *
  * Layer: route (thin) -> `catalog.service.ts`. The rules (default categories locked, a category's book fixed
- * once it has products, unique names) live in the service and the migration 003 triggers.
+ * once it has products, unique names, Telecom provider link locked once it has products) live in the service and the
+ * migration 003/024 triggers. Each category in the list carries `providerId` and `providerName` (null when none).
  */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
@@ -25,6 +26,8 @@ const createBody = {
   properties: {
     name: { type: 'string' },
     book: bookQuery,
+    // 13D: Telecom categories only (a Shop category with a provider is 400 CATEGORY_PROVIDER_NOT_ALLOWED); null = no provider.
+    providerId: { type: ['integer', 'null'], minimum: 1 },
   },
 } as const;
 
@@ -36,6 +39,8 @@ const updateBody = {
     name: { type: 'string' },
     book: bookQuery,
     active: { type: 'boolean' },
+    // Locked (409 CATEGORY_PROVIDER_LOCKED) once the category has products; null clears the provider.
+    providerId: { type: ['integer', 'null'], minimum: 1 },
   },
 } as const;
 
@@ -51,12 +56,12 @@ export function registerCategoryRoutes(app: FastifyInstance, ctx: AppContext): v
   });
 
   app.post('/categories', { schema: { body: createBody } }, async (request, reply) => {
-    const item = createCategory(ctx, request.body as { name: string; book: Book });
+    const item = createCategory(ctx, request.body as { name: string; book: Book; providerId?: number | null });
     return reply.code(201).send({ item });
   });
 
   app.put('/categories/:id', { schema: { params: idParamsSchema, body: updateBody } }, async (request) => ({
     item: updateCategoryItem(ctx, parseId(request.params),
-      request.body as { name?: string; book?: Book; active?: boolean }),
+      request.body as { name?: string; book?: Book; active?: boolean; providerId?: number | null }),
   }));
 }
