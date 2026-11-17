@@ -24,6 +24,8 @@ import { assertDayOpen } from './day-closing.ts';
 import { assertFundMatchesBook } from './fund-rules.ts';
 import { getCapitalEntry } from './opening-balance.service.ts';
 import type { CapitalEntry } from './opening-balance.service.ts';
+import { resolveEntrySegment } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import { NOTE_MAX_LENGTH, assertNoFieldErrors, checkBusinessDate, trimmed } from './validation.ts';
 import type { Fields } from './validation.ts';
@@ -33,15 +35,15 @@ export { getCapitalEntry };
 
 /** Request body of a capital entry. */
 export interface CapitalCreate {
-  businessDate: string; book: CashBook; fund?: IceFund; amountCents: number; note?: string; clientRef: string;
+  businessDate: string; book: CashBook; fund?: IceFund; segment?: StoredSegment; amountCents: number; note?: string; clientRef: string;
 }
 
 /**
  * Lists capital and/or opening-balance entries, newest first. `kind` defaults to every kind. `totals.amountCents` sums only
- * POSTED entries that match the filters.
+ * POSTED entries that match the filters. `segment` narrows a Telecom listing to one segment.
  */
 export function listCapital(ctx: AppContext, q: {
-  kind?: 'capital' | 'opening_balance'; book?: CashBook; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
+  kind?: 'capital' | 'opening_balance'; book?: CashBook; segment?: StoredSegment; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
 }): { items: CapitalEntry[]; total: number; totals: { amountCents: number } } {
   const r = listCapitalEntries(ctx.database.conn, q);
   return { items: r.ids.map((id) => getCapitalEntry(ctx, id)), total: r.total, totals: { amountCents: r.amountCents } };
@@ -52,34 +54,37 @@ export function listCapital(ctx: AppContext, q: {
  * `clientRef`: a repeat returns the saved entry with `created: false` (the same reference used for a different kind of
  * record, or another book, is 409 CLIENT_REF_CONFLICT).
  *
- * Validation order: fields -> fund rule -> R-FD -> clientRef repeat -> DAY_CLOSED.
+ * Validation order: fields -> fund rule -> segment rule (Telecom requires one of the eight, others forbid) -> R-FD -> clientRef
+ * repeat -> DAY_CLOSED (of that segment only).
  *
- * @throws AppError 400 VALIDATION_ERROR / FUND_REQUIRED / FUND_NOT_ALLOWED / FUTURE_DATE_NOT_ALLOWED, 409 DAY_CLOSED / CLIENT_REF_CONFLICT.
+ * @throws AppError 400 VALIDATION_ERROR / FUND_REQUIRED / FUND_NOT_ALLOWED / SEGMENT_REQUIRED / SEGMENT_NOT_ALLOWED /
+ *   FUTURE_DATE_NOT_ALLOWED, 409 DAY_CLOSED / CLIENT_REF_CONFLICT / SEGMENT_LEGACY_REFUSED.
  */
 export function createCapital(ctx: AppContext, body: CapitalCreate): { item: CapitalEntry; warnings: CashWarning[]; created: boolean } {
   const fields: Fields = {};
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
   assertFundMatchesBook(body.book, body.fund);
+  const segment = resolveEntrySegment(body.book, body.segment);
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
   const fund = body.book === 'icecream' ? (body.fund as IceFund) : null;
 
   return runWrite(ctx, (conn) => {
     const existing = getCapitalByClientRef(conn, body.clientRef);
     if (existing) {
-      if (existing.kind !== 'capital' || existing.book !== body.book) {
+      if (existing.kind !== 'capital' || existing.book !== body.book || existing.segment !== segment) {
         throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different record.');
       }
       return { item: getCapitalEntry(ctx, existing.id), warnings: [], created: false };
     }
 
-    assertDayOpen(conn, [body.book], body.businessDate); // R9
+    assertDayOpen(conn, [{ book: body.book, segment }], body.businessDate); // R9
     const id = insertCapital(conn, {
-      businessDate: body.businessDate, book: body.book, fund, kind: 'capital', amountCents: body.amountCents, note,
+      businessDate: body.businessDate, book: body.book, fund, segment, kind: 'capital', amountCents: body.amountCents, note,
       clientRef: body.clientRef,
     });
     postCash(conn, {
-      book: body.book, fund, businessDate: body.businessDate, type: 'capital', amountCents: body.amountCents,
+      book: body.book, fund, segment, businessDate: body.businessDate, type: 'capital', amountCents: body.amountCents,
       refTable: 'capital_entries', refId: id, fundKind: 'capital', note: note || null,
     });
     const item = getCapitalEntry(ctx, id);

@@ -25,7 +25,9 @@ import { logAudit } from './audit.service.ts';
 import { postCash, reverseCash } from './cash-posting.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
-import { BOOK_LABEL, assertDayOpen } from './day-closing.ts';
+import { assertDayOpen } from './day-closing.ts';
+import { resolveEntrySegment, scopeLabel } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated, isBackdatedToday,
@@ -36,14 +38,14 @@ import type { Fields } from './validation.ts';
 /** An opening balance / capital entry as returned by the API (adds the `backdated` flag). */
 export interface CapitalEntry {
   id: number; businessDate: string; postedAt: string; backdated: boolean; book: CashBook; fund: IceFund | null;
-  kind: 'opening_balance' | 'capital'; amountCents: number; note: string; status: RecordStatus; voidedAt: string | null;
+  segment: StoredSegment | null; kind: 'opening_balance' | 'capital'; amountCents: number; note: string; status: RecordStatus; voidedAt: string | null;
   voidReason: string | null; clientRef: string;
 }
 
 function toEntry(r: CapitalRow): CapitalEntry {
   return {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
-    book: r.book, fund: r.fund, kind: r.kind, amountCents: r.amountCents, note: r.note, status: r.status,
+    book: r.book, fund: r.fund, segment: r.segment, kind: r.kind, amountCents: r.amountCents, note: r.note, status: r.status,
     voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
   };
 }
@@ -70,9 +72,12 @@ export function checkFundForBook(book: CashBook, fund: IceFund | undefined): voi
   }
 }
 
-/** The opening balances of a book, oldest first (voided ones included, marked by `status`). */
-export function listOpeningBalances(ctx: AppContext, book: CashBook): { items: CapitalEntry[] } {
-  return { items: listCapital(ctx.database.conn, book, 'opening_balance').map(toEntry) };
+/**
+ * The opening balances of a book, oldest first (voided ones included, marked by `status`). Telecom: one per segment, so without
+ * `segment` every segment's (and the legacy one) is listed.
+ */
+export function listOpeningBalances(ctx: AppContext, book: CashBook, segment?: StoredSegment): { items: CapitalEntry[] } {
+  return { items: listCapital(ctx.database.conn, book, 'opening_balance', segment).map(toEntry) };
 }
 
 /** One capital / opening-balance entry by id. @throws AppError 404 NOT_FOUND. */
@@ -82,18 +87,18 @@ export function getCapitalEntry(ctx: AppContext, id: number): CapitalEntry {
 
 /** Request body of an opening balance. */
 export interface OpeningBalanceCreate {
-  businessDate: string; amountCents: number; fund?: IceFund; note?: string; clientRef: string;
+  businessDate: string; amountCents: number; fund?: IceFund; segment?: StoredSegment; note?: string; clientRef: string;
 }
 
 /**
- * Records the opening balance of a cash book: cash IN `opening_balance` (+ the fund row for Ice Cream), audited, in one
- * transaction. Idempotent by `clientRef` (a repeat returns the saved entry with `created: false`; the same reference
+ * Records the opening balance of a cash scope (book + Telecom segment + Ice Cream fund; one per scope, 13D): cash IN
+ * `opening_balance` (+ the fund row for Ice Cream), audited, in one transaction. Idempotent by `clientRef` (a repeat returns the saved entry with `created: false`; the same reference
  * used for another book is 409 CLIENT_REF_CONFLICT).
  *
- * Validation order: fields -> fund rule -> R-FD -> clientRef repeat -> DAY_CLOSED -> OPENING_BALANCE_EXISTS.
+ * Validation order: fields -> fund rule -> segment rule -> R-FD -> clientRef repeat -> DAY_CLOSED -> OPENING_BALANCE_EXISTS.
  *
- * @throws AppError 400 VALIDATION_ERROR / FUND_REQUIRED / FUND_NOT_ALLOWED / FUTURE_DATE_NOT_ALLOWED, 409 DAY_CLOSED /
- *   OPENING_BALANCE_EXISTS / CLIENT_REF_CONFLICT.
+ * @throws AppError 400 VALIDATION_ERROR / FUND_REQUIRED / FUND_NOT_ALLOWED / SEGMENT_REQUIRED / SEGMENT_NOT_ALLOWED /
+ *   FUTURE_DATE_NOT_ALLOWED, 409 DAY_CLOSED / OPENING_BALANCE_EXISTS / CLIENT_REF_CONFLICT / SEGMENT_LEGACY_REFUSED.
  */
 export function setOpeningBalance(
   ctx: AppContext, book: CashBook, body: OpeningBalanceCreate,
@@ -102,31 +107,34 @@ export function setOpeningBalance(
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
   checkFundForBook(book, body.fund);
+  const segment = resolveEntrySegment(book, body.segment);
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
   const fund = book === 'icecream' ? (body.fund as IceFund) : null;
+  const scope = { book, segment };
 
   return runWrite(ctx, (conn) => {
     const existing = getCapitalByClientRef(conn, body.clientRef);
     if (existing) {
-      if (existing.book !== book || existing.kind !== 'opening_balance') {
+      if (existing.book !== book || existing.kind !== 'opening_balance' || existing.segment !== segment) {
         throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different record.');
       }
       return { item: toEntry(existing), warnings: [], created: false };
     }
 
-    assertDayOpen(conn, [book], body.businessDate); // R9
-    const already = findPostedOpening(conn, book, fund);
+    assertDayOpen(conn, [scope], body.businessDate); // R9
+    const already = findPostedOpening(conn, book, fund, segment);
     if (already) {
-      const where = fund === null ? `the ${BOOK_LABEL[book]} cash book` : `the Ice Cream ${fund} fund`;
+      const where = fund === null ? `the ${scopeLabel(scope)} cash book` : `the Ice Cream ${fund} fund`;
       throw new AppError(409, 'OPENING_BALANCE_EXISTS',
         `An opening balance is already recorded for ${where} (dated ${already.businessDate}). Void it first if it was wrong.`,
         undefined, { existingId: already.id });
     }
     const id = insertCapital(conn, {
-      businessDate: body.businessDate, book, fund, kind: 'opening_balance', amountCents: body.amountCents, note, clientRef: body.clientRef,
+      businessDate: body.businessDate, book, fund, segment, kind: 'opening_balance', amountCents: body.amountCents, note,
+      clientRef: body.clientRef,
     });
     postCash(conn, {
-      book, fund, businessDate: body.businessDate, type: 'opening_balance', amountCents: body.amountCents,
+      book, fund, segment, businessDate: body.businessDate, type: 'opening_balance', amountCents: body.amountCents,
       refTable: 'capital_entries', refId: id, fundKind: 'opening_balance', note: note || null,
     });
     const item = loadEntry(conn, id);
@@ -151,7 +159,8 @@ export function voidCapitalEntry(ctx: AppContext, id: number, body: { reason: st
   return runWrite(ctx, (conn) => {
     const row = getCapital(conn, id);
     if (!row) throw notFound('Capital entry');
-    assertDayOpen(conn, [row.book], row.businessDate); // R9: judged on the entry's own date
+    const scope = { book: row.book, segment: row.segment };
+    assertDayOpen(conn, [scope], row.businessDate); // R9: judged on the entry's own date (and own segment)
     if (row.status === 'void') throw alreadyVoid('entry');
     const before = toEntry(row);
 
@@ -162,6 +171,6 @@ export function voidCapitalEntry(ctx: AppContext, id: number, body: { reason: st
     const after = loadEntry(conn, id);
     logAudit(conn, 'capital_entry', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return { item: after, warnings: negativeCashWarnings(conn, [row.book]) };
+    return { item: after, warnings: negativeCashWarnings(conn, [scope]) };
   });
 }

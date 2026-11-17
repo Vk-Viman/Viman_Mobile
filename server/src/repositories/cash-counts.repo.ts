@@ -7,29 +7,30 @@
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { CashBook, IceFund } from './cash-entries.repo.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import type { RecordStatus } from './expenses.repo.ts';
 import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
 
 type N = number | bigint;
 
-/** One cash count row. */
+/** One cash count row (`segment` is set exactly for Telecom counts: the drawer of one segment is counted, 13D). */
 export interface CashCountRow {
-  id: number; book: CashBook; fund: IceFund | null; businessDate: string; postedAt: string; expectedCents: number;
-  countedCents: number; differenceCents: number; note: string; status: RecordStatus; voidedAt: string | null;
+  id: number; book: CashBook; fund: IceFund | null; segment: StoredSegment | null; businessDate: string; postedAt: string;
+  expectedCents: number; countedCents: number; differenceCents: number; note: string; status: RecordStatus; voidedAt: string | null;
   voidReason: string | null; cashEntryId: number | null; clientRef: string;
 }
 interface Raw {
-  id: N; book: CashBook; fund: IceFund | null; business_date: string; posted_at: string; expected_cents: N; counted_cents: N;
-  difference_cents: N; note: string; status: RecordStatus; voided_at: string | null; void_reason: string | null;
+  id: N; book: CashBook; fund: IceFund | null; segment: StoredSegment | null; business_date: string; posted_at: string; expected_cents: N;
+  counted_cents: N; difference_cents: N; note: string; status: RecordStatus; voided_at: string | null; void_reason: string | null;
   cash_entry_id: N | null; client_ref: string;
 }
 
-const SELECT = `SELECT id, book, fund, business_date, posted_at, expected_cents, counted_cents, difference_cents, note, status,
+const SELECT = `SELECT id, book, fund, segment, business_date, posted_at, expected_cents, counted_cents, difference_cents, note, status,
   voided_at, void_reason, cash_entry_id, client_ref FROM cash_counts`;
 
 function map(r: Raw): CashCountRow {
   return {
-    id: Number(r.id), book: r.book, fund: r.fund, businessDate: r.business_date, postedAt: r.posted_at,
+    id: Number(r.id), book: r.book, fund: r.fund, segment: r.segment, businessDate: r.business_date, postedAt: r.posted_at,
     expectedCents: Number(r.expected_cents), countedCents: Number(r.counted_cents), differenceCents: Number(r.difference_cents),
     note: r.note, status: r.status, voidedAt: r.voided_at, voidReason: r.void_reason, cashEntryId: numberOrNull(r.cash_entry_id),
     clientRef: r.client_ref,
@@ -50,13 +51,13 @@ export function getCashCountByClientRef(conn: DatabaseSync, clientRef: string): 
 
 /** Adds a posted count (adjustment link still empty); returns its id. */
 export function insertCashCount(conn: DatabaseSync, c: {
-  book: CashBook; fund: IceFund | null; businessDate: string; expectedCents: number; countedCents: number;
-  differenceCents: number; note: string; clientRef: string;
+  book: CashBook; fund: IceFund | null; segment: StoredSegment | null; businessDate: string; expectedCents: number;
+  countedCents: number; differenceCents: number; note: string; clientRef: string;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO cash_counts (book, fund, business_date, expected_cents, counted_cents, difference_cents, note, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(c.book, c.fund, c.businessDate, c.expectedCents, c.countedCents, c.differenceCents, c.note, c.clientRef);
+    `INSERT INTO cash_counts (book, fund, segment, business_date, expected_cents, counted_cents, difference_cents, note, client_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(c.book, c.fund, c.segment, c.businessDate, c.expectedCents, c.countedCents, c.differenceCents, c.note, c.clientRef);
   return Number(res.lastInsertRowid);
 }
 
@@ -72,11 +73,12 @@ export function markCashCountVoid(conn: DatabaseSync, id: number, reason: string
 
 /** Counts newest business date first; `differenceCents` sums only POSTED rows that match the filters. */
 export function listCashCounts(conn: DatabaseSync, q: {
-  book?: CashBook; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
+  book?: CashBook; segment?: StoredSegment; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
 }): { items: CashCountRow[]; total: number } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
   if (q.book !== undefined) { where.push('book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('segment = ?'); params.push(q.segment); }
   if (q.from !== undefined) { where.push('business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('business_date <= ?'); params.push(q.to); }
   if (q.status !== undefined) { where.push('status = ?'); params.push(q.status); }

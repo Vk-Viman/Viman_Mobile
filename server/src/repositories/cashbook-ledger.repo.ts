@@ -5,9 +5,12 @@
  * id (posting order within a day); reports follow business dates (R7). The running balance of a row is
  * `opening + SUM(amount of every row of the period up to and including this row)`, computed with a window function
  * over the WHOLE period before paging, so every page continues exactly where the previous one stopped.
+ * A scope is a book plus (Telecom only) a segment; Telecom without a segment is the whole-Telecom total ledger (13D).
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { CashBook, CashEntryRow } from './cash-entries.repo.ts';
+import { toScopeQuery } from '../services/segments.ts';
+import type { ScopeQuery, StoredSegment } from '../services/segments.ts';
 import { numberOrNull } from './sql-helpers.ts';
 
 type N = number | bigint;
@@ -18,20 +21,23 @@ export interface LedgerRow extends CashEntryRow { runningBalanceCents: number }
 /** Totals of a period: `openingCents` = ledger balance before `from`; in/out are positive numbers. */
 export interface PeriodTotals { openingCents: number; inCents: number; outCents: number; closingCents: number; count: number }
 
-function periodWhere(book: CashBook, from: string | undefined, to: string | undefined): { sql: string; params: SQLInputValue[] } {
+function periodWhere(scope: CashBook | ScopeQuery, from: string | undefined, to: string | undefined): { sql: string; params: SQLInputValue[] } {
+  const q = toScopeQuery(scope);
   const where = ['book = ?'];
-  const params: SQLInputValue[] = [book];
+  const params: SQLInputValue[] = [q.book];
+  if (q.segment) { where.push('segment = ?'); params.push(q.segment); }
   if (from !== undefined) { where.push('business_date >= ?'); params.push(from); }
   if (to !== undefined) { where.push('business_date <= ?'); params.push(to); }
   return { sql: where.join(' AND '), params };
 }
 
 /** Opening balance (rows dated before `from`), money in, money out and closing balance of a book for a period. */
-export function periodTotals(conn: DatabaseSync, book: CashBook, from: string | undefined, to: string | undefined): PeriodTotals {
+export function periodTotals(conn: DatabaseSync, scope: CashBook | ScopeQuery, from: string | undefined, to: string | undefined): PeriodTotals {
+  const before = periodWhere(scope, undefined, undefined);
   const opening = from === undefined ? 0 : Number((conn.prepare(
-    'SELECT COALESCE(SUM(amount_cents), 0) AS t FROM cash_entries WHERE book = ? AND business_date < ?',
-  ).get(book, from) as unknown as { t: N }).t);
-  const w = periodWhere(book, from, to);
+    `SELECT COALESCE(SUM(amount_cents), 0) AS t FROM cash_entries WHERE ${before.sql} AND business_date < ?`,
+  ).get(...before.params, from) as unknown as { t: N }).t);
+  const w = periodWhere(scope, from, to);
   const r = conn.prepare(
     `SELECT COUNT(*) AS n,
             COALESCE(SUM(CASE WHEN amount_cents > 0 THEN amount_cents END), 0) AS i,
@@ -45,7 +51,7 @@ export function periodTotals(conn: DatabaseSync, book: CashBook, from: string | 
 
 interface RawLedger {
   id: N; book: CashBook; business_date: string; posted_at: string; type: string; amount_cents: N;
-  fund: 'cost' | 'electricity' | 'profit' | null; ref_table: string | null; ref_id: N | null; transfer_id: N | null;
+  fund: 'cost' | 'electricity' | 'profit' | null; segment: StoredSegment | null; ref_table: string | null; ref_id: N | null; transfer_id: N | null;
   reverses_entry_id: N | null; note: string | null; running: N;
 }
 
@@ -55,19 +61,19 @@ interface RawLedger {
  * @param openingCents Balance before the period (from `periodTotals`), the start of the running sum.
  */
 export function ledgerPage(
-  conn: DatabaseSync, book: CashBook, from: string | undefined, to: string | undefined, openingCents: number,
+  conn: DatabaseSync, scope: CashBook | ScopeQuery, from: string | undefined, to: string | undefined, openingCents: number,
   limit: number, offset: number,
 ): LedgerRow[] {
-  const w = periodWhere(book, from, to);
+  const w = periodWhere(scope, from, to);
   const rows = conn.prepare(
-    `SELECT id, book, business_date, posted_at, type, amount_cents, fund, ref_table, ref_id, transfer_id, reverses_entry_id, note,
+    `SELECT id, book, business_date, posted_at, type, amount_cents, fund, segment, ref_table, ref_id, transfer_id, reverses_entry_id, note,
             ? + SUM(amount_cents) OVER (ORDER BY business_date, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running
        FROM cash_entries WHERE ${w.sql}
       ORDER BY business_date, id LIMIT ? OFFSET ?`,
   ).all(openingCents, ...w.params, limit, offset) as unknown as RawLedger[];
   return rows.map((r) => ({
     id: Number(r.id), book: r.book, businessDate: r.business_date, postedAt: r.posted_at, type: r.type,
-    amountCents: Number(r.amount_cents), fund: r.fund, refTable: r.ref_table, refId: numberOrNull(r.ref_id),
+    amountCents: Number(r.amount_cents), fund: r.fund, segment: r.segment, refTable: r.ref_table, refId: numberOrNull(r.ref_id),
     transferId: numberOrNull(r.transfer_id), reversesEntryId: numberOrNull(r.reverses_entry_id), note: r.note,
     runningBalanceCents: Number(r.running),
   }));

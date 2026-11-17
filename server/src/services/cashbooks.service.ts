@@ -23,6 +23,8 @@ import { fundBalances, fundPeriodTotals, fundTotal } from '../repositories/icecr
 import { negativeBalanceWarning, negativeFundWarning } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { BOOKS } from './day-closing.ts';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS, segmentNotAllowedError } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { validationError } from './validation.ts';
 
 /** Result of the Ice Cream invariant check (section 10.1). */
@@ -52,22 +54,46 @@ export function reconcileIceCream(conn: DatabaseSync): IceCreamReconciliation {
   };
 }
 
-/** One book on the summary screen. */
+/** One Telecom segment on the summary screen (13D): its own balance and newest closed day. */
+export interface SegmentSummary { segment: StoredSegment; label: string; balanceCents: number; lastClosedDate: string | null }
+
+/** One book on the summary screen. Telecom also lists its segments; its `balanceCents` is the Telecom total (the sum of them). */
 export interface CashBookSummary {
   book: CashBook; balanceCents: number; funds?: Record<IceFund, number>; lastClosedDate: string | null;
+  segments?: SegmentSummary[];
+}
+
+/**
+ * The eight Telecom segments (always) plus `legacy` ("Telecom before segments", only when it has entries): balance and newest
+ * closed day of each. The balances add up to the Telecom total.
+ */
+export function listSegmentSummaries(conn: DatabaseSync): SegmentSummary[] {
+  const hasLegacy = Number((conn.prepare("SELECT COUNT(*) AS n FROM cash_entries WHERE book = 'telecom' AND segment = 'legacy'")
+    .get() as unknown as { n: number | bigint }).n) > 0;
+  const codes: StoredSegment[] = hasLegacy ? [...TELECOM_SEGMENTS, 'legacy'] : [...TELECOM_SEGMENTS];
+  return codes.map((segment) => ({
+    segment, label: SEGMENT_LABEL[segment], balanceCents: cashBalance(conn, { book: 'telecom', segment }),
+    lastClosedDate: lastClosedDate(conn, { book: 'telecom', segment }),
+  }));
 }
 
 /**
  * All three books: all-time balance, the Ice Cream fund balances and the newest closed date, plus the warnings: a
- * negative book or fund (R13) and, if it ever happens, funds that do not add up to the Ice Cream book.
+ * negative book or fund (R13) and, if it ever happens, funds that do not add up to the Ice Cream book. Telecom adds its
+ * segments and is warned PER SEGMENT (a negative segment is never hidden by a positive one).
  */
 export function listCashBooks(ctx: AppContext): { books: CashBookSummary[]; warnings: CashWarning[] } {
   const conn = ctx.database.conn;
   const warnings: CashWarning[] = [];
   const books = BOOKS.map((book): CashBookSummary => {
     const balanceCents = cashBalance(conn, book);
-    if (balanceCents < 0) warnings.push(negativeBalanceWarning(book, balanceCents));
     const summary: CashBookSummary = { book, balanceCents, lastClosedDate: lastClosedDate(conn, book) };
+    if (book === 'telecom') {
+      summary.segments = listSegmentSummaries(conn);
+      for (const s of summary.segments) {
+        if (s.balanceCents < 0) warnings.push(negativeBalanceWarning({ book, segment: s.segment }, s.balanceCents));
+      }
+    } else if (balanceCents < 0) warnings.push(negativeBalanceWarning(book, balanceCents));
     if (book === 'icecream') {
       const funds = fundBalances(conn);
       summary.funds = funds;
@@ -89,11 +115,14 @@ export function listCashBooks(ctx: AppContext): { books: CashBookSummary[]; warn
 
 /** One ledger row as returned by the API. */
 export type CashLedgerItem = Pick<LedgerRow, 'id' | 'businessDate' | 'postedAt' | 'type' | 'amountCents' | 'runningBalanceCents'
-  | 'fund' | 'refTable' | 'refId' | 'reversesEntryId' | 'note'>;
+  | 'fund' | 'segment' | 'refTable' | 'refId' | 'reversesEntryId' | 'note'>;
 
-/** The ledger of one book for a period. */
+/**
+ * The ledger of one book (Telecom: of one segment, or the read-only whole-Telecom total) for a period. `segment` is null for
+ * Shop, Ice Cream and the Telecom total; the total's rows carry their own `segment`.
+ */
 export interface CashBookLedger {
-  book: CashBook; from: string | null; to: string | null; openingCents: number; inCents: number; outCents: number;
+  book: CashBook; segment: StoredSegment | null; from: string | null; to: string | null; openingCents: number; inCents: number; outCents: number;
   closingCents: number; items: CashLedgerItem[]; total: number; closedDates: string[];
   /** Ice Cream only: per-fund opening / in / out / closing for the period. */
   funds?: Record<IceFund, { openingCents: number; inCents: number; outCents: number; closingCents: number }>;
@@ -103,26 +132,32 @@ export interface CashBookLedger {
  * The ledger of one book for a period with running balances (section 8). `from`/`to` are business dates (either may be
  * omitted: no `from` = from the beginning, so opening is 0; no `to` = up to the latest entry).
  *
- * @throws AppError 400 VALIDATION_ERROR when `from` is after `to`.
+ * Telecom: with `segment` the ledger of that segment (legacy included, read-only); WITHOUT it the whole-Telecom total ledger
+ * (every segment, read-only: it has no closed days of its own and nothing can be written to it).
+ *
+ * @throws AppError 400 VALIDATION_ERROR when `from` is after `to`, SEGMENT_NOT_ALLOWED for a segment on Shop / Ice Cream.
  */
 export function getCashBookLedger(ctx: AppContext, book: CashBook, q: {
-  from?: string; to?: string; limit: number; offset: number;
+  segment?: StoredSegment; from?: string; to?: string; limit: number; offset: number;
 }): CashBookLedger {
   if (q.from !== undefined && q.to !== undefined && q.from > q.to) {
     throw validationError({ to: 'The end date cannot be before the start date.' });
   }
+  if (book !== 'telecom' && q.segment !== undefined) throw segmentNotAllowedError();
   const conn = ctx.database.conn;
-  const totals = periodTotals(conn, book, q.from, q.to);
-  const rows = ledgerPage(conn, book, q.from, q.to, totals.openingCents, q.limit, q.offset);
+  const scope = q.segment ? { book, segment: q.segment } : { book };
+  const totals = periodTotals(conn, scope, q.from, q.to);
+  const rows = ledgerPage(conn, scope, q.from, q.to, totals.openingCents, q.limit, q.offset);
+  const isTotal = book === 'telecom' && q.segment === undefined;
   const out: CashBookLedger = {
-    book, from: q.from ?? null, to: q.to ?? null, openingCents: totals.openingCents, inCents: totals.inCents,
+    book, segment: q.segment ?? null, from: q.from ?? null, to: q.to ?? null, openingCents: totals.openingCents, inCents: totals.inCents,
     outCents: totals.outCents, closingCents: totals.closingCents,
     items: rows.map((r) => ({
       id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, type: r.type, amountCents: r.amountCents,
-      runningBalanceCents: r.runningBalanceCents, fund: r.fund, refTable: r.refTable, refId: r.refId,
+      runningBalanceCents: r.runningBalanceCents, fund: r.fund, segment: r.segment, refTable: r.refTable, refId: r.refId,
       reversesEntryId: r.reversesEntryId, note: r.note,
     })),
-    total: totals.count, closedDates: closedDates(conn, book, q.from, q.to),
+    total: totals.count, closedDates: isTotal ? [] : closedDates(conn, scope, q.from, q.to),
   };
   if (book === 'icecream') out.funds = fundPeriodTotals(conn, q.from, q.to);
   return out;

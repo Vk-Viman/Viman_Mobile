@@ -12,21 +12,23 @@ import { findCashEntriesByRef, insertCashEntry } from '../repositories/cash-entr
 import type { CashBook, CashEntryRow, IceFund } from '../repositories/cash-entries.repo.ts';
 import { findFundEntriesByRef, insertFundEntry } from '../repositories/icecream-funds.repo.ts';
 import type { FundEntryKind } from '../repositories/icecream-funds.repo.ts';
+import type { StoredSegment } from './segments.ts';
 
 /**
  * Appends one cash entry and, for the Ice Cream book, the matching fund row of the same signed amount.
  *
  * @param e.fund      Required for `icecream` (the CHECKs refuse an Ice Cream entry without a fund), null otherwise.
+ * @param e.segment   Required for `telecom` (13D; compat rule: omitting it for Telecom throws TELECOM_SEGMENT_REQUIRED), null otherwise.
  * @param e.fundKind  Why the fund row exists (e.g. 'opening_balance', 'cash_over_short'); used only for Ice Cream.
  * @returns The id of the new cash entry.
  */
 export function postCash(conn: DatabaseSync, e: {
-  book: CashBook; fund: IceFund | null; businessDate: string; type: string; amountCents: number; refTable: string; refId: number;
-  fundKind: FundEntryKind; note?: string | null;
+  book: CashBook; fund: IceFund | null; segment?: StoredSegment | null; businessDate: string; type: string; amountCents: number;
+  refTable: string; refId: number; fundKind: FundEntryKind; note?: string | null;
 }): number {
   const cashId = insertCashEntry(conn, {
-    book: e.book, fund: e.fund, businessDate: e.businessDate, type: e.type, amountCents: e.amountCents,
-    refTable: e.refTable, refId: e.refId, note: e.note ?? null,
+    book: e.book, fund: e.fund, ...(e.segment !== undefined ? { segment: e.segment } : {}), businessDate: e.businessDate,
+    type: e.type, amountCents: e.amountCents, refTable: e.refTable, refId: e.refId, note: e.note ?? null,
   });
   if (e.book === 'icecream') {
     if (e.fund === null) throw new Error('An Ice Cream cash entry must name its fund');
@@ -39,7 +41,8 @@ export function postCash(conn: DatabaseSync, e: {
 }
 
 /**
- * Cancels one cash entry (R1, C6): a negated twin of the same type, book and fund, dated like the original (so the
+ * Cancels one cash entry (R1, C6): a negated twin of the same type, book, fund and SEGMENT (13D: a reversal stays in the
+ * original's segment, `legacy` included), dated like the original (so the
  * correction lands in the same report period) and pointing back at it. For Ice Cream the fund row of the original is
  * cancelled by a `reversal` row of the opposite amount.
  *
@@ -50,7 +53,7 @@ export function reverseCash(conn: DatabaseSync, original: CashEntryRow, note: st
     .some((e) => e.reversesEntryId === original.id);
   if (twin) throw new Error(`Cash entry #${original.id} was already reversed`);
   const reversalId = insertCashEntry(conn, {
-    book: original.book, fund: original.fund, businessDate: original.businessDate, type: original.type,
+    book: original.book, fund: original.fund, segment: original.segment, businessDate: original.businessDate, type: original.type,
     amountCents: -original.amountCents, refTable: original.refTable, refId: original.refId,
     reversesEntryId: original.id, note,
   });
