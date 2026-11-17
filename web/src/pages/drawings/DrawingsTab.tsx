@@ -67,7 +67,7 @@ export function DrawingsTab() {
   const columns: Column<OwnerDrawing>[] = [
     { key: 'date', header: 'Date', render: (d) => <span className="inline-flex flex-wrap items-center gap-2">{d.businessDate}{d.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
     { key: 'kind', header: 'Kind', render: (d) => <Badge tone={d.kind === 'cash' ? 'brand' : 'neutral'}>{d.kind === 'cash' ? 'Cash' : 'Goods'}</Badge> },
-    { key: 'book', header: 'Book', render: (d) => <CashBookBadge book={d.book} fund={d.fund} /> },
+    { key: 'book', header: 'Book', render: (d) => <CashBookBadge book={d.book} fund={d.fund} segment={d.segment} /> },
     {
       key: 'what', header: 'Details',
       render: (d) => (d.kind === 'goods'
@@ -151,7 +151,7 @@ export function DrawingsTab() {
       {voiding && (
         <VoidRecordDialog
           title={`Void cash drawing #${voiding.id}`}
-          intro={`This cancels the ${formatLKR(voiding.amountCents)} you took on ${voiding.businessDate}: the money goes back into the ${bookFundLabel(voiding.book, voiding.fund)} cash book. It cannot be undone.`}
+          intro={`This cancels the ${formatLKR(voiding.amountCents)} you took on ${voiding.businessDate}: the money goes back into the ${bookFundLabel(voiding.book, voiding.fund, voiding.segment)} cash book. It cannot be undone.`}
           submitLabel="Void drawing"
           pending={voidMut.isPending}
           run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, cb)}

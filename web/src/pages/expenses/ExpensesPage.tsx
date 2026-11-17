@@ -29,6 +29,7 @@ import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useExpenseCategories, useExpenses, useVoidExpense } from '../../api/expenses';
 import { PAGE_SIZE } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import type { Book, PostedStatus } from '../../types/api';
 import type { Expense, ExpenseQuery } from '../../types/cashbooks';
 import { ELECTRICITY_NOTE, ExpenseDialog } from './ExpenseDialog';
@@ -64,7 +65,7 @@ export function ExpensesPage() {
 
   const columns: Column<Expense>[] = [
     { key: 'date', header: 'Date', render: (e) => <span className="inline-flex flex-wrap items-center gap-2">{e.businessDate}{e.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
-    { key: 'book', header: 'Book', render: (e) => <BookBadge book={e.book} /> },
+    { key: 'book', header: 'Book', render: (e) => (e.segment ? <span className="inline-flex items-center gap-1"><BookBadge book={e.book} /><span className="text-sm text-slate-600">{SEGMENT_LABEL[e.segment]}</span></span> : <BookBadge book={e.book} />) },
     { key: 'cat', header: 'Category', render: (e) => labelOf(e.category) },
     {
       key: 'desc', header: 'What for',
@@ -127,7 +128,7 @@ export function ExpensesPage() {
       {voiding && (
         <VoidRecordDialog
           title={`Void expense #${voiding.id}`}
-          intro={`This cancels the ${formatLKR(voiding.amountCents)} expense of ${voiding.businessDate} (${voiding.description}): the money goes back into the ${voiding.book === 'shop' ? 'Shop' : 'Telecom'} cash book. It cannot be undone.`}
+          intro={`This cancels the ${formatLKR(voiding.amountCents)} expense of ${voiding.businessDate} (${voiding.description}): the money goes back into the ${voiding.book === 'shop' ? 'Shop' : `Telecom${voiding.segment ? ` - ${SEGMENT_LABEL[voiding.segment]}` : ''}`} cash book. It cannot be undone.`}
           submitLabel="Void expense"
           pending={voidMut.isPending}
           run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, cb)}

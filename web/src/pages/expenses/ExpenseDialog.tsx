@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { FormDialog } from '../../components/FormDialog';
 import { MoneyInput } from '../../components/MoneyInput';
 import { SelectField } from '../../components/SelectField';
+import { SegmentSelect } from '../../components/SegmentSelect';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useCreateExpense, useExpenseCategories } from '../../api/expenses';
@@ -20,6 +21,7 @@ import { useClientRef } from '../../hooks/useClientRef';
 import { MAX_NOTE, parseMoney } from '../../lib/amounts';
 import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner, fieldError } from '../../lib/errors';
+import type { TelecomSegment } from '../../types/segments';
 
 /** Longest description the server accepts. */
 const MAX_DESCRIPTION = 200;
@@ -34,6 +36,7 @@ export function ExpenseDialog({ onClose }: { onClose: () => void }) {
   const clientRef = useClientRef();
   const { today, date, setDate } = useBusinessDate();
   const [book, setBook] = useState<'shop' | 'telecom'>('shop');
+  const [segment, setSegment] = useState<TelecomSegment | ''>('');
   const [category, setCategory] = useState('');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
@@ -42,12 +45,12 @@ export function ExpenseDialog({ onClose }: { onClose: () => void }) {
 
   const amountCents = parseMoney(amount);
   const descOk = description.trim().length >= 1 && description.trim().length <= MAX_DESCRIPTION;
-  const canSubmit = Boolean(date) && category !== '' && amountCents !== null && descOk && notes.length <= MAX_NOTE && !create.isPending;
+  const canSubmit = Boolean(date) && (book !== 'telecom' || segment !== '') && category !== '' && amountCents !== null && descOk && notes.length <= MAX_NOTE && !create.isPending;
 
   const submit = () => {
     if (!canSubmit || amountCents === null) { setShowErrors(true); return; }
     create.mutate(
-      { businessDate: date, book, category, amountCents, description: description.trim(), notes: notes.trim() || undefined, clientRef },
+      { businessDate: date, book, ...(book === 'telecom' && segment ? { segment } : {}), category, amountCents, description: description.trim(), notes: notes.trim() || undefined, clientRef },
       {
         onSuccess: (r) => {
           toast.success('Expense recorded.');
@@ -61,7 +64,7 @@ export function ExpenseDialog({ onClose }: { onClose: () => void }) {
   const err = create.error;
   return (
     <FormDialog title="Add expense" submitLabel="Save" canSubmit={canSubmit} loading={create.isPending}
-      error={errorBanner(err, ['businessDate', 'book', 'category', 'amountCents', 'description', 'notes'])} onSubmit={submit} onClose={onClose}>
+      error={errorBanner(err, ['businessDate', 'book', 'segment', 'category', 'amountCents', 'description', 'notes'])} onSubmit={submit} onClose={onClose}>
       <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
         An expense is money paid out of the cash book you choose and counts as a cost of that book. {ELECTRICITY_NOTE}
       </p>
@@ -78,6 +81,7 @@ export function ExpenseDialog({ onClose }: { onClose: () => void }) {
         </div>
         {fieldError(err, 'book') && <p className="mt-1 text-sm text-red-600">{fieldError(err, 'book')}</p>}
       </fieldset>
+      {book === 'telecom' && <SegmentSelect value={segment} onChange={setSegment} error={fieldError(err, 'segment') ?? (showErrors && segment === '' ? 'Choose the Telecom segment.' : undefined)} />}
       <SelectField label="Category" value={category} onChange={(e) => setCategory(e.target.value)}
         error={fieldError(err, 'category') ?? (showErrors && category === '' ? 'Choose a category.' : undefined)}>
         <option value="">Select a category</option>
