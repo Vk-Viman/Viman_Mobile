@@ -199,7 +199,9 @@ export function updateCategoryItem(
     if (body.active !== undefined && body.active !== before.active) patch.active = body.active;
     if (body.providerId !== undefined && body.providerId !== before.providerId) patch.providerId = body.providerId;
     // A category leaving Telecom cannot keep a provider (only Telecom categories have one).
-    if (patch.book !== undefined && patch.book !== 'telecom' && before.providerId !== null && patch.providerId === undefined) {
+    // (a category with products cannot change book at all: that existing rule answers first)
+    if (patch.book !== undefined && patch.book !== 'telecom' && before.providerId !== null && patch.providerId === undefined
+      && before.productCount === 0) {
       patch.providerId = null;
     }
     if (Object.keys(patch).length === 0) return before;
