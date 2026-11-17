@@ -13,6 +13,10 @@
  *    to Telecom profit.
  *  - R-FD: no future dates (the DB triggers repeat the check). Section 12: every write is idempotent by `clientRef`
  *    and audited with its business date and the `backdated` flag.
+ *  - Segments (BUSINESS_RULES 13D): a reload and a provider top-up belong to the provider's Reloads segment (`mobitel_reloads` ...),
+ *    EZCash and wallet top-ups to `dialog_reloads`. The segment is stored on the record AND on its cash entry; closed days, the
+ *    backdating rule and the negative-cash warning are judged per segment; a void reverses in the segment of the original
+ *    (a pre-segment record stays `legacy`).
  *  - R1 / C9: a void marks the row `void` and appends a reversal cash entry (opposite sign, same business date,
  *    `reverses_entry_id` set). Nothing is edited or deleted. A balance may go negative: that is a warning elsewhere,
  *    never a block (R13).
@@ -27,7 +31,7 @@ import {
   getEzCashSale as getEzCashRow, getEzCashSaleByClientRef, getProvider, getProviderByName, getReloadSale as getReloadRow,
   getReloadSaleByClientRef, getTopup as getTopupRow, getTopupByClientRef, insertEzCashSale, insertReloadSale, insertTopup,
   listEzCashSales as listEzCashRows, listProviders as listProviderRows, listReloadSales as listReloadRows,
-  listTopups as listTopupRows, markEzCashSaleVoid, markReloadSaleVoid, markTopupVoid, summaryTotals,
+  listTopups as listTopupRows, markEzCashSaleVoid, markReloadSaleVoid, markTopupVoid, segmentTotals, summaryTotals,
   updateProvider as updateProviderRow,
 } from '../repositories/telecom.repo.ts';
 import type {
@@ -38,6 +42,8 @@ import { getSettings } from './settings.service.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayOpen } from './day-closing.ts';
+import { SEGMENT_LABEL, segmentForProvider } from './segments.ts';
+import type { StoredSegment, TelecomSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -77,6 +83,8 @@ export interface ReloadSale {
   id: number; businessDate: string; postedAt: string; backdated: boolean; providerId: number; providerName: string;
   salesCents: number; commissionBp: number; extraCents: number; commissionCents: number; notes: string;
   status: TelecomStatus; voidedAt: string | null; voidReason: string | null; clientRef: string;
+  /** The Telecom segment of the record (`dialog_reloads` ...; `legacy` for a record from before the segments). */
+  segment: StoredSegment;
 }
 
 /** An EZCash entry (provider is always Dialog). */
@@ -84,6 +92,8 @@ export interface EzCashSale {
   id: number; businessDate: string; postedAt: string; backdated: boolean; providerId: number; providerName: string;
   billTotalCents: number; commissionBp: number; commissionCents: number; notes: string;
   status: TelecomStatus; voidedAt: string | null; voidReason: string | null; clientRef: string;
+  /** Always `dialog_reloads` for a new entry (`legacy` for one from before the segments). */
+  segment: StoredSegment;
 }
 
 /** A top-up; `providerId`/`providerName` are null for a wallet top-up. */
@@ -91,6 +101,8 @@ export interface Topup {
   id: number; businessDate: string; postedAt: string; backdated: boolean; kind: TopupKind; providerId: number | null;
   providerName: string | null; amountCents: number; notes: string; status: TelecomStatus; voidedAt: string | null;
   voidReason: string | null; clientRef: string;
+  /** The provider's Reloads segment for a provider top-up, `dialog_reloads` for a wallet top-up (`legacy` before the segments). */
+  segment: StoredSegment;
 }
 
 function toReload(r: ReloadSaleRow): ReloadSale {
@@ -98,7 +110,7 @@ function toReload(r: ReloadSaleRow): ReloadSale {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
     providerId: r.providerId, providerName: r.providerName, salesCents: r.salesCents, commissionBp: r.commissionBp,
     extraCents: r.extraCents, commissionCents: r.commissionCents, notes: r.notes, status: r.status,
-    voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
+    voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef, segment: r.segment,
   };
 }
 
@@ -107,7 +119,7 @@ function toEz(r: EzCashSaleRow): EzCashSale {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
     providerId: r.providerId, providerName: r.providerName, billTotalCents: r.billTotalCents, commissionBp: r.commissionBp,
     commissionCents: r.commissionCents, notes: r.notes, status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason,
-    clientRef: r.clientRef,
+    clientRef: r.clientRef, segment: r.segment,
   };
 }
 
@@ -115,7 +127,7 @@ function toTopup(r: TopupRow): Topup {
   return {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
     kind: r.kind, providerId: r.providerId, providerName: r.providerName, amountCents: r.amountCents, notes: r.notes,
-    status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
+    status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef, segment: r.segment,
   };
 }
 
@@ -147,8 +159,18 @@ function reverseCashEntry(conn: DatabaseSync, refTable: string, id: number, labe
   if (entries.some((e) => e.reversesEntryId === original.id)) throw new Error(`${label} #${id} was already reversed`);
   insertCashEntry(conn, {
     book: original.book, businessDate: original.businessDate, type: original.type, amountCents: -original.amountCents,
-    refTable, refId: id, reversesEntryId: original.id, note: `Void of ${label} #${id}`,
+    refTable, refId: id, reversesEntryId: original.id, note: `Void of ${label} #${id}`, segment: original.segment,
   });
+}
+
+/** The one cash scope of a Telecom segment (closed days, balances and warnings are judged per scope). */
+function scopeOf(segment: StoredSegment): { book: 'telecom'; segment: StoredSegment } { return { book: 'telecom', segment }; }
+
+/** The Dialog provider row (EZCash and the wallet belong to Dialog). */
+function dialogProvider(conn: DatabaseSync): ProviderRow {
+  const dialog = getProviderByName(conn, 'Dialog');
+  if (!dialog) throw new Error('The Dialog provider is missing from reload_providers');
+  return dialog;
 }
 
 /** The shop-wide default rates from Settings (a section never saved falls back to the documented defaults). */
@@ -202,7 +224,7 @@ export function getReloadSale(ctx: AppContext, id: number): ReloadSale {
 
 /** Lists reload entries newest first; `totals` add up POSTED entries that match the filters only. */
 export function listReloadSales(ctx: AppContext, q: {
-  from?: string; to?: string; providerId?: number; status?: TelecomStatus; limit: number; offset: number;
+  from?: string; to?: string; providerId?: number; status?: TelecomStatus; segment?: StoredSegment; limit: number; offset: number;
 }): { items: ReloadSale[]; total: number; totals: { salesCents: number; commissionCents: number; extraCents: number } } {
   const { items, total, totals } = listReloadRows(ctx.database.conn, q);
   return { items: items.map(toReload), total, totals };
@@ -234,9 +256,10 @@ export function createReloadSale(
     const existing = getReloadSaleByClientRef(conn, body.clientRef);
     if (existing) return { item: toReload(existing), created: false };
 
-    assertDayOpen(conn, ['telecom'], body.businessDate); // R9
     const provider = getProvider(conn, body.providerId);
     if (!provider) throw validationError({ providerId: 'Provider not found.' });
+    const segment = segmentForProvider(provider, 'reloads'); // 13D: the provider's Reloads segment
+    assertDayOpen(conn, [scopeOf(segment)], body.businessDate); // R9, per segment
     if (!provider.active) {
       throw new AppError(409, 'PROVIDER_INACTIVE', `${provider.name} is switched off. Turn it on to record reloads.`,
         { providerId: `${provider.name} is switched off.` });
@@ -248,11 +271,11 @@ export function createReloadSale(
     const commissionCents = reloadCommission(body.salesCents, commissionBp, extraCents);
     const id = insertReloadSale(conn, {
       businessDate: body.businessDate, providerId: provider.id, salesCents: body.salesCents, commissionBp, extraCents,
-      commissionCents, notes, clientRef: body.clientRef,
+      commissionCents, notes, clientRef: body.clientRef, segment,
     });
     // The FULL collection is cash in; commission is not a cash entry (R14 - no float tracking).
     insertCashEntry(conn, {
-      book: 'telecom', businessDate: body.businessDate, type: 'reload_collection', amountCents: body.salesCents,
+      book: 'telecom', segment, businessDate: body.businessDate, type: 'reload_collection', amountCents: body.salesCents,
       refTable: 'reload_sales', refId: id,
     });
 
@@ -276,7 +299,7 @@ export function voidReloadSale(ctx: AppContext, id: number, body: { reason: stri
   return runWrite(ctx, (conn) => {
     const row = getReloadRow(conn, id);
     if (!row) throw notFound('Reload sale');
-    assertDayOpen(conn, ['telecom'], row.businessDate); // R9: a void is judged on the entry's own date
+    assertDayOpen(conn, [scopeOf(row.segment)], row.businessDate); // R9: a void is judged on the entry's own date and segment
     if (row.status === 'void') throw alreadyVoid('reload sale');
     const before = toReload(row);
     reverseCashEntry(conn, 'reload_sales', id, 'reload sale');
@@ -284,7 +307,7 @@ export function voidReloadSale(ctx: AppContext, id: number, body: { reason: stri
     const after = loadReload(conn, id);
     logAudit(conn, 'reload_sale', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return { item: after, warnings: negativeCashWarnings(conn, ['telecom']) }; // R13: warn, never block
+    return { item: after, warnings: negativeCashWarnings(conn, [scopeOf(row.segment)]) }; // R13: warn, never block (per segment)
   });
 }
 
@@ -305,7 +328,7 @@ export function getEzCashSale(ctx: AppContext, id: number): EzCashSale {
 
 /** Lists EZCash entries newest first; `totals` add up POSTED entries that match the filters only. */
 export function listEzCashSales(ctx: AppContext, q: {
-  from?: string; to?: string; status?: TelecomStatus; limit: number; offset: number;
+  from?: string; to?: string; status?: TelecomStatus; segment?: StoredSegment; limit: number; offset: number;
 }): { items: EzCashSale[]; total: number; totals: { billTotalCents: number; commissionCents: number } } {
   const { items, total, totals } = listEzCashRows(ctx.database.conn, q);
   return { items: items.map(toEz), total, totals };
@@ -334,16 +357,16 @@ export function createEzCashSale(
     const existing = getEzCashSaleByClientRef(conn, body.clientRef);
     if (existing) return { item: toEz(existing), created: false };
 
-    assertDayOpen(conn, ['telecom'], body.businessDate); // R9
-    const dialog = getProviderByName(conn, 'Dialog');
-    if (!dialog) throw new Error('The Dialog provider is missing from reload_providers');
+    const dialog = dialogProvider(conn);
+    const segment = segmentForProvider(dialog, 'reloads'); // 13D: EZCash is always Dialog Reloads
+    assertDayOpen(conn, [scopeOf(segment)], body.businessDate); // R9, per segment
     const commissionCents = ezcashCommission(body.billTotalCents, commissionBp);
     const id = insertEzCashSale(conn, {
       businessDate: body.businessDate, providerId: dialog.id, billTotalCents: body.billTotalCents, commissionBp,
-      commissionCents, notes, clientRef: body.clientRef,
+      commissionCents, notes, clientRef: body.clientRef, segment,
     });
     insertCashEntry(conn, {
-      book: 'telecom', businessDate: body.businessDate, type: 'ezcash_collection', amountCents: body.billTotalCents,
+      book: 'telecom', segment, businessDate: body.businessDate, type: 'ezcash_collection', amountCents: body.billTotalCents,
       refTable: 'ezcash_sales', refId: id,
     });
 
@@ -362,7 +385,7 @@ export function voidEzCashSale(ctx: AppContext, id: number, body: { reason: stri
   return runWrite(ctx, (conn) => {
     const row = getEzCashRow(conn, id);
     if (!row) throw notFound('EZCash entry');
-    assertDayOpen(conn, ['telecom'], row.businessDate); // R9
+    assertDayOpen(conn, [scopeOf(row.segment)], row.businessDate); // R9, per segment
     if (row.status === 'void') throw alreadyVoid('EZCash entry');
     const before = toEz(row);
     reverseCashEntry(conn, 'ezcash_sales', id, 'EZCash entry');
@@ -370,7 +393,7 @@ export function voidEzCashSale(ctx: AppContext, id: number, body: { reason: stri
     const after = loadEz(conn, id);
     logAudit(conn, 'ezcash_sale', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return { item: after, warnings: negativeCashWarnings(conn, ['telecom']) }; // R13: warn, never block
+    return { item: after, warnings: negativeCashWarnings(conn, [scopeOf(row.segment)]) }; // R13: warn, never block (per segment)
   });
 }
 
@@ -391,7 +414,7 @@ export function getTopup(ctx: AppContext, id: number): Topup {
 
 /** Lists top-ups newest first; `totals` add up POSTED top-ups that match the filters, split by kind. */
 export function listTopups(ctx: AppContext, q: {
-  from?: string; to?: string; kind?: TopupKind; providerId?: number; status?: TelecomStatus; limit: number; offset: number;
+  from?: string; to?: string; kind?: TopupKind; providerId?: number; status?: TelecomStatus; segment?: StoredSegment; limit: number; offset: number;
 }): { items: Topup[]; total: number; totals: { providerTopupCents: number; walletTopupCents: number; totalCents: number } } {
   const { items, total, totals } = listTopupRows(ctx.database.conn, q);
   return { items: items.map(toTopup), total, totals };
@@ -421,11 +444,19 @@ export function createTopup(ctx: AppContext, body: TopupCreate): { item: Topup; 
     const existing = getTopupByClientRef(conn, body.clientRef);
     if (existing) return { item: toTopup(existing), warnings: [], created: false };
 
-    assertDayOpen(conn, ['telecom'], body.businessDate); // R9
+    // 13D: a provider top-up belongs to the provider's Reloads segment, a wallet top-up to Dialog Reloads.
     let providerId: number | null = null;
+    let segment: TelecomSegment;
+    let provider: ProviderRow | undefined;
     if (body.kind === 'provider_topup') {
-      const provider = getProvider(conn, body.providerId as number);
+      provider = getProvider(conn, body.providerId as number);
       if (!provider) throw validationError({ providerId: 'Provider not found.' });
+      segment = segmentForProvider(provider, 'reloads');
+    } else {
+      segment = segmentForProvider(dialogProvider(conn), 'reloads');
+    }
+    assertDayOpen(conn, [scopeOf(segment)], body.businessDate); // R9, per segment
+    if (provider) {
       if (!provider.active) {
         throw new AppError(409, 'PROVIDER_INACTIVE', `${provider.name} is switched off. Turn it on to record top-ups.`,
           { providerId: `${provider.name} is switched off.` });
@@ -433,18 +464,18 @@ export function createTopup(ctx: AppContext, body: TopupCreate): { item: Topup; 
       providerId = provider.id;
     }
     const id = insertTopup(conn, {
-      businessDate: body.businessDate, kind: body.kind, providerId, amountCents: body.amountCents, notes, clientRef: body.clientRef,
+      businessDate: body.businessDate, kind: body.kind, providerId, amountCents: body.amountCents, notes, clientRef: body.clientRef, segment,
     });
     // Top-ups are cash OUT (negative); same cash-entry type name as the topup kind (section 2).
     insertCashEntry(conn, {
-      book: 'telecom', businessDate: body.businessDate, type: body.kind, amountCents: -body.amountCents,
+      book: 'telecom', segment, businessDate: body.businessDate, type: body.kind, amountCents: -body.amountCents,
       refTable: 'telecom_topups', refId: id,
     });
 
     const item = loadTopup(conn, id);
     logAudit(conn, 'telecom_topup', String(id), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, warnings: negativeCashWarnings(conn, ['telecom']), created: true }; // R13: warn, never block
+    return { item, warnings: negativeCashWarnings(conn, [scopeOf(segment)]), created: true }; // R13: warn, never block (per segment)
   });
 }
 
@@ -456,7 +487,7 @@ export function voidTopup(ctx: AppContext, id: number, body: { reason: string })
   return runWrite(ctx, (conn) => {
     const row = getTopupRow(conn, id);
     if (!row) throw notFound('Top-up');
-    assertDayOpen(conn, ['telecom'], row.businessDate); // R9
+    assertDayOpen(conn, [scopeOf(row.segment)], row.businessDate); // R9, per segment
     if (row.status === 'void') throw alreadyVoid('top-up');
     const before = toTopup(row);
     reverseCashEntry(conn, 'telecom_topups', id, 'top-up');
@@ -478,9 +509,22 @@ export interface ProviderSummary {
   ezcashCommissionCents: number; topupsCents: number; commissionRevenueCents: number;
 }
 
+/**
+ * Posted telecom figures of one segment for the period (cents). The four Reloads segments always appear (zeros included);
+ * `legacy` appears only when the period holds a pre-segment record. Every total equals the sum over the segments.
+ */
+export interface SegmentSummary {
+  segment: StoredSegment; label: string; reloadSalesCents: number; reloadCommissionCents: number; reloadExtraCents: number;
+  ezcashBillCents: number; ezcashCommissionCents: number; providerTopupsCents: number; walletTopupsCents: number; topupsCents: number;
+  commissionRevenueCents: number;
+}
+
+/** The four segments a reload, EZCash or top-up can be recorded in (the Reloads ones), in display order. */
+const RELOAD_SEGMENTS: readonly TelecomSegment[] = ['dialog_reloads', 'mobitel_reloads', 'airtel_reloads', 'hutch_reloads'];
+
 /** Whole-period totals. `topupsCents` = provider + wallet top-ups; `reloadCommissionCents` includes the extras. */
 export interface TelecomSummary {
-  from: string | null; to: string | null; providers: ProviderSummary[];
+  from: string | null; to: string | null; providers: ProviderSummary[]; bySegment: SegmentSummary[];
   totals: {
     reloadSalesCents: number; reloadCommissionCents: number; reloadExtraCents: number; ezcashBillCents: number;
     ezcashCommissionCents: number; providerTopupsCents: number; walletTopupsCents: number; topupsCents: number;
@@ -501,11 +545,12 @@ export function telecomSummary(ctx: AppContext, q: { from?: string; to?: string 
     commissionRevenueCents: p.reloadCommissionCents + p.ezcashCommissionCents,
   }));
   const sum = (f: (p: (typeof providers)[number]) => number): number => providers.reduce((a, p) => a + f(p), 0);
+  const bySegment = segmentSummaries(ctx, q);
   const providerTopups = sum((p) => p.providerTopupsCents);
   const reloadCommission = sum((p) => p.reloadCommissionCents);
   const ezCommission = sum((p) => p.ezcashCommissionCents);
   return {
-    from: q.from ?? null, to: q.to ?? null, providers: rows,
+    from: q.from ?? null, to: q.to ?? null, providers: rows, bySegment,
     totals: {
       reloadSalesCents: sum((p) => p.reloadSalesCents), reloadCommissionCents: reloadCommission,
       reloadExtraCents: sum((p) => p.reloadExtraCents), ezcashBillCents: sum((p) => p.ezcashBillCents),
@@ -513,4 +558,25 @@ export function telecomSummary(ctx: AppContext, q: { from?: string; to?: string 
       topupsCents: providerTopups + wallet.walletTopupsCents, commissionRevenueCents: reloadCommission + ezCommission,
     },
   };
+}
+
+/** One row per Reloads segment (zeros included) plus `legacy` when the period holds pre-segment records. */
+function segmentSummaries(ctx: AppContext, q: { from?: string; to?: string }): SegmentSummary[] {
+  const found = new Map(segmentTotals(ctx.database.conn, q).map((r) => [r.segment, r]));
+  const order: StoredSegment[] = [...RELOAD_SEGMENTS];
+  // Any other stored segment that somehow holds a row (legacy) is listed after the four so the sums always add up.
+  for (const seg of found.keys()) if (!order.includes(seg)) order.push(seg);
+  return order.map((segment) => {
+    const r = found.get(segment);
+    const reloadCommissionCents = r?.reloadCommissionCents ?? 0;
+    const ezcashCommissionCents = r?.ezcashCommissionCents ?? 0;
+    const providerTopupsCents = r?.providerTopupsCents ?? 0;
+    const walletTopupsCents = r?.walletTopupsCents ?? 0;
+    return {
+      segment, label: SEGMENT_LABEL[segment], reloadSalesCents: r?.reloadSalesCents ?? 0, reloadCommissionCents,
+      reloadExtraCents: r?.reloadExtraCents ?? 0, ezcashBillCents: r?.ezcashBillCents ?? 0, ezcashCommissionCents,
+      providerTopupsCents, walletTopupsCents, topupsCents: providerTopupsCents + walletTopupsCents,
+      commissionRevenueCents: reloadCommissionCents + ezcashCommissionCents,
+    };
+  });
 }

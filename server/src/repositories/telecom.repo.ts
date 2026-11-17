@@ -8,6 +8,7 @@
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
+import type { StoredSegment } from '../services/segments.ts';
 
 type N = number | bigint;
 export type TelecomStatus = 'posted' | 'void';
@@ -56,7 +57,7 @@ export function updateProvider(conn: DatabaseSync, id: number, v: { commissionBp
 // ---------------------------------------------------------------------------------------------
 
 /** Filters common to every telecom list (`from`/`to` are inclusive business dates). */
-interface BaseFilter { from?: string; to?: string; status?: TelecomStatus; providerId?: number }
+interface BaseFilter { from?: string; to?: string; status?: TelecomStatus; providerId?: number; segment?: StoredSegment }
 
 /** Builds " WHERE ..." plus parameters for the common filters (`alias` is the table alias). */
 function where(alias: string, q: BaseFilter, extra: string[] = [], extraParams: SQLInputValue[] = []): { sql: string; params: SQLInputValue[] } {
@@ -66,6 +67,7 @@ function where(alias: string, q: BaseFilter, extra: string[] = [], extraParams: 
   if (q.to !== undefined) { w.push(`${alias}.business_date <= ?`); params.push(q.to); }
   if (q.providerId !== undefined) { w.push(`${alias}.provider_id = ?`); params.push(q.providerId); }
   if (q.status !== undefined) { w.push(`${alias}.status = ?`); params.push(q.status); }
+  if (q.segment !== undefined) { w.push(`${alias}.segment = ?`); params.push(q.segment); }
   return { sql: w.length ? ` WHERE ${w.join(' AND ')}` : '', params };
 }
 
@@ -77,15 +79,15 @@ function where(alias: string, q: BaseFilter, extra: string[] = [], extraParams: 
 export interface ReloadSaleRow {
   id: number; businessDate: string; postedAt: string; providerId: number; providerName: string; salesCents: number;
   commissionBp: number; extraCents: number; commissionCents: number; status: TelecomStatus; voidedAt: string | null;
-  voidReason: string | null; notes: string; clientRef: string;
+  voidReason: string | null; notes: string; clientRef: string; segment: StoredSegment;
 }
 interface RawReload {
   id: N; business_date: string; posted_at: string; provider_id: N; provider_name: string; sales_cents: N; commission_bp: N;
   extra_cents: N; commission_cents: N; status: TelecomStatus; voided_at: string | null; void_reason: string | null;
-  notes: string; client_ref: string;
+  notes: string; client_ref: string; segment: StoredSegment;
 }
 const RELOAD_SELECT = `SELECT s.id, s.business_date, s.posted_at, s.provider_id, p.name AS provider_name, s.sales_cents,
-  s.commission_bp, s.extra_cents, s.commission_cents, s.status, s.voided_at, s.void_reason, s.notes, s.client_ref
+  s.commission_bp, s.extra_cents, s.commission_cents, s.status, s.voided_at, s.void_reason, s.notes, s.client_ref, s.segment
   FROM reload_sales s JOIN reload_providers p ON p.id = s.provider_id`;
 
 function mapReload(r: RawReload): ReloadSaleRow {
@@ -93,19 +95,19 @@ function mapReload(r: RawReload): ReloadSaleRow {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, providerId: Number(r.provider_id),
     providerName: r.provider_name, salesCents: Number(r.sales_cents), commissionBp: Number(r.commission_bp),
     extraCents: Number(r.extra_cents), commissionCents: Number(r.commission_cents), status: r.status,
-    voidedAt: r.voided_at, voidReason: r.void_reason, notes: r.notes, clientRef: r.client_ref,
+    voidedAt: r.voided_at, voidReason: r.void_reason, notes: r.notes, clientRef: r.client_ref, segment: r.segment,
   };
 }
 
 /** Inserts a reload entry (status 'posted', posting time from the DB clock) and returns its id. */
 export function insertReloadSale(conn: DatabaseSync, s: {
   businessDate: string; providerId: number; salesCents: number; commissionBp: number; extraCents: number;
-  commissionCents: number; notes: string; clientRef: string;
+  commissionCents: number; notes: string; clientRef: string; segment: StoredSegment;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, extra_cents, commission_cents, notes, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(s.businessDate, s.providerId, s.salesCents, s.commissionBp, s.extraCents, s.commissionCents, s.notes, s.clientRef);
+    `INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, extra_cents, commission_cents, notes, client_ref, segment)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(s.businessDate, s.providerId, s.salesCents, s.commissionBp, s.extraCents, s.commissionCents, s.notes, s.clientRef, s.segment);
   return Number(res.lastInsertRowid);
 }
 
@@ -154,15 +156,15 @@ export function markReloadSaleVoid(conn: DatabaseSync, id: number, reason: strin
 export interface EzCashSaleRow {
   id: number; businessDate: string; postedAt: string; providerId: number; providerName: string; billTotalCents: number;
   commissionBp: number; commissionCents: number; status: TelecomStatus; voidedAt: string | null; voidReason: string | null;
-  notes: string; clientRef: string;
+  notes: string; clientRef: string; segment: StoredSegment;
 }
 interface RawEz {
   id: N; business_date: string; posted_at: string; provider_id: N; provider_name: string; bill_total_cents: N;
   commission_bp: N; commission_cents: N; status: TelecomStatus; voided_at: string | null; void_reason: string | null;
-  notes: string; client_ref: string;
+  notes: string; client_ref: string; segment: StoredSegment;
 }
 const EZ_SELECT = `SELECT s.id, s.business_date, s.posted_at, s.provider_id, p.name AS provider_name, s.bill_total_cents,
-  s.commission_bp, s.commission_cents, s.status, s.voided_at, s.void_reason, s.notes, s.client_ref
+  s.commission_bp, s.commission_cents, s.status, s.voided_at, s.void_reason, s.notes, s.client_ref, s.segment
   FROM ezcash_sales s JOIN reload_providers p ON p.id = s.provider_id`;
 
 function mapEz(r: RawEz): EzCashSaleRow {
@@ -170,19 +172,19 @@ function mapEz(r: RawEz): EzCashSaleRow {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, providerId: Number(r.provider_id),
     providerName: r.provider_name, billTotalCents: Number(r.bill_total_cents), commissionBp: Number(r.commission_bp),
     commissionCents: Number(r.commission_cents), status: r.status, voidedAt: r.voided_at, voidReason: r.void_reason,
-    notes: r.notes, clientRef: r.client_ref,
+    notes: r.notes, clientRef: r.client_ref, segment: r.segment,
   };
 }
 
 /** Inserts an EZCash entry and returns its id. */
 export function insertEzCashSale(conn: DatabaseSync, s: {
   businessDate: string; providerId: number; billTotalCents: number; commissionBp: number; commissionCents: number;
-  notes: string; clientRef: string;
+  notes: string; clientRef: string; segment: StoredSegment;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, notes, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(s.businessDate, s.providerId, s.billTotalCents, s.commissionBp, s.commissionCents, s.notes, s.clientRef);
+    `INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, notes, client_ref, segment)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(s.businessDate, s.providerId, s.billTotalCents, s.commissionBp, s.commissionCents, s.notes, s.clientRef, s.segment);
   return Number(res.lastInsertRowid);
 }
 
@@ -227,30 +229,32 @@ export function markEzCashSaleVoid(conn: DatabaseSync, id: number, reason: strin
 export interface TopupRow {
   id: number; businessDate: string; postedAt: string; kind: TopupKind; providerId: number | null; providerName: string | null;
   amountCents: number; status: TelecomStatus; voidedAt: string | null; voidReason: string | null; notes: string; clientRef: string;
+  segment: StoredSegment;
 }
 interface RawTopup {
   id: N; business_date: string; posted_at: string; kind: TopupKind; provider_id: N | null; provider_name: string | null;
   amount_cents: N; status: TelecomStatus; voided_at: string | null; void_reason: string | null; notes: string; client_ref: string;
+  segment: StoredSegment;
 }
 const TOPUP_SELECT = `SELECT t.id, t.business_date, t.posted_at, t.kind, t.provider_id, p.name AS provider_name, t.amount_cents,
-  t.status, t.voided_at, t.void_reason, t.notes, t.client_ref
+  t.status, t.voided_at, t.void_reason, t.notes, t.client_ref, t.segment
   FROM telecom_topups t LEFT JOIN reload_providers p ON p.id = t.provider_id`;
 
 function mapTopup(r: RawTopup): TopupRow {
   return {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, kind: r.kind, providerId: numberOrNull(r.provider_id),
     providerName: r.provider_name, amountCents: Number(r.amount_cents), status: r.status, voidedAt: r.voided_at,
-    voidReason: r.void_reason, notes: r.notes, clientRef: r.client_ref,
+    voidReason: r.void_reason, notes: r.notes, clientRef: r.client_ref, segment: r.segment,
   };
 }
 
 /** Inserts a top-up and returns its id. */
 export function insertTopup(conn: DatabaseSync, t: {
-  businessDate: string; kind: TopupKind; providerId: number | null; amountCents: number; notes: string; clientRef: string;
+  businessDate: string; kind: TopupKind; providerId: number | null; amountCents: number; notes: string; clientRef: string; segment: StoredSegment;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO telecom_topups (business_date, kind, provider_id, amount_cents, notes, client_ref) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(t.businessDate, t.kind, t.providerId, t.amountCents, t.notes, t.clientRef);
+    `INSERT INTO telecom_topups (business_date, kind, provider_id, amount_cents, notes, client_ref, segment) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(t.businessDate, t.kind, t.providerId, t.amountCents, t.notes, t.clientRef, t.segment);
   return Number(res.lastInsertRowid);
 }
 
@@ -345,4 +349,51 @@ export function summaryTotals(conn: DatabaseSync, q: { from?: string; to?: strin
     })),
     wallet: { walletTopupsCents: Number(wallet.total) },
   };
+}
+
+/** Posted totals of one segment for a period (cents). `legacy` is the pre-segment history. */
+export interface SegmentTotalsRow {
+  segment: StoredSegment; reloadSalesCents: number; reloadCommissionCents: number; reloadExtraCents: number;
+  ezcashBillCents: number; ezcashCommissionCents: number; providerTopupsCents: number; walletTopupsCents: number;
+}
+
+/**
+ * Posted totals per stored segment for the inclusive business-date range (either bound optional). Only segments that have at
+ * least one posted row appear; the caller adds the empty ones it wants to show. Each source table is summed on its own.
+ */
+export function segmentTotals(conn: DatabaseSync, q: { from?: string; to?: string }): SegmentTotalsRow[] {
+  const w: string[] = [`status = 'posted'`];
+  const params: SQLInputValue[] = [];
+  if (q.from !== undefined) { w.push('business_date >= ?'); params.push(q.from); }
+  if (q.to !== undefined) { w.push('business_date <= ?'); params.push(q.to); }
+  const cond = w.join(' AND ');
+  const out = new Map<StoredSegment, SegmentTotalsRow>();
+  const row = (segment: StoredSegment): SegmentTotalsRow => {
+    let r = out.get(segment);
+    if (!r) {
+      r = { segment, reloadSalesCents: 0, reloadCommissionCents: 0, reloadExtraCents: 0, ezcashBillCents: 0, ezcashCommissionCents: 0,
+        providerTopupsCents: 0, walletTopupsCents: 0 };
+      out.set(segment, r);
+    }
+    return r;
+  };
+  type Agg = { segment: StoredSegment; a: N; b: N; c: N };
+  for (const r of conn.prepare(
+    `SELECT segment, SUM(sales_cents) AS a, SUM(commission_cents) AS b, SUM(extra_cents) AS c FROM reload_sales WHERE ${cond} GROUP BY segment`,
+  ).all(...params) as unknown as Agg[]) {
+    const t = row(r.segment); t.reloadSalesCents = Number(r.a); t.reloadCommissionCents = Number(r.b); t.reloadExtraCents = Number(r.c);
+  }
+  for (const r of conn.prepare(
+    `SELECT segment, SUM(bill_total_cents) AS a, SUM(commission_cents) AS b, 0 AS c FROM ezcash_sales WHERE ${cond} GROUP BY segment`,
+  ).all(...params) as unknown as Agg[]) {
+    const t = row(r.segment); t.ezcashBillCents = Number(r.a); t.ezcashCommissionCents = Number(r.b);
+  }
+  for (const r of conn.prepare(
+    `SELECT segment, SUM(CASE WHEN kind = 'provider_topup' THEN amount_cents ELSE 0 END) AS a,
+       SUM(CASE WHEN kind = 'wallet_topup' THEN amount_cents ELSE 0 END) AS b, 0 AS c
+     FROM telecom_topups WHERE ${cond} GROUP BY segment`,
+  ).all(...params) as unknown as Agg[]) {
+    const t = row(r.segment); t.providerTopupsCents = Number(r.a); t.walletTopupsCents = Number(r.b);
+  }
+  return [...out.values()];
 }
