@@ -26,8 +26,11 @@ const today = (): string => daysAgo(0);
 
 // ---------- row builders (raw SQL, every column overridable) ----------
 type Row = Record<string, string | number | null>;
+// 13D (migration 024): a Telecom row of these tables names its segment; the row builders default it to dialog_reloads (a test may pass its own).
+const SEGMENT_TABLES = ['expenses', 'capital_entries', 'cash_counts', 'daily_closings', 'cash_entries'];
 function insert(c: DatabaseSync, table: string, defaults: Row, over: Row): number {
-  const row = { ...defaults, ...over };
+  const row: Row = { ...defaults, ...over };
+  if (SEGMENT_TABLES.includes(table) && row.book === 'telecom' && row.segment === undefined) row.segment = 'dialog_reloads';
   const cols = Object.keys(row);
   return Number(c.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((k) => row[k] as string | number | null)).lastInsertRowid);
 }
@@ -138,6 +141,9 @@ describe('capital_entries - opening balances', () => {
     const a = capital(c, { book: 'shop' });
     expect(msgOf(() => capital(c, { book: 'shop' }))).toMatch(/UNIQUE/);
     expect(() => capital(c, { book: 'telecom' })).not.toThrow();
+    // 13D: the slot is per scope - another Telecom segment has its own opening balance, the same segment does not
+    expect(msgOf(() => capital(c, { book: 'telecom' }))).toMatch(/UNIQUE/);
+    expect(() => capital(c, { book: 'telecom', segment: 'mobitel_cards' })).not.toThrow();
     capital(c, { book: 'icecream', fund: 'cost' });
     capital(c, { book: 'icecream', fund: 'profit' });
     expect(msgOf(() => capital(c, { book: 'icecream', fund: 'cost' }))).toMatch(/UNIQUE/);
@@ -221,6 +227,9 @@ describe('daily_closings - closed / reopened / re-closed', () => {
     closing(c, { book: 'shop', business_date: daysAgo(1) });
     expect(msgOf(() => closing(c, { book: 'shop', business_date: daysAgo(1) }))).toMatch(/UNIQUE/);
     expect(() => closing(c, { book: 'telecom', business_date: daysAgo(1) })).not.toThrow();
+    // 13D: one row per scope (book + segment + date): the same Telecom segment and day is a duplicate, another segment is not
+    expect(msgOf(() => closing(c, { book: 'telecom', business_date: daysAgo(1) }))).toMatch(/UNIQUE/);
+    expect(() => closing(c, { book: 'telecom', segment: 'hutch_cards', business_date: daysAgo(1) })).not.toThrow();
     expect(msgOf(() => closing(c, { business_date: daysAhead(1) }))).toMatch(/FUTURE_DATE_NOT_ALLOWED/);
     expect(msgOf(() => closing(c, { business_date: '2020-13-01' }))).toMatch(/CHECK/);
     expect(msgOf(() => closing(c, { book: 'warehouse' }))).toMatch(/CHECK/);
@@ -336,11 +345,17 @@ describe('follow-up: INVALID_BUSINESS_DATE on the business-date tables of migrat
 
   it.each(TABLES)('%s: 2020-13-01 and 2020-00-10 are refused with INVALID_BUSINESS_DATE; a real date gets past the trigger', (table) => {
     const c = memDb(conns);
+    // 13D: the segment INSERT rule of migration 024 fires before the date trigger on the three Telecom record tables (they need a segment)
+    const needsSegment = ['reload_sales', 'ezcash_sales', 'telecom_topups'].includes(table);
+    // (reload and EZCash rows also carry their provider: migration 026 checks the segment against it)
+    const withProvider = table === 'reload_sales' || table === 'ezcash_sales';
+    const cols = !needsSegment ? 'business_date' : withProvider ? 'business_date, segment, provider_id' : 'business_date, segment';
+    const vals = !needsSegment ? '' : withProvider ? ", 'dialog_reloads', (SELECT id FROM reload_providers WHERE name = 'Dialog')" : ", 'dialog_reloads'";
     for (const d of ['2020-13-01', '2020-00-10', '2020-12-00', '2020-01-32']) {
-      expect(msgOf(() => c.prepare(`INSERT INTO ${table} (business_date) VALUES (?)`).run(d)), `${table} ${d}`).toBe('INVALID_BUSINESS_DATE');
+      expect(msgOf(() => c.prepare(`INSERT INTO ${table} (${cols}) VALUES (?${vals})`).run(d)), `${table} ${d}`).toBe('INVALID_BUSINESS_DATE');
     }
     // the same bare insert with a real date stops later, on a missing column - proof that the trigger (not a blanket failure) refused the bad date
-    expect(msgOf(() => c.prepare(`INSERT INTO ${table} (business_date) VALUES (?)`).run('2020-12-31'))).not.toBe('INVALID_BUSINESS_DATE');
+    expect(msgOf(() => c.prepare(`INSERT INTO ${table} (${cols}) VALUES (?${vals})`).run('2020-12-31'))).not.toBe('INVALID_BUSINESS_DATE');
   });
 
   it('full rows: a sale and a cash entry dated 2020-13-01 are refused; 2020-12-31 is accepted', () => {
