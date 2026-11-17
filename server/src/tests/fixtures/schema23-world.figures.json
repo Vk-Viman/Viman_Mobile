@@ -1,0 +1,1748 @@
+{
+  "schemaVersion": 23,
+  "cashbooks": {
+    "books": [
+      {
+        "book": "shop",
+        "balanceCents": 2827000,
+        "lastClosedDate": "2025-08-08"
+      },
+      {
+        "book": "telecom",
+        "balanceCents": 9834466,
+        "lastClosedDate": "2025-09-13"
+      },
+      {
+        "book": "icecream",
+        "balanceCents": 1440000,
+        "lastClosedDate": null,
+        "funds": {
+          "cost": 890000,
+          "electricity": -500000,
+          "profit": 1050000
+        }
+      }
+    ],
+    "warnings": [
+      {
+        "code": "NEGATIVE_FUND_BALANCE",
+        "book": "icecream",
+        "fund": "electricity",
+        "balanceCents": -500000,
+        "message": "The Ice Cream Electricity fund is now below zero (-Rs. 5,000.00)."
+      }
+    ]
+  },
+  "pnlTelecom": {
+    "segment": "telecom",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "commissions": {
+          "reloadSalesCents": 4699999,
+          "reloadBaseCommissionCents": 267000,
+          "reloadExtraCents": 2500,
+          "reloadCommissionCents": 269500,
+          "ezcashBillCents": 3734567,
+          "ezcashCommissionCents": 29877
+        },
+        "commissionRevenueCents": 299377,
+        "cards": {
+          "salesCents": 500000,
+          "returnsCents": 0,
+          "revenueCents": 500000,
+          "costAutomaticCents": 450000,
+          "costExtraCents": 10000,
+          "costOfSalesCents": 460000,
+          "grossProfitCents": 40000
+        },
+        "grossProfitCents": 339377,
+        "expenses": {
+          "totalCents": 360000,
+          "byCategory": {
+            "water": 0,
+            "rent": 0,
+            "internet": 150000,
+            "transport": 60000,
+            "repairs": 120000,
+            "cleaning_supplies": 0,
+            "packaging": 0,
+            "stationery": 30000,
+            "other": 0
+          }
+        },
+        "adjustments": {
+          "lossesCents": 0,
+          "damagedReturnLossesCents": 0,
+          "stocktakeLossesCents": 18000,
+          "stocktakeGainsCents": 0,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 18000
+        },
+        "cashOverShortCents": 20000,
+        "netProfitCents": -18623,
+        "memo": {
+          "providerTopupsCents": 1300000,
+          "walletTopupsCents": 500000
+        }
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "commissions": {
+          "reloadSalesCents": 1500000,
+          "reloadBaseCommissionCents": 90000,
+          "reloadExtraCents": 0,
+          "reloadCommissionCents": 90000,
+          "ezcashBillCents": 900000,
+          "ezcashCommissionCents": 7200
+        },
+        "commissionRevenueCents": 97200,
+        "cards": {
+          "salesCents": 150000,
+          "returnsCents": 10000,
+          "revenueCents": 140000,
+          "costAutomaticCents": 122000,
+          "costExtraCents": 4000,
+          "costOfSalesCents": 126000,
+          "grossProfitCents": 14000
+        },
+        "grossProfitCents": 111200,
+        "expenses": {
+          "totalCents": 240000,
+          "byCategory": {
+            "water": 0,
+            "rent": 0,
+            "internet": 240000,
+            "transport": 0,
+            "repairs": 0,
+            "cleaning_supplies": 0,
+            "packaging": 0,
+            "stationery": 0,
+            "other": 0
+          }
+        },
+        "adjustments": {
+          "lossesCents": 0,
+          "damagedReturnLossesCents": 0,
+          "stocktakeLossesCents": 0,
+          "stocktakeGainsCents": 0,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 0
+        },
+        "cashOverShortCents": -30100,
+        "netProfitCents": -158900,
+        "memo": {
+          "providerTopupsCents": 70000,
+          "walletTopupsCents": 50000
+        }
+      }
+    ],
+    "totals": {
+      "commissions": {
+        "reloadSalesCents": 6199999,
+        "reloadBaseCommissionCents": 357000,
+        "reloadExtraCents": 2500,
+        "reloadCommissionCents": 359500,
+        "ezcashBillCents": 4634567,
+        "ezcashCommissionCents": 37077
+      },
+      "commissionRevenueCents": 396577,
+      "cards": {
+        "salesCents": 650000,
+        "returnsCents": 10000,
+        "revenueCents": 640000,
+        "costAutomaticCents": 572000,
+        "costExtraCents": 14000,
+        "costOfSalesCents": 586000,
+        "grossProfitCents": 54000
+      },
+      "grossProfitCents": 450577,
+      "expenses": {
+        "totalCents": 600000,
+        "byCategory": {
+          "water": 0,
+          "rent": 0,
+          "internet": 390000,
+          "transport": 60000,
+          "repairs": 120000,
+          "cleaning_supplies": 0,
+          "packaging": 0,
+          "stationery": 30000,
+          "other": 0
+        }
+      },
+      "adjustments": {
+        "lossesCents": 0,
+        "damagedReturnLossesCents": 0,
+        "stocktakeLossesCents": 18000,
+        "stocktakeGainsCents": 0,
+        "residualSweepsCents": 0,
+        "purchaseRefundGainCents": 0,
+        "salesReturnVoidGainCents": 0,
+        "netCents": 18000
+      },
+      "cashOverShortCents": -10100,
+      "netProfitCents": -177523,
+      "memo": {
+        "providerTopupsCents": 1370000,
+        "walletTopupsCents": 550000
+      }
+    },
+    "table": {
+      "title": "Telecom profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "reloadBase",
+          "label": "Reload commission",
+          "kind": "money"
+        },
+        {
+          "key": "reloadExtra",
+          "label": "Reload rounding extra",
+          "kind": "money"
+        },
+        {
+          "key": "ezcash",
+          "label": "EZCash commission",
+          "kind": "money"
+        },
+        {
+          "key": "cardRevenue",
+          "label": "Scratch-card sales (net)",
+          "kind": "money"
+        },
+        {
+          "key": "cardCost",
+          "label": "Card cost (auto + extra)",
+          "kind": "money"
+        },
+        {
+          "key": "cardProfit",
+          "label": "Card gross profit",
+          "kind": "money"
+        },
+        {
+          "key": "expenses",
+          "label": "Operating expenses",
+          "kind": "money"
+        },
+        {
+          "key": "adjustments",
+          "label": "Stock adjustments (net)",
+          "kind": "money"
+        },
+        {
+          "key": "purchaseRefundGain",
+          "label": "Purchase refund above stock value removed (R4)",
+          "kind": "money"
+        },
+        {
+          "key": "salesReturnVoidGain",
+          "label": "Void-return stock value gain (R-VR)",
+          "kind": "money"
+        },
+        {
+          "key": "overShort",
+          "label": "Cash over / short",
+          "kind": "money"
+        },
+        {
+          "key": "netProfit",
+          "label": "Net profit",
+          "kind": "money"
+        },
+        {
+          "key": "reloadSales",
+          "label": "Memo: reload collections",
+          "kind": "money"
+        },
+        {
+          "key": "ezcashBills",
+          "label": "Memo: EZCash bills collected",
+          "kind": "money"
+        },
+        {
+          "key": "topups",
+          "label": "Memo: provider + wallet top-ups",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "reloadBase": 267000,
+          "reloadExtra": 2500,
+          "ezcash": 29877,
+          "cardRevenue": 500000,
+          "cardCost": 460000,
+          "cardProfit": 40000,
+          "expenses": 360000,
+          "adjustments": 18000,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": 20000,
+          "netProfit": -18623,
+          "reloadSales": 4699999,
+          "ezcashBills": 3734567,
+          "topups": 1800000
+        },
+        {
+          "period": "2025-09",
+          "reloadBase": 90000,
+          "reloadExtra": 0,
+          "ezcash": 7200,
+          "cardRevenue": 140000,
+          "cardCost": 126000,
+          "cardProfit": 14000,
+          "expenses": 240000,
+          "adjustments": 0,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": -30100,
+          "netProfit": -158900,
+          "reloadSales": 1500000,
+          "ezcashBills": 900000,
+          "topups": 120000
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "reloadBase": 357000,
+        "reloadExtra": 2500,
+        "ezcash": 37077,
+        "cardRevenue": 640000,
+        "cardCost": 586000,
+        "cardProfit": 54000,
+        "expenses": 600000,
+        "adjustments": 18000,
+        "purchaseRefundGain": 0,
+        "salesReturnVoidGain": 0,
+        "overShort": -10100,
+        "netProfit": -177523,
+        "reloadSales": 6199999,
+        "ezcashBills": 4634567,
+        "topups": 1920000
+      },
+      "notes": [
+        "Telecom income is commission only: reload commission (with any rounding extra) and EZCash commission.",
+        "Full reload collections, EZCash bill collections and provider/wallet top-ups are cash movements, not income or cost (memo columns).",
+        "The Telecom cash book does not reconcile to Telecom profit because reload float is not tracked (owner decision, R14).",
+        "Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain (R4: cash refunded above the stock value removed, shown on its own line) - void-return stock value gain (R-VR, shown on its own line).",
+        "Scratch cards are stock products: sales minus automatic and extra cost, net of returns (a voided return is not counted).",
+        "There is no electricity expense in Telecom: the whole shop electricity bill is carried by the Ice Cream book."
+      ]
+    },
+    "warnings": []
+  },
+  "pnlShop": {
+    "segment": "shop",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "goods": {
+          "salesCents": 2614999,
+          "returnsCents": 639999,
+          "revenueCents": 1975000,
+          "costAutomaticCents": 902515,
+          "costExtraCents": 4000,
+          "costOfSalesCents": 906515,
+          "grossProfitCents": 1068485
+        },
+        "services": {
+          "revenueCents": 230000,
+          "costCents": 91000,
+          "grossProfitCents": 139000
+        },
+        "grossProfitCents": 1207485,
+        "expenses": {
+          "totalCents": 1220000,
+          "byCategory": {
+            "water": 80000,
+            "rent": 1000000,
+            "internet": 0,
+            "transport": 0,
+            "repairs": 0,
+            "cleaning_supplies": 45000,
+            "packaging": 25000,
+            "stationery": 0,
+            "other": 70000
+          }
+        },
+        "adjustments": {
+          "lossesCents": 66260,
+          "damagedReturnLossesCents": 30000,
+          "stocktakeLossesCents": 50000,
+          "stocktakeGainsCents": 20020,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 126240
+        },
+        "cashOverShortCents": -5000,
+        "netProfitCents": -143755
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "goods": {
+          "salesCents": 480000,
+          "returnsCents": 120000,
+          "revenueCents": 360000,
+          "costAutomaticCents": 167283,
+          "costExtraCents": -2000,
+          "costOfSalesCents": 165283,
+          "grossProfitCents": 194717
+        },
+        "services": {
+          "revenueCents": 125000,
+          "costCents": 45000,
+          "grossProfitCents": 80000
+        },
+        "grossProfitCents": 274717,
+        "expenses": {
+          "totalCents": 1000000,
+          "byCategory": {
+            "water": 0,
+            "rent": 1000000,
+            "internet": 0,
+            "transport": 0,
+            "repairs": 0,
+            "cleaning_supplies": 0,
+            "packaging": 0,
+            "stationery": 0,
+            "other": 0
+          }
+        },
+        "adjustments": {
+          "lossesCents": 32428,
+          "damagedReturnLossesCents": 0,
+          "stocktakeLossesCents": 0,
+          "stocktakeGainsCents": 10010,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 22418
+        },
+        "cashOverShortCents": 12000,
+        "netProfitCents": -735701
+      }
+    ],
+    "totals": {
+      "goods": {
+        "salesCents": 3094999,
+        "returnsCents": 759999,
+        "revenueCents": 2335000,
+        "costAutomaticCents": 1069798,
+        "costExtraCents": 2000,
+        "costOfSalesCents": 1071798,
+        "grossProfitCents": 1263202
+      },
+      "services": {
+        "revenueCents": 355000,
+        "costCents": 136000,
+        "grossProfitCents": 219000
+      },
+      "grossProfitCents": 1482202,
+      "expenses": {
+        "totalCents": 2220000,
+        "byCategory": {
+          "water": 80000,
+          "rent": 2000000,
+          "internet": 0,
+          "transport": 0,
+          "repairs": 0,
+          "cleaning_supplies": 45000,
+          "packaging": 25000,
+          "stationery": 0,
+          "other": 70000
+        }
+      },
+      "adjustments": {
+        "lossesCents": 98688,
+        "damagedReturnLossesCents": 30000,
+        "stocktakeLossesCents": 50000,
+        "stocktakeGainsCents": 30030,
+        "residualSweepsCents": 0,
+        "purchaseRefundGainCents": 0,
+        "salesReturnVoidGainCents": 0,
+        "netCents": 148658
+      },
+      "cashOverShortCents": 7000,
+      "netProfitCents": -879456
+    },
+    "table": {
+      "title": "Shop profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "goodsRevenue",
+          "label": "Goods sales (net of returns)",
+          "kind": "money"
+        },
+        {
+          "key": "costAutomatic",
+          "label": "Cost: automatic",
+          "kind": "money"
+        },
+        {
+          "key": "costExtra",
+          "label": "Cost: extra",
+          "kind": "money"
+        },
+        {
+          "key": "goodsProfit",
+          "label": "Goods gross profit",
+          "kind": "money"
+        },
+        {
+          "key": "serviceRevenue",
+          "label": "Print/other services",
+          "kind": "money"
+        },
+        {
+          "key": "serviceCost",
+          "label": "Service cost",
+          "kind": "money"
+        },
+        {
+          "key": "serviceProfit",
+          "label": "Service gross profit",
+          "kind": "money"
+        },
+        {
+          "key": "expenses",
+          "label": "Operating expenses",
+          "kind": "money"
+        },
+        {
+          "key": "adjustments",
+          "label": "Stock adjustments (net)",
+          "kind": "money"
+        },
+        {
+          "key": "purchaseRefundGain",
+          "label": "Purchase refund above stock value removed (R4)",
+          "kind": "money"
+        },
+        {
+          "key": "salesReturnVoidGain",
+          "label": "Void-return stock value gain (R-VR)",
+          "kind": "money"
+        },
+        {
+          "key": "overShort",
+          "label": "Cash over / short",
+          "kind": "money"
+        },
+        {
+          "key": "netProfit",
+          "label": "Net profit",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "goodsRevenue": 1975000,
+          "costAutomatic": 902515,
+          "costExtra": 4000,
+          "goodsProfit": 1068485,
+          "serviceRevenue": 230000,
+          "serviceCost": 91000,
+          "serviceProfit": 139000,
+          "expenses": 1220000,
+          "adjustments": 126240,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": -5000,
+          "netProfit": -143755
+        },
+        {
+          "period": "2025-09",
+          "goodsRevenue": 360000,
+          "costAutomatic": 167283,
+          "costExtra": -2000,
+          "goodsProfit": 194717,
+          "serviceRevenue": 125000,
+          "serviceCost": 45000,
+          "serviceProfit": 80000,
+          "expenses": 1000000,
+          "adjustments": 22418,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": 12000,
+          "netProfit": -735701
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "goodsRevenue": 2335000,
+        "costAutomatic": 1069798,
+        "costExtra": 2000,
+        "goodsProfit": 1263202,
+        "serviceRevenue": 355000,
+        "serviceCost": 136000,
+        "serviceProfit": 219000,
+        "expenses": 2220000,
+        "adjustments": 148658,
+        "purchaseRefundGain": 0,
+        "salesReturnVoidGain": 0,
+        "overShort": 7000,
+        "netProfit": -879456
+      },
+      "notes": [
+        "Goods and service sales are net of returns; a return counts in the period of the return date.",
+        "Cost = automatic (weighted-average) cost plus any extra cost the cashier added on the sale (C13).",
+        "Printing supplies bought, owner drawings, capital, transfers and opening balances are not in profit.",
+        "There is no electricity expense in the Shop: the whole shop electricity bill is carried by the Ice Cream book.",
+        "Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain - void-return stock value gain.",
+        "Purchase refund above stock value removed (R4): when a returned or voided purchase is refunded in cash for more than the stock value that leaves the shelf, the difference is a gain (shown positive; it is already inside Stock adjustments (net) as a reduction).",
+        "Void-return stock value gain (R-VR): when a sales return is voided, the stock leaves again at the value the return restored, limited to what the stock is worth now; a lower value is a gain (shown positive, already inside Stock adjustments (net)). A voided return itself is not counted anywhere: its sales, cost and extra cost stand as if it had never been recorded."
+      ]
+    },
+    "warnings": []
+  },
+  "pnlIcecream": {
+    "segment": "icecream",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "salesCents": 2700000,
+        "materialsChargeCents": 920000,
+        "electricityChargeCents": 530000,
+        "otherExpensesCents": 30000,
+        "cashOverShortCents": 0,
+        "recognizedProfitCents": 1220000,
+        "recognition": {
+          "dailyProfitShareCents": 860000,
+          "profitEligibleReleasesCents": 540000,
+          "reallocationsCents": -150000,
+          "otherExpensesCents": -30000,
+          "cashOverShortCents": 0
+        },
+        "memo": {
+          "actualMaterialsPaidCents": 550000,
+          "actualElectricityPaidCents": 750000,
+          "otherCostsFromCostElecFundsCents": 40000
+        },
+        "excessCostNotChargedCents": 0,
+        "profitAfterExcessCostCents": 1220000,
+        "balancesAsOfPeriodEnd": {
+          "unspentByLine": {
+            "materialsCents": 330000,
+            "electricityCents": -220000
+          },
+          "unspentCents": 110000,
+          "outstandingExcessCostCents": 0
+        }
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "salesCents": 200000,
+        "materialsChargeCents": 200000,
+        "electricityChargeCents": 20000,
+        "otherExpensesCents": 0,
+        "cashOverShortCents": -10000,
+        "recognizedProfitCents": -30000,
+        "recognition": {
+          "dailyProfitShareCents": 80000,
+          "profitEligibleReleasesCents": 0,
+          "reallocationsCents": -100000,
+          "otherExpensesCents": 0,
+          "cashOverShortCents": -10000
+        },
+        "memo": {
+          "actualMaterialsPaidCents": 0,
+          "actualElectricityPaidCents": 500000,
+          "otherCostsFromCostElecFundsCents": 0
+        },
+        "excessCostNotChargedCents": 170000,
+        "profitAfterExcessCostCents": -200000,
+        "balancesAsOfPeriodEnd": {
+          "unspentByLine": {
+            "materialsCents": 530000,
+            "electricityCents": -700000
+          },
+          "unspentCents": -170000,
+          "outstandingExcessCostCents": 170000
+        }
+      }
+    ],
+    "totals": {
+      "salesCents": 2900000,
+      "materialsChargeCents": 1120000,
+      "electricityChargeCents": 550000,
+      "otherExpensesCents": 30000,
+      "cashOverShortCents": -10000,
+      "recognizedProfitCents": 1190000,
+      "recognition": {
+        "dailyProfitShareCents": 940000,
+        "profitEligibleReleasesCents": 540000,
+        "reallocationsCents": -250000,
+        "otherExpensesCents": -30000,
+        "cashOverShortCents": -10000
+      },
+      "memo": {
+        "actualMaterialsPaidCents": 550000,
+        "actualElectricityPaidCents": 1250000,
+        "otherCostsFromCostElecFundsCents": 40000
+      },
+      "excessCostNotChargedCents": 170000,
+      "profitAfterExcessCostCents": 1020000,
+      "balancesAsOfPeriodEnd": {
+        "unspentByLine": {
+          "materialsCents": 530000,
+          "electricityCents": -700000
+        },
+        "unspentCents": -170000,
+        "outstandingExcessCostCents": 170000
+      }
+    },
+    "table": {
+      "title": "Ice Cream profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "sales",
+          "label": "Sales",
+          "kind": "money"
+        },
+        {
+          "key": "materials",
+          "label": "Materials (allocated)",
+          "kind": "money"
+        },
+        {
+          "key": "electricity",
+          "label": "Electricity (allocated)",
+          "kind": "money"
+        },
+        {
+          "key": "other",
+          "label": "Other ice-cream expenses",
+          "kind": "money"
+        },
+        {
+          "key": "overShort",
+          "label": "Cash over / short",
+          "kind": "money"
+        },
+        {
+          "key": "recognized",
+          "label": "Recognized profit",
+          "kind": "money"
+        },
+        {
+          "key": "excess",
+          "label": "Excess cost not yet charged",
+          "kind": "money"
+        },
+        {
+          "key": "afterExcess",
+          "label": "Profit after excess cost",
+          "kind": "money"
+        },
+        {
+          "key": "actualMaterials",
+          "label": "Memo: materials paid",
+          "kind": "money"
+        },
+        {
+          "key": "actualElectricity",
+          "label": "Memo: electricity bills paid",
+          "kind": "money"
+        },
+        {
+          "key": "otherFromCostElec",
+          "label": "Memo: other costs from Cost/Electricity funds",
+          "kind": "money"
+        },
+        {
+          "key": "unspent",
+          "label": "Unspent allocation at period end",
+          "kind": "money"
+        },
+        {
+          "key": "outstanding",
+          "label": "Outstanding excess cost at period end",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "sales": 2700000,
+          "materials": 920000,
+          "electricity": 530000,
+          "other": 30000,
+          "overShort": 0,
+          "recognized": 1220000,
+          "excess": 0,
+          "afterExcess": 1220000,
+          "actualMaterials": 550000,
+          "actualElectricity": 750000,
+          "otherFromCostElec": 40000,
+          "unspent": 110000,
+          "outstanding": 0
+        },
+        {
+          "period": "2025-09",
+          "sales": 200000,
+          "materials": 200000,
+          "electricity": 20000,
+          "other": 0,
+          "overShort": -10000,
+          "recognized": -30000,
+          "excess": 170000,
+          "afterExcess": -200000,
+          "actualMaterials": 0,
+          "actualElectricity": 500000,
+          "otherFromCostElec": 0,
+          "unspent": -170000,
+          "outstanding": 170000
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "sales": 2900000,
+        "materials": 1120000,
+        "electricity": 550000,
+        "other": 30000,
+        "overShort": -10000,
+        "recognized": 1190000,
+        "excess": 170000,
+        "afterExcess": 1020000,
+        "actualMaterials": 550000,
+        "actualElectricity": 1250000,
+        "otherFromCostElec": 40000,
+        "unspent": -170000,
+        "outstanding": 170000
+      },
+      "notes": [
+        "Recognized profit is the official Ice Cream profit: sales - materials allocated - electricity allocated - other costs paid from the Profit Fund +/- cash over/short.",
+        "Materials and electricity are the daily ALLOCATIONS (movements dated in the period). Paying a supplier or the electricity bill settles them and is never a second expense.",
+        "Excess cost not yet charged is the change in uncovered excess during the period; a negative figure means earlier excess is now covered. Official profit is never reduced automatically.",
+        "Unspent allocation and outstanding excess cost are balances at the period end and are not added up across rows (the total row shows the balance at the end date)."
+      ]
+    },
+    "warnings": [
+      {
+        "code": "EXCESS_COST_OUTSTANDING",
+        "book": "icecream",
+        "outstandingExcessCostCents": 170000,
+        "asOf": "2025-09-30",
+        "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-30: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+      }
+    ]
+  },
+  "pnlCombined": {
+    "segment": "combined",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "segments": {
+          "shop": {
+            "recognizedProfitCents": -143755
+          },
+          "telecom": {
+            "recognizedProfitCents": -18623
+          },
+          "icecream": {
+            "recognizedProfitCents": 1220000
+          }
+        },
+        "recognizedProfitCents": 1057622,
+        "electricityChargedCents": 530000,
+        "electricityBillsPaidCents": 750000,
+        "icecreamExcessCostNotChargedCents": 0,
+        "combinedProfitAfterExcessCostCents": 1057622,
+        "outstandingExcessCostCents": 0
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "segments": {
+          "shop": {
+            "recognizedProfitCents": -735701
+          },
+          "telecom": {
+            "recognizedProfitCents": -158900
+          },
+          "icecream": {
+            "recognizedProfitCents": -30000
+          }
+        },
+        "recognizedProfitCents": -924601,
+        "electricityChargedCents": 20000,
+        "electricityBillsPaidCents": 500000,
+        "icecreamExcessCostNotChargedCents": 170000,
+        "combinedProfitAfterExcessCostCents": -1094601,
+        "outstandingExcessCostCents": 170000
+      }
+    ],
+    "totals": {
+      "segments": {
+        "shop": {
+          "recognizedProfitCents": -879456
+        },
+        "telecom": {
+          "recognizedProfitCents": -177523
+        },
+        "icecream": {
+          "recognizedProfitCents": 1190000
+        }
+      },
+      "recognizedProfitCents": 133021,
+      "electricityChargedCents": 550000,
+      "electricityBillsPaidCents": 1250000,
+      "icecreamExcessCostNotChargedCents": 170000,
+      "combinedProfitAfterExcessCostCents": -36979,
+      "outstandingExcessCostCents": 170000
+    },
+    "table": {
+      "title": "Combined profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "shop",
+          "label": "Shop profit",
+          "kind": "money"
+        },
+        {
+          "key": "telecom",
+          "label": "Telecom profit",
+          "kind": "money"
+        },
+        {
+          "key": "icecream",
+          "label": "Ice Cream recognized profit",
+          "kind": "money"
+        },
+        {
+          "key": "combined",
+          "label": "Combined recognized profit (official)",
+          "kind": "money"
+        },
+        {
+          "key": "excess",
+          "label": "Ice Cream excess cost not yet charged",
+          "kind": "money"
+        },
+        {
+          "key": "afterExcess",
+          "label": "Combined profit after excess cost",
+          "kind": "money"
+        },
+        {
+          "key": "electricityCharged",
+          "label": "Info: electricity charged (not added)",
+          "kind": "money"
+        },
+        {
+          "key": "electricityPaid",
+          "label": "Info: electricity bills paid (memo)",
+          "kind": "money"
+        },
+        {
+          "key": "outstanding",
+          "label": "Outstanding excess cost at period end",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "shop": -143755,
+          "telecom": -18623,
+          "icecream": 1220000,
+          "combined": 1057622,
+          "excess": 0,
+          "afterExcess": 1057622,
+          "electricityCharged": 530000,
+          "electricityPaid": 750000,
+          "outstanding": 0
+        },
+        {
+          "period": "2025-09",
+          "shop": -735701,
+          "telecom": -158900,
+          "icecream": -30000,
+          "combined": -924601,
+          "excess": 170000,
+          "afterExcess": -1094601,
+          "electricityCharged": 20000,
+          "electricityPaid": 500000,
+          "outstanding": 170000
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "shop": -879456,
+        "telecom": -177523,
+        "icecream": 1190000,
+        "combined": 133021,
+        "excess": 170000,
+        "afterExcess": -36979,
+        "electricityCharged": 550000,
+        "electricityPaid": 1250000,
+        "outstanding": 170000
+      },
+      "notes": [
+        "Combined profit = Shop profit + Telecom profit + Ice Cream recognized profit. The three segments never overlap.",
+        "The electricity lines are information only: the whole shop electricity bill is carried by the Ice Cream book and is never added to or deducted from any profit here (E5).",
+        "Excess cost not yet charged is the change in uncovered excess during the period; a negative figure means earlier excess is now covered. Official profit is never reduced automatically.",
+        "Unspent allocation and outstanding excess cost are balances at the period end and are not added up across rows (the total row shows the balance at the end date)."
+      ]
+    },
+    "warnings": [
+      {
+        "code": "EXCESS_COST_OUTSTANDING",
+        "book": "icecream",
+        "outstandingExcessCostCents": 170000,
+        "asOf": "2025-09-30",
+        "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-30: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+      }
+    ]
+  },
+  "valuation": {
+    "asOf": "2026-11-17",
+    "rows": [
+      {
+        "productId": 4,
+        "code": null,
+        "name": "Cable",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 5,
+        "valueCents": 50050,
+        "avgUnitCostCents": 10010
+      },
+      {
+        "productId": 2,
+        "code": null,
+        "name": "Charger",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 7,
+        "valueCents": 490000,
+        "avgUnitCostCents": 70000
+      },
+      {
+        "productId": 3,
+        "code": null,
+        "name": "Earbuds",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 8,
+        "valueCents": 475000,
+        "avgUnitCostCents": 59375
+      },
+      {
+        "productId": 1,
+        "code": null,
+        "name": "Phone cover",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 14,
+        "valueCents": 453985,
+        "avgUnitCostCents": 32428
+      },
+      {
+        "productId": 5,
+        "code": null,
+        "name": "Scratch card 100",
+        "categoryId": 12,
+        "categoryName": "Scratch Cards",
+        "book": "telecom",
+        "active": true,
+        "qty": 38,
+        "valueCents": 342000,
+        "avgUnitCostCents": 9000
+      },
+      {
+        "productId": 6,
+        "code": null,
+        "name": "Scratch card 50",
+        "categoryId": 12,
+        "categoryName": "Scratch Cards",
+        "book": "telecom",
+        "active": true,
+        "qty": 92,
+        "valueCents": 368000,
+        "avgUnitCostCents": 4000
+      }
+    ],
+    "byBook": [
+      {
+        "book": "shop",
+        "qty": 34,
+        "valueCents": 1469035,
+        "products": 4
+      },
+      {
+        "book": "telecom",
+        "qty": 130,
+        "valueCents": 710000,
+        "products": 2
+      }
+    ],
+    "byCategory": [
+      {
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "qty": 34,
+        "valueCents": 1469035,
+        "products": 4
+      },
+      {
+        "categoryId": 12,
+        "categoryName": "Scratch Cards",
+        "book": "telecom",
+        "qty": 130,
+        "valueCents": 710000,
+        "products": 2
+      }
+    ],
+    "totals": {
+      "qty": 164,
+      "valueCents": 2179035,
+      "products": 6
+    },
+    "reconciliation": {
+      "asOfIsLive": true,
+      "cacheQty": 164,
+      "cacheValueCents": 2179035,
+      "matchesCache": true
+    },
+    "table": {
+      "title": "Inventory valuation",
+      "columns": [
+        {
+          "key": "code",
+          "label": "Code",
+          "kind": "text"
+        },
+        {
+          "key": "name",
+          "label": "Product",
+          "kind": "text"
+        },
+        {
+          "key": "category",
+          "label": "Category",
+          "kind": "text"
+        },
+        {
+          "key": "book",
+          "label": "Book",
+          "kind": "text"
+        },
+        {
+          "key": "qty",
+          "label": "Quantity",
+          "kind": "int"
+        },
+        {
+          "key": "avg",
+          "label": "Average cost",
+          "kind": "money"
+        },
+        {
+          "key": "value",
+          "label": "Stock value",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "code": null,
+          "name": "Cable",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 5,
+          "avg": 10010,
+          "value": 50050
+        },
+        {
+          "code": null,
+          "name": "Charger",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 7,
+          "avg": 70000,
+          "value": 490000
+        },
+        {
+          "code": null,
+          "name": "Earbuds",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 8,
+          "avg": 59375,
+          "value": 475000
+        },
+        {
+          "code": null,
+          "name": "Phone cover",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 14,
+          "avg": 32428,
+          "value": 453985
+        },
+        {
+          "code": null,
+          "name": "Scratch card 100",
+          "category": "Scratch Cards",
+          "book": "telecom",
+          "qty": 38,
+          "avg": 9000,
+          "value": 342000
+        },
+        {
+          "code": null,
+          "name": "Scratch card 50",
+          "category": "Scratch Cards",
+          "book": "telecom",
+          "qty": 92,
+          "avg": 4000,
+          "value": 368000
+        }
+      ],
+      "totals": {
+        "code": null,
+        "name": "Total",
+        "category": null,
+        "book": null,
+        "qty": 164,
+        "avg": null,
+        "value": 2179035
+      },
+      "notes": [
+        "Stock as of 2026-11-17, from the stock movements by business date. Average cost is value / quantity (display only)."
+      ]
+    },
+    "warnings": []
+  },
+  "dashboard": {
+    "asOf": "2025-09-14",
+    "today": {
+      "salesCents": 0,
+      "profitCents": 0,
+      "bySegment": {
+        "shop": {
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        "telecom": {
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        "icecream": {
+          "salesCents": 0,
+          "profitCents": 0
+        }
+      }
+    },
+    "month": {
+      "salesCents": 922200,
+      "profitCents": -924601,
+      "bySegment": {
+        "shop": {
+          "salesCents": 485000,
+          "profitCents": -735701
+        },
+        "telecom": {
+          "salesCents": 237200,
+          "profitCents": -158900
+        },
+        "icecream": {
+          "salesCents": 200000,
+          "profitCents": -30000
+        }
+      }
+    },
+    "cash": {
+      "books": [
+        {
+          "book": "shop",
+          "balanceCents": 2827000
+        },
+        {
+          "book": "telecom",
+          "balanceCents": 9834466
+        },
+        {
+          "book": "icecream",
+          "balanceCents": 1440000,
+          "fundsMatchBook": true,
+          "funds": {
+            "cost": 890000,
+            "electricity": -500000,
+            "profit": 1050000
+          }
+        }
+      ],
+      "totalCents": 14101466
+    },
+    "stock": {
+      "valueCents": 2179035,
+      "lowStockCount": 0,
+      "lowStock": [],
+      "negativeOrWarning": []
+    },
+    "icecream": {
+      "recognizedProfitMonthCents": -30000,
+      "funds": {
+        "cost": 890000,
+        "electricity": -500000,
+        "profit": 1050000
+      },
+      "fundsTotalCents": 1440000,
+      "fundsMatchBook": true,
+      "excessCostNotChargedTodayCents": 0,
+      "excessCostNotChargedMonthCents": 170000,
+      "profitAfterExcessCostMonthCents": -200000,
+      "outstandingExcessCostCents": 170000,
+      "warnings": [
+        {
+          "code": "NEGATIVE_FUND_BALANCE",
+          "book": "icecream",
+          "fund": "electricity",
+          "balanceCents": -500000,
+          "message": "The Ice Cream Electricity fund is now below zero (-Rs. 5,000.00)."
+        },
+        {
+          "code": "EXCESS_COST_OUTSTANDING",
+          "book": "icecream",
+          "outstandingExcessCostCents": 170000,
+          "asOf": "2025-09-14",
+          "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-14: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+        }
+      ]
+    },
+    "closings": {
+      "lastClosedByBook": {
+        "shop": "2025-08-08",
+        "telecom": "2025-09-13",
+        "icecream": null
+      },
+      "openDaysBehind": [
+        {
+          "book": "shop",
+          "dates": [
+            "2025-09-07",
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13"
+          ]
+        },
+        {
+          "book": "telecom",
+          "dates": [
+            "2025-09-07",
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12"
+          ]
+        },
+        {
+          "book": "icecream",
+          "dates": [
+            "2025-09-07",
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13"
+          ]
+        }
+      ]
+    },
+    "backup": {
+      "latestAt": null,
+      "ageHours": null,
+      "status": "none",
+      "external": {
+        "status": "not_configured",
+        "lastSuccessAt": null,
+        "daysSinceSuccess": null,
+        "warning": "No external backup folder is set, so backups exist only on this computer. Choose a USB drive or another local drive in Settings > Backups."
+      }
+    },
+    "series": {
+      "daily": [
+        {
+          "date": "2025-08-16",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-17",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-18",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-19",
+          "salesCents": 300000,
+          "profitCents": 90000
+        },
+        {
+          "date": "2025-08-20",
+          "salesCents": 580000,
+          "profitCents": 265435
+        },
+        {
+          "date": "2025-08-21",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-22",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-23",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-24",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-25",
+          "salesCents": 800000,
+          "profitCents": 330000
+        },
+        {
+          "date": "2025-08-26",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-27",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-28",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-29",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-30",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-31",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-01",
+          "salesCents": 288000,
+          "profitCents": -2000
+        },
+        {
+          "date": "2025-09-02",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-03",
+          "salesCents": 300000,
+          "profitCents": 90000
+        },
+        {
+          "date": "2025-09-04",
+          "salesCents": 120000,
+          "profitCents": 94717
+        },
+        {
+          "date": "2025-09-05",
+          "salesCents": 155400,
+          "profitCents": -889600
+        },
+        {
+          "date": "2025-09-06",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-07",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-08",
+          "salesCents": 0,
+          "profitCents": -122418
+        },
+        {
+          "date": "2025-09-09",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-10",
+          "salesCents": 0,
+          "profitCents": -28000
+        },
+        {
+          "date": "2025-09-11",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-12",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-13",
+          "salesCents": 58800,
+          "profitCents": -67300
+        },
+        {
+          "date": "2025-09-14",
+          "salesCents": 0,
+          "profitCents": 0
+        }
+      ],
+      "monthly": [
+        {
+          "month": "2024-10",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2024-11",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2024-12",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-01",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-02",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-03",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-04",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-05",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-06",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-07",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-08",
+          "shopCents": -143755,
+          "telecomCents": -18623,
+          "icecreamCents": 1220000,
+          "combinedCents": 1057622
+        },
+        {
+          "month": "2025-09",
+          "shopCents": -735701,
+          "telecomCents": -158900,
+          "icecreamCents": -30000,
+          "combinedCents": -924601
+        }
+      ],
+      "topProducts": [
+        {
+          "name": "Phone cover",
+          "revenueCents": 240000,
+          "grossProfitCents": 142717
+        },
+        {
+          "name": "Charger",
+          "revenueCents": 120000,
+          "grossProfitCents": 52000
+        },
+        {
+          "name": "Scratch card 100",
+          "revenueCents": 100000,
+          "grossProfitCents": 10000
+        },
+        {
+          "name": "Scratch card 50",
+          "revenueCents": 40000,
+          "grossProfitCents": 4000
+        }
+      ]
+    },
+    "warnings": [
+      {
+        "code": "NEGATIVE_FUND_BALANCE",
+        "book": "icecream",
+        "fund": "electricity",
+        "balanceCents": -500000,
+        "message": "The Ice Cream Electricity fund is now below zero (-Rs. 5,000.00)."
+      },
+      {
+        "code": "EXCESS_COST_OUTSTANDING",
+        "book": "icecream",
+        "outstandingExcessCostCents": 170000,
+        "asOf": "2025-09-14",
+        "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-14: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+      }
+    ],
+    "definitions": {
+      "sales": "Sales are the revenue lines of the profit and loss reports, net of returns (a return counts on the day it was made).",
+      "salesShop": "Shop sales = goods revenue + print/service revenue.",
+      "salesTelecom": "Telecom sales = scratch-card revenue + reload commission + EZCash commission. Reload and EZCash collections and top-ups are cash only, never sales.",
+      "salesIcecream": "Ice Cream sales = the daily sales entered for the Ice Cream book.",
+      "salesCombined": "Combined sales = Shop + Telecom + Ice Cream sales.",
+      "profit": "Profit = the segment net profit of the reports (gross profit and commissions - expenses - stock adjustments +/- cash over/short). Ice Cream profit is the RECOGNIZED profit. Combined profit = Shop + Telecom + Ice Cream recognized profit.",
+      "today": "Today = the dashboard date only.",
+      "month": "This month = the 1st of the dashboard date's month up to and including the dashboard date.",
+      "cash": "Cash balances are the sum of every ledger entry dated on or before the dashboard date. Ice Cream fund balances are shown separately and are not profit.",
+      "stock": "Stock value is the value of stock on hand at the dashboard date (from the stock movements). The low-stock list is the live list of products at or below their minimum.",
+      "excessCost": "Excess cost = money actually spent beyond what was set aside in the daily allocations. Official profit is not reduced automatically; the \"profit after excess cost\" line shows what it would be.",
+      "closings": "Days not yet closed = the 7 days before the dashboard date, from the book's first entry onward, that have no active daily closing.",
+      "backup": "Backup age is measured from the real current time. Status is \"stale\" after 48 hours and \"none\" when there is no backup. \"external\" is the status of the copy on the external backup folder (USB drive): \"stale\" means no successful copy for 7 days or more.",
+      "seriesDaily": "Daily series = the last 30 days ending on the dashboard date (days without records are zero). Profit is the combined recognized profit.",
+      "seriesMonthly": "Monthly series = the last 12 calendar months ending with the dashboard date's month (the last month runs only up to the dashboard date).",
+      "topProducts": "Top products = the 5 stock products (Shop goods and scratch cards) with the highest gross profit this month, net of returns."
+    }
+  }
+}
