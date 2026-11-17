@@ -13,6 +13,7 @@
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Period } from '../../lib/report-table.ts';
+import type { StoredSegment } from '../segments.ts';
 
 /** One report row = its period plus the figures of that period. */
 export type PeriodRow<F> = { period: Period } & F;
@@ -95,3 +96,21 @@ export function sumOf<T>(rows: readonly T[], pick: (r: T) => number): number {
 
 /** `0 - x` instead of `-x`, so a zero never becomes negative zero in JSON/Excel. */
 export const neg = (x: number): number => 0 - x;
+
+/**
+ * Optional Telecom segment filter of every query function (BUSINESS_RULES 13D). No segment = no filter (the book as a whole,
+ * identical to the figures before the segments existed). The Shop never has a segment, so a segment filter on Shop is never passed.
+ */
+export interface SegmentFilter { segment?: StoredSegment | undefined }
+
+/** ` AND <column> = ?` plus its parameter when a segment is chosen; empty otherwise. `column` is a trusted constant of the caller. */
+export function segClause(column: string, f: SegmentFilter | undefined): { sql: string; params: SQLInputValue[] } {
+  return f?.segment ? { sql: ` AND ${column} = ?`, params: [f.segment] } : { sql: '', params: [] };
+}
+
+/** Movement queries: join of the product segment view and its condition (the segment of a stock movement = its product's). */
+export function movementSegment(f: SegmentFilter | undefined): { join: string; sql: string; params: SQLInputValue[] } {
+  return f?.segment
+    ? { join: 'JOIN v_product_segment vs ON vs.product_id = m.product_id', sql: ' AND vs.segment = ?', params: [f.segment] }
+    : { join: '', sql: '', params: [] };
+}
