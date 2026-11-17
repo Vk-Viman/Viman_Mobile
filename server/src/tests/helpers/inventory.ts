@@ -163,6 +163,9 @@ let pseq = 0;
  * @throws if the API does not answer 201, so a broken setup fails loudly instead of confusing later asserts
  */
 export async function mkProduct(s: ApiBase, over: Record<string, unknown> = {}): Promise<any> {
+  // 13D: the default "Scratch Cards" category (Telecom) must be linked to a provider before it can hold a new card product; setup code that
+  // names it gets Dialog on first use (the server allows it while the category has no products). Tests of the rule itself use `post` directly.
+  if (over.categoryId !== undefined && over.categoryId === s.ids['Scratch Cards'] && (over.kind ?? 'stock') === 'stock') await linkScratchCards(s);
   const r = await post(s.app, '/products', {
     name: `Item ${pseq++}`, categoryId: s.ids.Electronics, kind: 'stock', sellPriceCents: 100000, minPriceCents: 50000, ...over,
   });
@@ -178,13 +181,14 @@ export async function mkProduct(s: ApiBase, over: Record<string, unknown> = {}):
 export async function mkTelecom(s: ApiBase, over: Record<string, unknown> = {}): Promise<any> {
   const { provider, ...fields } = over as { provider?: ProviderName } & Record<string, unknown>;
   if (provider !== undefined) return cardProduct(s, { provider, ...fields });
-  if (fields.categoryId === undefined || fields.categoryId === s.ids['Scratch Cards']) {
-    const scratch = s.ids['Scratch Cards']!;
-    const dialog = (await providerIdByName(s.app)).Dialog;
-    const cat = (await get(s.app, '/categories?book=telecom')).body.items.find((c: any) => c.id === scratch);
-    if (cat && cat.providerId === null) await put(s.app, `/categories/${scratch}`, { providerId: dialog }); // refused (locked) only if it already holds products
-  }
   return mkProduct(s, { categoryId: s.ids['Scratch Cards'], ...fields });
+}
+
+/** Links the default "Scratch Cards" category to Dialog when it has no provider yet (a no-op afterwards; refused by the server only if products exist). */
+export async function linkScratchCards(s: ApiBase): Promise<void> {
+  const scratch = s.ids['Scratch Cards']!;
+  const cat = (await get(s.app, '/categories?book=telecom')).body.items.find((c: any) => c.id === scratch);
+  if (cat && cat.providerId === null) await put(s.app, `/categories/${scratch}`, { providerId: (await providerIdByName(s.app)).Dialog });
 }
 
 /**

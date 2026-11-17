@@ -23,6 +23,7 @@ import { capNew, drawCash, tr, trVoid } from './phase9.ts';
 import { dayNew, dayReplace, dayVoid, moveNew, moveVoid, payNew, payVoid } from './phase10.ts';
 import { importFile, mkSku, xlsx } from './phase13.ts';
 import { voidReturnNew } from './phase17.ts';
+import { SEGMENTS, segmentLabel } from './segments.ts';
 
 export type { Book } from './phase8.ts';
 export const ALL_BOOKS: readonly Book[] = ['shop', 'telecom', 'icecream'];
@@ -38,15 +39,20 @@ export const L = (): string => daysAgo(1);
 export const OLD = (): string => daysAgo(12);
 
 export const LABEL: Record<Book, string> = { shop: 'Shop', telecom: 'Telecom', icecream: 'Ice Cream' };
-export const closedMsg = (book: Book): string => `That day is closed for the ${LABEL[book]} cash book. Reopen it first (it will be recorded in the audit log).`;
-export const backMsg = (book: Book, closed: string): string =>
-  `A later day (${closed}) is already closed for the ${LABEL[book]} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`;
+// 13D: a Telecom scope is a SEGMENT, so its messages name it ("Telecom - Dialog Cards") and the error body carries `segment`. The `segment`
+// argument is optional only so that book-level callers keep compiling; a Telecom expectation must pass the segment of the write under test
+// (card flows: dialog_cards; reloads / EZCash / top-ups / Telecom expenses / counts: dialog_reloads; see helpers/segments.ts).
+const scopeName = (book: Book, segment?: string): string => (segment ? `${LABEL[book]} - ${segmentLabel(segment)}` : LABEL[book]);
+export const closedMsg = (book: Book, segment?: string): string => `That day is closed for the ${scopeName(book, segment)} cash book. Reopen it first (it will be recorded in the audit log).`;
+export const backMsg = (book: Book, closed: string, segment?: string): string =>
+  `A later day (${closed}) is already closed for the ${scopeName(book, segment)} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`;
 
 /** Expected error body of a DAY_CLOSED refusal. */
-export const dayClosedBody = (book: Book, date: string) => ({ code: 'DAY_CLOSED', message: closedMsg(book), book, businessDate: date });
+export const dayClosedBody = (book: Book, date: string, segment?: string) =>
+  ({ code: 'DAY_CLOSED', message: closedMsg(book, segment), book, ...(segment ? { segment } : {}), businessDate: date });
 /** Expected error body of a BACKDATE_BEFORE_CLOSED_DAY refusal. */
-export const backdateBody = (book: Book, closedDate: string, date: string) =>
-  ({ code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(book, closedDate), book, closedDate, businessDate: date });
+export const backdateBody = (book: Book, closedDate: string, date: string, segment?: string) =>
+  ({ code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(book, closedDate, segment), book, ...(segment ? { segment } : {}), closedDate, businessDate: date });
 
 export const ok = (r: Res): boolean => r.status === 200 || r.status === 201;
 export const must = (r: Res): Res => { expect(ok(r), JSON.stringify(r.body)).toBe(true); return r; };
@@ -68,9 +74,10 @@ export function fullSnapshot(s: { ctx: AppContext }, omit: readonly string[] = [
   return out;
 }
 
-/** Ledger balance of a book as of a date (independent of the services). */
-export const balAsOf = (s: { ctx: AppContext }, book: Book, date: string): number =>
-  Number(Object.values(sql(s, 'SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ? AND business_date <= ?', book, date)[0]!)[0]);
+/** Ledger balance of a book (Telecom: of one `segment`, or the whole book) as of a date (independent of the services). */
+export const balAsOf = (s: { ctx: AppContext }, book: Book, date: string, segment?: string | null): number =>
+  Number(Object.values(sql(s, `SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ? AND business_date <= ?${segment ? ' AND segment = ?' : ''}`,
+    ...(segment ? [book, date, segment] : [book, date]))[0]!)[0]);
 
 // ---------------------------------------------------------------------------------------------
 // (3) fixtures and the operation registry
@@ -378,10 +385,24 @@ export async function setupFx(env: { build: () => Promise<{ app: any; ctx: AppCo
 // ---------------------------------------------------------------------------------------------
 // closing helpers
 // ---------------------------------------------------------------------------------------------
-/** Closes the given books on a date (no count); returns the closing rows by book. */
+/**
+ * Closes the given books on a date (no count); returns the closing rows by book. 13D: closing "Telecom" closes ALL EIGHT Telecom segments
+ * (the old meaning: nothing of that book can be written on that date); `out.telecom` is the first closing with `_all` = the eight rows.
+ * Close one segment only with `seg.closeOk` (helpers/seg.ts).
+ */
 export async function closeBooks(s: ApiBase, books: Iterable<Book>, date: string): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   for (const b of books) {
+    if (b === 'telecom') {
+      const all: any[] = [];
+      for (const segment of SEGMENTS) {
+        const r = await closeNew(s, 'telecom', date, { segment });
+        expect(r.status, JSON.stringify(r.body)).toBe(201);
+        all.push(r.body.item);
+      }
+      out[b] = { ...all[0], _all: all };
+      continue;
+    }
     const r = await closeNew(s, b, date);
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     out[b] = r.body.item;
@@ -390,15 +411,19 @@ export async function closeBooks(s: ApiBase, books: Iterable<Book>, date: string
 }
 export async function reopenAll(s: ApiBase, closings: Record<string, any>, reason = 'audit reopen'): Promise<void> {
   for (const c of Object.values(closings)) {
-    const r = await reopenNew(s, c.id, reason);
-    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    for (const row of (c._all ?? [c]) as any[]) {
+      const r = await reopenNew(s, row.id, reason);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
   }
 }
-/** Re-closes (the same row is updated) every book of `closings` on `date`. */
+/** Re-closes (the same row is updated) every book of `closings` on `date` (Telecom: all eight segments). */
 export async function recloseAll(s: ApiBase, closings: Record<string, any>, date: string): Promise<void> {
   for (const b of Object.keys(closings)) {
-    const r = await closeNew(s, b as Book, date);
-    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    for (const segment of b === 'telecom' ? SEGMENTS : [undefined]) {
+      const r = await closeNew(s, b as Book, date, segment ? { segment } : {});
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
   }
 }
 
@@ -440,12 +465,12 @@ export function predict(model: ClosedModel, books: Iterable<Book>, date: string)
 /** The ledger-based property: for every currently closed day, the balance as of that day equals what the closing recorded. */
 export function closedSnapshotViolations(s: { ctx: AppContext }): string[] {
   const out: string[] = [];
-  const rows = sql(s, `SELECT book, business_date, expected_cents, counted_cents FROM daily_closings
+  const rows = sql(s, `SELECT book, segment, business_date, expected_cents, counted_cents FROM daily_closings
                         WHERE reopened_at IS NULL OR closed_at > reopened_at`);
   for (const r of rows) {
     const want = r.counted_cents === null ? Number(r.expected_cents) : Number(r.counted_cents);
-    const have = balAsOf(s, r.book as Book, r.business_date as string);
-    if (have !== want) out.push(`${r.book} ${r.business_date}: ledger ${have} != closing ${want}`);
+    const have = balAsOf(s, r.book as Book, r.business_date as string, r.segment as string | null); // a segment closing snapshots THAT segment
+    if (have !== want) out.push(`${r.book}${r.segment ? `:${r.segment}` : ''} ${r.business_date}: ledger ${have} != closing ${want}`);
   }
   return out;
 }
