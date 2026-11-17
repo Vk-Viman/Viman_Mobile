@@ -12,6 +12,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { ReportTable } from '../../lib/report-table.ts';
 import { num } from './ops-common.ts';
 import type { ReportWarning, SqlRow, StockBook } from './ops-common.ts';
+import type { StoredSegment } from '../segments.ts';
 
 /** Every movement type (same list as the database CHECK). */
 export const MOVEMENT_REPORT_TYPES = [
@@ -23,13 +24,13 @@ export type MovementReportType = typeof MOVEMENT_REPORT_TYPES[number];
 
 /** Filters and paging. `from`/`to` are optional business dates (inclusive). */
 export interface MovementsQuery {
-  from?: string; to?: string; productId?: number; type?: MovementReportType; book?: StockBook; limit: number; offset: number;
+  from?: string; to?: string; productId?: number; type?: MovementReportType; book?: StockBook; segment?: StoredSegment; limit: number; offset: number;
 }
 
 /** One ledger row with its product's name and book. */
 export interface MovementReportRow {
   id: number; businessDate: string; postedAt: string; productId: number; productName: string; productCode: string | null;
-  book: StockBook; type: MovementReportType; qtyDelta: number; valueDeltaCents: number; unitCostCents: number | null;
+  book: StockBook; /** Telecom card products: the product's segment (13D); null for Shop. */ segment: StoredSegment | null; type: MovementReportType; qtyDelta: number; valueDeltaCents: number; unitCostCents: number | null;
   refTable: string | null; refId: number | null; reason: string;
 }
 
@@ -55,8 +56,9 @@ export function stockMovementsReport(conn: DatabaseSync, q: MovementsQuery): Mov
   if (q.productId !== undefined) { where.push('m.product_id = ?'); params.push(q.productId); }
   if (q.type !== undefined) { where.push('m.type = ?'); params.push(q.type); }
   if (q.book !== undefined) { where.push('p.book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('vs.segment = ?'); params.push(q.segment); }
   const w = where.join(' AND ');
-  const from = `FROM stock_movements m JOIN products p ON p.id = m.product_id WHERE ${w}`;
+  const from = `FROM stock_movements m JOIN products p ON p.id = m.product_id LEFT JOIN v_product_segment vs ON vs.product_id = m.product_id WHERE ${w}`;
 
   const byType = (conn.prepare(
     `SELECT m.type AS type, COUNT(*) AS n, SUM(m.qty_delta) AS qty, SUM(m.value_delta_cents) AS value ${from} GROUP BY m.type ORDER BY m.type`,
@@ -67,13 +69,13 @@ export function stockMovementsReport(conn: DatabaseSync, q: MovementsQuery): Mov
     { count: 0, qtyDelta: 0, valueDeltaCents: 0 });
 
   const rows = (conn.prepare(
-    `SELECT m.id, m.business_date, m.posted_at, m.product_id, p.name AS product_name, p.code AS product_code, p.book, m.type,
+    `SELECT m.id, m.business_date, m.posted_at, m.product_id, p.name AS product_name, p.code AS product_code, p.book, vs.segment AS segment, m.type,
             m.qty_delta, m.value_delta_cents, m.unit_cost_cents, m.ref_table, m.ref_id, m.reason
        ${from} ORDER BY m.business_date DESC, m.id DESC LIMIT ? OFFSET ?`,
   ).all(...params, q.limit, q.offset) as unknown as SqlRow[]).map((r): MovementReportRow => ({
     id: num(r.id), businessDate: String(r.business_date), postedAt: String(r.posted_at), productId: num(r.product_id),
     productName: String(r.product_name), productCode: (r.product_code as string | null) ?? null, book: r.book as StockBook,
-    type: r.type as MovementReportType, qtyDelta: num(r.qty_delta), valueDeltaCents: num(r.value_delta_cents),
+    segment: (r.segment as StoredSegment | null) ?? null, type: r.type as MovementReportType, qtyDelta: num(r.qty_delta), valueDeltaCents: num(r.value_delta_cents),
     unitCostCents: r.unit_cost_cents === null ? null : num(r.unit_cost_cents),
     refTable: (r.ref_table as string | null) ?? null, refId: r.ref_id === null ? null : num(r.ref_id), reason: String(r.reason),
   }));
@@ -82,14 +84,14 @@ export function stockMovementsReport(conn: DatabaseSync, q: MovementsQuery): Mov
     title: 'Stock movements',
     columns: [
       { key: 'date', label: 'Business date', kind: 'date' }, { key: 'product', label: 'Product', kind: 'text' },
-      { key: 'book', label: 'Book', kind: 'text' }, { key: 'type', label: 'Type', kind: 'text' },
+      { key: 'book', label: 'Book', kind: 'text' }, { key: 'segment', label: 'Segment', kind: 'text' }, { key: 'type', label: 'Type', kind: 'text' },
       { key: 'qty', label: 'Quantity', kind: 'int' }, { key: 'value', label: 'Value', kind: 'money' },
       { key: 'reason', label: 'Reason', kind: 'text' },
     ],
     rows: rows.map((r) => ({
-      date: r.businessDate, product: r.productName, book: r.book, type: r.type, qty: r.qtyDelta, value: r.valueDeltaCents, reason: r.reason,
+      date: r.businessDate, product: r.productName, book: r.book, segment: r.segment, type: r.type, qty: r.qtyDelta, value: r.valueDeltaCents, reason: r.reason,
     })),
-    totals: { date: null, product: 'Total of all matching movements', book: null, type: null, qty: totals.qtyDelta, value: totals.valueDeltaCents, reason: null },
+    totals: { date: null, product: 'Total of all matching movements', book: null, segment: null, type: null, qty: totals.qtyDelta, value: totals.valueDeltaCents, reason: null },
     notes: ['Reversal rows of voided records are listed too, so a voided record nets to zero here.'],
   };
   const warnings: ReportWarning[] = [];

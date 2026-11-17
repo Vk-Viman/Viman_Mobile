@@ -12,11 +12,22 @@
 import { mulDivRound } from '../../lib/money.ts';
 import { listPeriods } from '../../lib/report-table.ts';
 import type { Granularity, Period } from '../../lib/report-table.ts';
+import type { SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../segments.ts';
 
 /** The three cash books (section 0). Stock lives only in `shop` and `telecom`. */
 export type Book = 'shop' | 'telecom' | 'icecream';
 /** The two stock-holding books. */
 export type StockBook = 'shop' | 'telecom';
+
+/**
+ * Optional Telecom segment filter of an operational report (BUSINESS_RULES 13D): ` AND <column> = ?` and its parameter when a segment is
+ * chosen, nothing otherwise. `column` is a trusted constant of the calling report (the table's own `segment` column, or the sale's / the
+ * purchase's for a record that derives its segment from a header).
+ */
+export function segmentFilter(column: string, segment: StoredSegment | undefined): { sql: string; params: SQLInputValue[] } {
+  return segment ? { sql: ` AND ${column} = ?`, params: [segment] } : { sql: '', params: [] };
+}
 
 /** One warning line shown above a report (same `{ code, message }` shape the rest of the app uses). */
 export interface ReportWarning { code: string; message: string }

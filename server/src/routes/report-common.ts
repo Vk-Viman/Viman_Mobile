@@ -12,6 +12,8 @@ import { AppError } from '../lib/errors.ts';
 import { isIsoDate } from '../lib/dates.ts';
 import { MAX_REPORT_DAYS, daysInRange, reportTablesToXlsx } from '../lib/report-table.ts';
 import type { Granularity, ReportTable } from '../lib/report-table.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -22,6 +24,14 @@ export const reportQueryProps = {
   granularity: { type: 'string', enum: ['day', 'month'] },
   format: { type: 'string', enum: ['json', 'xlsx'] },
 } as const;
+
+/** The optional Telecom segment filter (`?segment=dialog_reloads`; `legacy` is accepted as a filter value, 13D). */
+export const segmentQuery = STORED_SEGMENT_SCHEMA;
+
+/** The `segment` query value as an optional spread for a service request: `{ segment }` or nothing. */
+export function segmentArg(raw: { segment?: string }): { segment?: StoredSegment } {
+  return raw.segment !== undefined ? { segment: raw.segment as StoredSegment } : {};
+}
 
 /** The validated period parameters of a report request. */
 export interface ReportQuery { from: string; to: string; granularity: Granularity; format: 'json' | 'xlsx' }

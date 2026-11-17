@@ -15,13 +15,15 @@
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Granularity, ReportTable } from '../../lib/report-table.ts';
-import { addInto, fillPeriods, marginBp, num, numericOnly, periodKeySql } from './ops-common.ts';
+import { addInto, fillPeriods, marginBp, num, numericOnly, periodKeySql, segmentFilter } from './ops-common.ts';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS } from '../segments.ts';
+import type { StoredSegment } from '../segments.ts';
 import type { ReportWarning, SqlRow, StockBook } from './ops-common.ts';
 import { productProfitability } from './product-profitability.ts';
 import type { ProfitabilityRow } from './product-profitability.ts';
 
 /** Request: dates, granularity, optional book and how many top products to list. */
-export interface SalesQuery { from: string; to: string; granularity: Granularity; book?: StockBook; topN?: number }
+export interface SalesQuery { from: string; to: string; granularity: Granularity; book?: StockBook; topN?: number; segment?: StoredSegment }
 
 /** One period's figures (cents). `revenueCents` is NET of returns; `salesRevenueCents`/`returnsCents` show the two parts. */
 export interface SalesFigures {
@@ -35,6 +37,8 @@ export interface SalesReport {
   rows: Array<{ period: { from: string; to: string; label: string }; byBook: Record<StockBook, SalesFigures> } & SalesFigures>;
   totals: SalesFigures & { marginBp: number | null };
   totalsByBook: Record<StockBook, SalesFigures>;
+  /** Telecom card sales per segment over the range (the four Cards segments always; `legacy` only when it has sales); sums to `totalsByBook.telecom`. */
+  byTelecomSegment: Array<{ segment: StoredSegment; label: string } & SalesFigures>;
   topProducts: ProfitabilityRow[];
   table: ReportTable; extraTables: ReportTable[]; warnings: ReportWarning[];
 }
@@ -52,8 +56,9 @@ function finish(f: SalesFigures): void {
 
 /** Sales report for [from, to]; `topN` (default 10) products by gross profit. */
 export function salesReport(conn: DatabaseSync, q: SalesQuery): SalesReport {
-  const bookSql = q.book !== undefined ? ' AND s.book = ?' : '';
-  const args: SQLInputValue[] = [q.from, q.to, ...(q.book !== undefined ? [q.book] : [])];
+  const sg = segmentFilter('s.segment', q.segment);
+  const bookSql = (q.book !== undefined ? ' AND s.book = ?' : '') + sg.sql;
+  const args: SQLInputValue[] = [q.from, q.to, ...(q.book !== undefined ? [q.book] : []), ...sg.params];
   const cells = new Map<string, Record<StockBook, SalesFigures>>();
   const cell = (label: string, book: StockBook): SalesFigures => {
     let c = cells.get(label);
@@ -89,7 +94,31 @@ export function salesReport(conn: DatabaseSync, q: SalesQuery): SalesReport {
   const totalsByBook: Record<StockBook, SalesFigures> = { shop: zero(), telecom: zero() };
   for (const r of rows) { addInto(totals, r); for (const b of BOOKS) addInto(totalsByBook[b], r.byBook[b]); }
 
-  const topProducts = productProfitability(conn, { from: q.from, to: q.to, ...(q.book !== undefined ? { book: q.book } : {}) }).rows.slice(0, q.topN ?? 10);
+  // Telecom card sales by segment over the whole range (same definitions as the rows: sales minus returns, cost net of reversed cost).
+  const seg = new Map<string, SalesFigures>();
+  const segCell = (code: string): SalesFigures => { let c = seg.get(code); if (!c) { c = zero(); seg.set(code, c); } return c; };
+  const segArgs: SQLInputValue[] = [q.from, q.to, ...sg.params];
+  for (const r of conn.prepare(
+    `SELECT s.segment AS seg, COUNT(DISTINCT s.id) AS n, SUM(si.revenue_cents) AS rev, SUM(si.cogs_cents) AS cogs, SUM(si.extra_cost_cents) AS extra
+       FROM sales s JOIN sale_items si ON si.sale_id = s.id
+      WHERE s.book = 'telecom' AND s.status = 'posted' AND s.business_date BETWEEN ? AND ?${sg.sql} GROUP BY s.segment`,
+  ).all(...segArgs) as unknown as SqlRow[]) {
+    const c = segCell(String(r.seg)); c.salesCount = num(r.n); c.salesRevenueCents = num(r.rev); c.costAutoCents += num(r.cogs); c.costExtraCents += num(r.extra);
+  }
+  for (const r of conn.prepare(
+    `SELECT s.segment AS seg, COUNT(*) AS n, SUM(r.refund_cents) AS rev, SUM(r.cogs_reversed_cents) AS cogs, SUM(r.extra_cost_reversed_cents) AS extra
+       FROM sales_returns r JOIN sales s ON s.id = r.sale_id
+      WHERE s.book = 'telecom' AND s.status = 'posted' AND r.status = 'posted' AND r.business_date BETWEEN ? AND ?${sg.sql} GROUP BY s.segment`,
+  ).all(...segArgs) as unknown as SqlRow[]) {
+    const c = segCell(String(r.seg)); c.returnCount = num(r.n); c.returnsCents = num(r.rev); c.costAutoCents -= num(r.cogs); c.costExtraCents -= num(r.extra);
+  }
+  for (const c of seg.values()) finish(c);
+  const segCodes: StoredSegment[] = q.segment ? [q.segment] : [...TELECOM_SEGMENTS.filter((x) => x.endsWith('_cards')), 'legacy'];
+  const byTelecomSegment = segCodes
+    .filter((code) => code !== 'legacy' || q.segment === 'legacy' || seg.has('legacy'))
+    .map((code) => ({ segment: code, label: SEGMENT_LABEL[code], ...(seg.get(code) ?? zero()) }));
+
+  const topProducts = productProfitability(conn, { from: q.from, to: q.to, ...(q.book !== undefined ? { book: q.book } : {}), ...(q.segment !== undefined ? { segment: q.segment } : {}) }).rows.slice(0, q.topN ?? 10);
 
   const figCols = [
     { key: 'salesCount', label: 'Sales', kind: 'int' }, { key: 'salesRevenueCents', label: 'Sales revenue', kind: 'money' },
@@ -111,6 +140,10 @@ export function salesReport(conn: DatabaseSync, q: SalesQuery): SalesReport {
   };
   const extraTables: ReportTable[] = [
     { title: 'Sales by book', columns: [{ key: 'book', label: 'Book', kind: 'text' }, ...figCols], rows: BOOKS.map((b) => ({ book: b, ...figs(totalsByBook[b]) })), totals: { book: 'Total', ...figs(totals) } },
+    ...(byTelecomSegment.length > 0 ? [{
+      title: 'Telecom sales by segment', columns: [{ key: 'segment', label: 'Segment', kind: 'text' as const }, ...figCols],
+      rows: byTelecomSegment.map((x) => ({ segment: x.label, ...figs(x) })), totals: { segment: 'Telecom total', ...figs(totalsByBook.telecom) },
+    }] : []),
     {
       title: 'Top products',
       columns: [{ key: 'name', label: 'Product', kind: 'text' }, { key: 'book', label: 'Book', kind: 'text' }, { key: 'netQty', label: 'Net units', kind: 'int' },
@@ -121,6 +154,6 @@ export function salesReport(conn: DatabaseSync, q: SalesQuery): SalesReport {
   ];
   return {
     from: q.from, to: q.to, granularity: q.granularity, rows,
-    totals: { ...totals, marginBp: marginBp(totals.grossProfitCents, totals.revenueCents) }, totalsByBook, topProducts, table, extraTables, warnings: [],
+    totals: { ...totals, marginBp: marginBp(totals.grossProfitCents, totals.revenueCents) }, totalsByBook, byTelecomSegment, topProducts, table, extraTables, warnings: [],
   };
 }

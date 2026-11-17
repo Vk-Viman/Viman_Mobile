@@ -18,9 +18,10 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { ReportTable } from '../../lib/report-table.ts';
 import { marginBp, num } from './ops-common.ts';
 import type { ReportWarning, SqlRow, StockBook } from './ops-common.ts';
+import type { StoredSegment } from '../segments.ts';
 
 /** Request: a business-date range and optional filters. */
-export interface ProfitabilityQuery { from: string; to: string; book?: StockBook; categoryId?: number }
+export interface ProfitabilityQuery { from: string; to: string; book?: StockBook; categoryId?: number; segment?: StoredSegment }
 
 /** One product's figures. Money in cents, margin in basis points (null when the net revenue is 0). */
 export interface ProfitabilityRow {
@@ -48,6 +49,7 @@ export function productProfitability(conn: DatabaseSync, q: ProfitabilityQuery):
   const extra: SQLInputValue[] = [];
   if (q.book !== undefined) { filt.push('p.book = ?'); extra.push(q.book); }
   if (q.categoryId !== undefined) { filt.push('p.category_id = ?'); extra.push(q.categoryId); }
+  if (q.segment !== undefined) { filt.push('s.segment = ?'); extra.push(q.segment); }
   const f = filt.length > 0 ? ` AND ${filt.join(' AND ')}` : '';
 
   const sold = conn.prepare(
