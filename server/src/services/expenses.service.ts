@@ -26,6 +26,8 @@ import {
 import type { ExpenseBook, ExpenseRow, RecordStatus } from '../repositories/expenses.repo.ts';
 import { logAudit } from './audit.service.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
+import { resolveEntrySegment } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayOpen } from './day-closing.ts';
 import { runWrite } from './stock-common.ts';
@@ -56,7 +58,7 @@ export const ELECTRICITY_MESSAGE = 'Electricity is paid from the Ice Cream book.
 
 /** An expense as returned by the API (adds the `backdated` flag). */
 export interface Expense {
-  id: number; businessDate: string; postedAt: string; backdated: boolean; book: ExpenseBook; category: string;
+  id: number; businessDate: string; postedAt: string; backdated: boolean; book: ExpenseBook; segment: StoredSegment | null; category: string;
   amountCents: number; description: string; notes: string; status: RecordStatus; voidedAt: string | null;
   voidReason: string | null; clientRef: string;
 }
@@ -64,7 +66,7 @@ export interface Expense {
 function toExpense(r: ExpenseRow): Expense {
   return {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
-    book: r.book, category: r.category, amountCents: r.amountCents, description: r.description, notes: r.notes,
+    book: r.book, segment: r.segment, category: r.category, amountCents: r.amountCents, description: r.description, notes: r.notes,
     status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
   };
 }
@@ -87,7 +89,7 @@ export function getExpense(ctx: AppContext, id: number): Expense {
 
 /** Lists expenses, newest first; `totals.amountCents` sums only POSTED expenses that match the filters. */
 export function listExpenses(ctx: AppContext, q: {
-  from?: string; to?: string; book?: ExpenseBook; category?: string; status?: RecordStatus; limit: number; offset: number;
+  from?: string; to?: string; book?: ExpenseBook; segment?: StoredSegment; category?: string; status?: RecordStatus; limit: number; offset: number;
 }): { items: Expense[]; total: number; totals: { amountCents: number } } {
   const r = listExpenseRows(ctx.database.conn, q);
   return { items: r.items.map(toExpense), total: r.total, totals: { amountCents: r.amountCents } };
@@ -96,7 +98,7 @@ export function listExpenses(ctx: AppContext, q: {
 /** Request body of an expense (`book` may also be 'icecream' only so the service can refuse it with advice). */
 export interface ExpenseCreate {
   businessDate: string; book: ExpenseBook | 'icecream'; category: string; amountCents: number; description: string;
-  notes?: string; clientRef: string;
+  notes?: string; clientRef: string; segment?: StoredSegment;
 }
 
 /**
@@ -134,25 +136,26 @@ export function createExpense(ctx: AppContext, body: ExpenseCreate): { item: Exp
   const notes = trimmed(fields, 'notes', 'Notes', body.notes, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
   checkBookAndCategory(body);
-  checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
   const book = body.book as ExpenseBook;
+  const segment = resolveEntrySegment(book, body.segment); // 13D: Telecom requires one of the eight, Shop forbids
+  checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
 
   return runWrite(ctx, (conn) => {
     const existing = getExpenseByClientRef(conn, body.clientRef);
     if (existing) return { item: toExpense(existing), warnings: [], created: false };
 
-    assertDayOpen(conn, [book], body.businessDate); // R9
+    assertDayOpen(conn, [{ book, segment }], body.businessDate); // R9, that segment only
     const id = insertExpense(conn, {
-      businessDate: body.businessDate, book, category: body.category, amountCents: body.amountCents, description, notes,
+      businessDate: body.businessDate, book, segment, category: body.category, amountCents: body.amountCents, description, notes,
       clientRef: body.clientRef,
     });
     insertCashEntry(conn, {
-      book, businessDate: body.businessDate, type: 'expense', amountCents: -body.amountCents, refTable: 'expenses', refId: id,
+      book, segment, businessDate: body.businessDate, type: 'expense', amountCents: -body.amountCents, refTable: 'expenses', refId: id,
     });
     const item = loadExpense(conn, id);
     logAudit(conn, 'expense', String(id), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, warnings: negativeCashWarnings(conn, [book]), created: true }; // R13: warn, never block
+    return { item, warnings: negativeCashWarnings(conn, [{ book, segment }]), created: true }; // R13: warn, never block
   });
 }
 
@@ -170,14 +173,14 @@ export function voidExpense(ctx: AppContext, id: number, body: { reason: string 
   return runWrite(ctx, (conn) => {
     const row = getExpenseRow(conn, id);
     if (!row) throw notFound('Expense');
-    assertDayOpen(conn, [row.book], row.businessDate); // R9: judged on the expense's own date (the reversal copies it)
+    assertDayOpen(conn, [{ book: row.book, segment: row.segment }], row.businessDate); // R9: judged on the expense's own date (the reversal copies it)
     if (row.status === 'void') throw alreadyVoid('expense');
     const before = toExpense(row);
 
     const original = findCashEntriesByRef(conn, 'expenses', id).find((e) => e.type === 'expense' && e.reversesEntryId === null);
     if (!original) throw new Error(`Expense #${id} has no cash entry to reverse`);
     insertCashEntry(conn, {
-      book: row.book, businessDate: row.businessDate, type: 'expense', amountCents: -original.amountCents,
+      book: row.book, segment: row.segment, businessDate: row.businessDate, type: 'expense', amountCents: -original.amountCents,
       refTable: 'expenses', refId: id, reversesEntryId: original.id, note: `Void of expense #${id}`,
     });
     markExpenseVoid(conn, id, reason);
