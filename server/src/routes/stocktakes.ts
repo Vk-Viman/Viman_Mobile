@@ -10,6 +10,8 @@
  *   POST /stocktakes/:id/complete post the differences as stock movements
  *   POST /stocktakes/:id/void     void (reverses the movements)
  */
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import {
@@ -46,6 +48,7 @@ const createBody = {
   properties: {
     businessDate: dateField,
     book: bookQuery,
+    segment: STORED_SEGMENT_SCHEMA,
     notes: { type: 'string' },
     items: itemsSchema,
     clientRef,
@@ -66,6 +69,7 @@ const listQuery = {
     from: dateQuery,
     to: dateQuery,
     book: bookQuery,
+    segment: STORED_SEGMENT_SCHEMA,
     status: { type: 'string', enum: ['draft', 'completed', 'void'] },
     limit: intQuery,
     offset: intQuery,
@@ -91,7 +95,7 @@ export function registerStocktakeRoutes(app: FastifyInstance, ctx: AppContext): 
 
   app.get('/stocktakes', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      from?: string; to?: string; book?: 'shop' | 'telecom'; status?: 'draft' | 'completed' | 'void';
+      from?: string; to?: string; book?: 'shop' | 'telecom'; segment?: StoredSegment; status?: 'draft' | 'completed' | 'void';
       limit?: string; offset?: string;
     };
     checkQueryDates(raw);
@@ -100,6 +104,7 @@ export function registerStocktakeRoutes(app: FastifyInstance, ctx: AppContext): 
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.status !== undefined) q.status = raw.status;
     return listStocktakes(ctx, q);
   });
