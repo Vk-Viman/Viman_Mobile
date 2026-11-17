@@ -8,6 +8,7 @@
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { CashBook, IceFund } from './cash-entries.repo.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import type { RecordStatus } from './expenses.repo.ts';
 import { SQL_NOW_UTC } from './sql-helpers.ts';
 
@@ -15,36 +16,39 @@ type N = number | bigint;
 
 /** One transfer. A fund is set exactly on the Ice Cream side(s). */
 export interface TransferRow {
-  id: number; businessDate: string; postedAt: string; fromBook: CashBook; toBook: CashBook; fromFund: IceFund | null;
+  id: number; businessDate: string; postedAt: string; fromBook: CashBook; toBook: CashBook; fromSegment: StoredSegment | null;
+  toSegment: StoredSegment | null; fromFund: IceFund | null;
   toFund: IceFund | null; amountCents: number; note: string; status: RecordStatus; voidedAt: string | null;
   voidReason: string | null; clientRef: string;
 }
 interface Raw {
-  id: N; business_date: string; posted_at: string; from_book: CashBook; to_book: CashBook; from_fund: IceFund | null;
+  id: N; business_date: string; posted_at: string; from_book: CashBook; to_book: CashBook; from_segment: StoredSegment | null; to_segment: StoredSegment | null;
+  from_fund: IceFund | null;
   to_fund: IceFund | null; amount_cents: N; note: string; status: RecordStatus; voided_at: string | null;
   void_reason: string | null; client_ref: string;
 }
 
-const SELECT = `SELECT id, business_date, posted_at, from_book, to_book, from_fund, to_fund, amount_cents, note, status,
+const SELECT = `SELECT id, business_date, posted_at, from_book, to_book, from_segment, to_segment, from_fund, to_fund, amount_cents, note, status,
   voided_at, void_reason, client_ref FROM cash_transfers`;
 
 function map(r: Raw): TransferRow {
   return {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, fromBook: r.from_book, toBook: r.to_book,
-    fromFund: r.from_fund, toFund: r.to_fund, amountCents: Number(r.amount_cents), note: r.note, status: r.status,
+    fromSegment: r.from_segment, toSegment: r.to_segment, fromFund: r.from_fund, toFund: r.to_fund, amountCents: Number(r.amount_cents), note: r.note, status: r.status,
     voidedAt: r.voided_at, voidReason: r.void_reason, clientRef: r.client_ref,
   };
 }
 
 /** Adds a posted transfer; returns its id. */
 export function insertTransfer(conn: DatabaseSync, t: {
-  businessDate: string; fromBook: CashBook; toBook: CashBook; fromFund: IceFund | null; toFund: IceFund | null;
+  businessDate: string; fromBook: CashBook; toBook: CashBook; fromSegment: StoredSegment | null; toSegment: StoredSegment | null;
+  fromFund: IceFund | null; toFund: IceFund | null;
   amountCents: number; note: string; clientRef: string;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO cash_transfers (business_date, from_book, to_book, from_fund, to_fund, amount_cents, note, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(t.businessDate, t.fromBook, t.toBook, t.fromFund, t.toFund, t.amountCents, t.note, t.clientRef);
+    `INSERT INTO cash_transfers (business_date, from_book, to_book, from_segment, to_segment, from_fund, to_fund, amount_cents, note, client_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(t.businessDate, t.fromBook, t.toBook, t.fromSegment, t.toSegment, t.fromFund, t.toFund, t.amountCents, t.note, t.clientRef);
   return Number(res.lastInsertRowid);
 }
 
@@ -70,13 +74,14 @@ export function markTransferVoid(conn: DatabaseSync, id: number, reason: string)
  * listed but not summed). `book` matches EITHER side. `from`/`to` are inclusive business dates.
  */
 export function listTransfers(conn: DatabaseSync, q: {
-  from?: string; to?: string; book?: CashBook; status?: RecordStatus; limit: number; offset: number;
+  from?: string; to?: string; book?: CashBook; segment?: StoredSegment; status?: RecordStatus; limit: number; offset: number;
 }): { items: TransferRow[]; total: number; amountCents: number } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
   if (q.from !== undefined) { where.push('business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('business_date <= ?'); params.push(q.to); }
   if (q.book !== undefined) { where.push('(from_book = ? OR to_book = ?)'); params.push(q.book, q.book); }
+  if (q.segment !== undefined) { where.push('(from_segment = ? OR to_segment = ?)'); params.push(q.segment, q.segment); }
   if (q.status !== undefined) { where.push('status = ?'); params.push(q.status); }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';
   const agg = conn.prepare(
@@ -97,12 +102,12 @@ export function listTransfers(conn: DatabaseSync, q: {
  * @returns The new cash entry id.
  */
 export function insertTransferLeg(conn: DatabaseSync, e: {
-  transferId: number; book: CashBook; fund: IceFund | null; businessDate: string; type: 'transfer_out' | 'transfer_in';
+  transferId: number; book: CashBook; segment: StoredSegment | null; fund: IceFund | null; businessDate: string; type: 'transfer_out' | 'transfer_in';
   amountCents: number; reversesEntryId?: number | null; note?: string | null;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, transfer_id, reverses_entry_id, note)
-     VALUES (?, ?, ?, ?, ?, 'cash_transfers', ?, ?, ?, ?)`,
-  ).run(e.book, e.businessDate, e.type, e.amountCents, e.fund, e.transferId, e.transferId, e.reversesEntryId ?? null, e.note ?? null);
+    `INSERT INTO cash_entries (book, segment, business_date, type, amount_cents, fund, ref_table, ref_id, transfer_id, reverses_entry_id, note)
+     VALUES (?, ?, ?, ?, ?, ?, 'cash_transfers', ?, ?, ?, ?)`,
+  ).run(e.book, e.segment, e.businessDate, e.type, e.amountCents, e.fund, e.transferId, e.transferId, e.reversesEntryId ?? null, e.note ?? null);
   return Number(res.lastInsertRowid);
 }
