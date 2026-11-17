@@ -3,7 +3,8 @@
  * Data: GET /cashbooks/:book (api/cashbooks.ts), paged by the server; the running balance of every row is calculated by the
  * server over the WHOLE period, so page 2 continues exactly where page 1 stopped. Rows are ordered by business date, then
  * posting order. A void shows as its own "reversal" row (R1). Ice Cream rows carry the fund column (10.2). A date that is closed
- * for this book carries a "Closed" badge (R9).
+ * for this book carries a "Closed" badge (R9). Telecom (13D): the ledger of ONE segment, or (no segment) the read-only total of
+ * all segments with a Segment column; a date closed for the segment carries the badge (the total has no closed days of its own).
  */
 import { useEffect, useState } from 'react';
 import { Badge } from '../../components/Badge';
@@ -16,11 +17,15 @@ import { Pager } from '../../components/Pager';
 import { Spinner } from '../../components/Spinner';
 import { useCashBookLedger } from '../../api/cashbooks';
 import { PAGE_SIZE } from '../../lib/constants';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import type { CashBook, CashBookLedger, LedgerItem } from '../../types/cashbooks';
+import type { StoredSegment } from '../../types/segments';
 import { FUND_LABEL, entryLabel } from './shared';
 
 interface Props {
   book: CashBook;
+  /** Telecom: the segment's ledger; null on Telecom = the read-only total ledger (a Segment column names each row's segment). */
+  segment: StoredSegment | null;
   from: string;
   to: string;
   /** Receives the ledger when it has loaded (the panel shows its totals and fund movement). */
@@ -28,11 +33,11 @@ interface Props {
 }
 
 /** The ledger table with its pager. */
-export function LedgerCard({ book, from, to, onLoaded }: Props) {
+export function LedgerCard({ book, segment, from, to, onLoaded }: Props) {
   const [page, setPage] = useState(0);
-  // A new book or period always starts at the first page.
-  useEffect(() => { setPage(0); }, [book, from, to]);
-  const ledger = useCashBookLedger(book, { from: from || undefined, to: to || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+  // A new book, segment or period always starts at the first page.
+  useEffect(() => { setPage(0); }, [book, segment, from, to]);
+  const ledger = useCashBookLedger(book, { ...(segment ? { segment } : {}), from: from || undefined, to: to || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   useEffect(() => { onLoaded(ledger.data); }, [ledger.data, onLoaded]);
 
   const closed = new Set(ledger.data?.closedDates ?? []);
@@ -51,6 +56,8 @@ export function LedgerCard({ book, from, to, onLoaded }: Props) {
       ),
     },
     ...(book === 'icecream' ? [{ key: 'fund', header: 'Fund', render: (r: LedgerItem) => (r.fund ? FUND_LABEL[r.fund] : '—') }] : []),
+    ...(book === 'telecom' && segment === null
+      ? [{ key: 'segment', header: 'Segment', render: (r: LedgerItem) => (r.segment ? SEGMENT_LABEL[r.segment] : '—') }] : []),
     { key: 'note', header: 'Reference', render: (r) => <span className="text-slate-600">{r.note || (r.refTable ? `${r.refTable.replace(/_/g, ' ')} #${r.refId}` : '—')}</span> },
     { key: 'in', header: 'Money in (Rs.)', align: 'right', render: (r) => (r.amountCents > 0 ? <Money cents={r.amountCents} /> : '') },
     { key: 'out', header: 'Money out (Rs.)', align: 'right', render: (r) => (r.amountCents < 0 ? <Money cents={-r.amountCents} /> : '') },

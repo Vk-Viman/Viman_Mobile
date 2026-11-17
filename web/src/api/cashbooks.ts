@@ -16,6 +16,7 @@ import type {
   CapitalEntryList, CapitalEntryResult, CashBook, CashBookLedger, CashBookList, CashCountCreate, CashCountResult, DailyClosingCreate,
   DailyClosingList, DailyClosingOne, DailyClosingResult, ExpectedCash, LedgerQuery, OpeningBalanceCreate,
 } from '../types/cashbooks';
+import type { StoredSegment } from '../types/segments';
 
 /** Root of every cash book query key, so one invalidation refreshes the whole screen. */
 export const CASHBOOKS_KEY = ['cashbooks'] as const;
@@ -26,11 +27,14 @@ function invalidateCashbooks(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: AUDIT_LOGS_KEY });
 }
 
-/** GET /cashbooks: balances of the three books, the Ice Cream fund balances and the integrity / negative-cash warnings. */
+/** GET /cashbooks: balances of the three books, the Telecom segments, the Ice Cream fund balances and the integrity / negative-cash warnings. */
 export const useCashBooks = () =>
   useQuery({ queryKey: [...CASHBOOKS_KEY, 'summary'], queryFn: () => apiGet<CashBookList>('/cashbooks'), staleTime: 0 });
 
-/** GET /cashbooks/:book: the ledger of a period with opening / in / out / closing and running balances (paged). */
+/**
+ * GET /cashbooks/:book: the ledger of a period with opening / in / out / closing and running balances (paged). Telecom:
+ * `query.segment` = that segment's ledger; no segment = the read-only whole-Telecom total ledger.
+ */
 export const useCashBookLedger = (book: CashBook, query: LedgerQuery = {}) =>
   useQuery({
     queryKey: [...CASHBOOKS_KEY, 'ledger', book, query],
@@ -39,10 +43,15 @@ export const useCashBookLedger = (book: CashBook, query: LedgerQuery = {}) =>
     staleTime: 0,
   });
 
-/** GET /cashbooks/:book/opening: the opening balances entered for a book (voided ones included). */
-export const useOpeningBalances = (book: CashBook) =>
+/**
+ * GET /cashbooks/:book/opening: the opening balances entered for a book (voided ones included). Telecom: `segment` narrows the
+ * list to one segment (one opening balance per segment); without it every segment's is listed.
+ */
+export const useOpeningBalances = (book: CashBook, segment?: StoredSegment | null) =>
   useQuery({
-    queryKey: [...CASHBOOKS_KEY, 'opening', book], queryFn: () => apiGet<CapitalEntryList>(`/cashbooks/${book}/opening`), staleTime: 0,
+    queryKey: [...CASHBOOKS_KEY, 'opening', book, segment ?? null],
+    queryFn: () => apiGet<CapitalEntryList>(`/cashbooks/${book}/opening${qs({ segment: segment ?? undefined })}`),
+    staleTime: 0,
   });
 
 /** POST /cashbooks/:book/opening: set the opening balance (Ice Cream: per fund). */
@@ -63,12 +72,15 @@ export function useVoidCapitalEntry() {
   });
 }
 
-/** GET /cash-counts/expected: what the drawer should hold at the end of `businessDate` (only asked when a date is chosen). */
-export const useExpectedCash = (book: CashBook, businessDate: string) =>
+/**
+ * GET /cash-counts/expected: what the drawer should hold at the end of `businessDate` (only asked when a date is chosen).
+ * Telecom counts ONE segment's drawer, so `segment` is required there.
+ */
+export const useExpectedCash = (book: CashBook, businessDate: string, segment?: StoredSegment | null) =>
   useQuery({
-    queryKey: [...CASHBOOKS_KEY, 'expected', book, businessDate],
-    queryFn: () => apiGet<ExpectedCash>(`/cash-counts/expected${qs({ book, businessDate })}`),
-    enabled: businessDate !== '',
+    queryKey: [...CASHBOOKS_KEY, 'expected', book, segment ?? null, businessDate],
+    queryFn: () => apiGet<ExpectedCash>(`/cash-counts/expected${qs({ book, segment: segment ?? undefined, businessDate })}`),
+    enabled: businessDate !== '' && (book !== 'telecom' || Boolean(segment)),
     staleTime: 0,
   });
 
@@ -81,8 +93,11 @@ export function useCreateCashCount() {
   });
 }
 
-/** GET /daily-closings: closings of a book (each with `isClosed`) in an optional period, newest first. */
-export const useDailyClosings = (query: { book: CashBook; from?: string; to?: string }) =>
+/**
+ * GET /daily-closings: closings of a book (each with `isClosed`) in an optional period, newest first. Telecom: `segment` narrows
+ * the list to one segment; without it every segment's closings are listed.
+ */
+export const useDailyClosings = (query: { book: CashBook; segment?: StoredSegment; from?: string; to?: string }) =>
   useQuery({
     queryKey: [...CASHBOOKS_KEY, 'closings', query],
     queryFn: () => apiGet<DailyClosingList>(`/daily-closings${qs(query)}`),

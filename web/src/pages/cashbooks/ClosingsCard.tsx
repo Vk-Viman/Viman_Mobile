@@ -15,16 +15,23 @@ import { Money } from '../../components/Money';
 import { Spinner } from '../../components/Spinner';
 import { useDailyClosings } from '../../api/cashbooks';
 import { formatDateTime } from '../../lib/format';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import type { CashBook, DailyClosing } from '../../types/cashbooks';
+import type { StoredSegment } from '../../types/segments';
 import { ReopenDayDialog } from './ReopenDayDialog';
 
-/** Closed / reopened days of the book inside the period. */
-export function ClosingsCard({ book, from, to }: { book: CashBook; from: string; to: string }) {
-  const closings = useDailyClosings({ book, ...(from ? { from } : {}), ...(to ? { to } : {}) });
+/**
+ * Closed / reopened days of the book inside the period. Telecom: of the selected segment, or (on "All Telecom") of every segment with
+ * a Segment column - each can be reopened on its own (13D).
+ */
+export function ClosingsCard({ book, segment, from, to }: { book: CashBook; segment: StoredSegment | null; from: string; to: string }) {
+  const closings = useDailyClosings({ book, ...(segment ? { segment } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) });
   const [reopening, setReopening] = useState<DailyClosing | null>(null);
 
   const columns: Column<DailyClosing>[] = [
     { key: 'date', header: 'Day', render: (c) => <span className="font-medium text-slate-900">{c.businessDate}</span> },
+    ...(book === 'telecom' && segment === null
+      ? [{ key: 'segment', header: 'Segment', render: (c: DailyClosing) => (c.segment ? SEGMENT_LABEL[c.segment] : '—') }] : []),
     {
       key: 'state', header: 'State',
       render: (c) => (

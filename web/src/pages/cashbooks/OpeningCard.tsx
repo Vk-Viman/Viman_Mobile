@@ -22,14 +22,22 @@ import { VoidRecordDialog } from '../../components/VoidRecordDialog';
 import { useOpeningBalances, useVoidCapitalEntry } from '../../api/cashbooks';
 import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { formatLKR } from '../../lib/format';
+import { SEGMENT_LABEL, scopeLabel } from '../../lib/segments';
 import type { CapitalEntry, CashBook } from '../../types/cashbooks';
+import type { StoredSegment } from '../../types/segments';
 import { OpeningBalanceDialog } from './OpeningBalanceDialog';
-import { CASHBOOK_LABEL, FUND_LABEL } from './shared';
+import { FUND_LABEL } from './shared';
 
-/** The opening balances of the book and their actions. */
-export function OpeningCard({ book }: { book: CashBook }) {
+/**
+ * The opening balances of the book and their actions. Telecom (13D): ONE opening balance per segment - the card lists the selected
+ * segment's; on "All Telecom" it lists every segment's (with a Segment column) and nothing can be set there.
+ */
+export function OpeningCard({ book, segment }: { book: CashBook; segment: StoredSegment | null }) {
   const toast = useToast();
-  const openings = useOpeningBalances(book);
+  const openings = useOpeningBalances(book, segment);
+  const scope = scopeLabel(book, segment);
+  const isTotal = book === 'telecom' && segment === null;
+  const isLegacy = segment === 'legacy';
   const voidMut = useVoidCapitalEntry();
   const [setting, setSetting] = useState(false);
   const [voiding, setVoiding] = useState<CapitalEntry | null>(null);
@@ -37,6 +45,7 @@ export function OpeningCard({ book }: { book: CashBook }) {
   const columns: Column<CapitalEntry>[] = [
     { key: 'date', header: 'Date', render: (e) => <span className="inline-flex flex-wrap items-center gap-2">{e.businessDate}{e.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
     ...(book === 'icecream' ? [{ key: 'fund', header: 'Fund', render: (e: CapitalEntry) => (e.fund ? FUND_LABEL[e.fund] : '—') }] : []),
+    ...(isTotal ? [{ key: 'segment', header: 'Segment', render: (e: CapitalEntry) => (e.segment ? SEGMENT_LABEL[e.segment] : '—') }] : []),
     { key: 'amount', header: 'Amount (Rs.)', align: 'right', render: (e) => <Money cents={e.amountCents} /> },
     { key: 'note', header: 'Note', render: (e) => e.note || '—' },
     {
@@ -55,7 +64,7 @@ export function OpeningCard({ book }: { book: CashBook }) {
 
   return (
     <Card title="Opening balance"
-      actions={<Button onClick={() => setSetting(true)} disabled={openings.isPending || alreadySet || everyFundSet}><Plus size={16} aria-hidden="true" /> Set opening balance</Button>}>
+      actions={<Button onClick={() => setSetting(true)} disabled={openings.isPending || alreadySet || everyFundSet || isTotal || isLegacy}><Plus size={16} aria-hidden="true" /> Set opening balance</Button>}>
       {openings.isPending ? (
         <div className="flex justify-center py-8"><Spinner label="Loading opening balances" /></div>
       ) : openings.isError ? (
@@ -63,18 +72,20 @@ export function OpeningCard({ book }: { book: CashBook }) {
       ) : (
         <>
           <p className="mb-3 text-sm text-slate-600">
-            The cash the {CASHBOOK_LABEL[book]} book held when you started using the system. It is not income.
+            The cash the {scope} book held when you started using the system. It is not income.
             {(alreadySet || everyFundSet) && ' It is already set; void it first if it was wrong.'}
+            {isTotal && ' Each Telecom segment has its own opening balance: choose a segment above to set one.'}
+            {isLegacy && ' This old history takes no new opening balance.'}
           </p>
           <DataTable columns={columns} rows={all} rowKey={(e) => e.id} emptyTitle="No opening balance yet"
             emptyHint="Enter the cash you started with so the book balance is right from day one." />
         </>
       )}
-      {setting && <OpeningBalanceDialog book={book} existing={all} onClose={() => setSetting(false)} />}
+      {setting && <OpeningBalanceDialog book={book} segment={segment} existing={all} onClose={() => setSetting(false)} />}
       {voiding && (
         <VoidRecordDialog
           title={`Void opening balance #${voiding.id}`}
-          intro={`This cancels the ${formatLKR(voiding.amountCents)} opening balance of ${voiding.businessDate}${voiding.fund ? ` (${FUND_LABEL[voiding.fund]} fund)` : ''}: the cash is taken out of the ${CASHBOOK_LABEL[voiding.book]} book. Enter it again afterwards. It cannot be undone.`}
+          intro={`This cancels the ${formatLKR(voiding.amountCents)} opening balance of ${voiding.businessDate}${voiding.fund ? ` (${FUND_LABEL[voiding.fund]} fund)` : ''}: the cash is taken out of the ${scopeLabel(voiding.book, voiding.segment)} book. Enter it again afterwards. It cannot be undone.`}
           submitLabel="Void opening balance"
           pending={voidMut.isPending}
           run={(reason, cb) => voidMut.mutate({ id: voiding.id, reason }, { onSuccess: (r) => { notifyCashWarnings(toast, r.warnings); cb.onSuccess(); }, onError: cb.onError })}

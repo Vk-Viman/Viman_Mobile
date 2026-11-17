@@ -20,18 +20,23 @@ import { useClientRef } from '../../hooks/useClientRef';
 import { MAX_NOTE, parseMoney } from '../../lib/amounts';
 import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner, fieldError } from '../../lib/errors';
+import { scopeLabel } from '../../lib/segments';
 import type { CapitalEntry, CashBook, IceFund } from '../../types/cashbooks';
-import { CASHBOOK_LABEL, FUNDS, FUND_LABEL } from './shared';
+import type { StoredSegment } from '../../types/segments';
+import { FUNDS, FUND_LABEL } from './shared';
 
 interface Props {
   book: CashBook;
+  /** Telecom: the segment this opening balance belongs to (one per segment, 13D); null for Shop and Ice Cream. */
+  segment: StoredSegment | null;
   /** The opening balances already entered (voided ones are ignored): used to offer only free funds for Ice Cream. */
   existing: CapitalEntry[];
   onClose: () => void;
 }
 
 /** The form: date, amount, (Ice Cream: fund), note. Mount only while open (fresh form, fresh clientRef). */
-export function OpeningBalanceDialog({ book, existing, onClose }: Props) {
+export function OpeningBalanceDialog({ book, segment, existing, onClose }: Props) {
+  const scope = scopeLabel(book, segment);
   const toast = useToast();
   const set = useSetOpeningBalance(book);
   const clientRef = useClientRef();
@@ -49,17 +54,17 @@ export function OpeningBalanceDialog({ book, existing, onClose }: Props) {
   const submit = () => {
     if (!canSubmit || amountCents === null) { setShowErrors(true); return; }
     set.mutate(
-      { businessDate: date, amountCents, ...(book === 'icecream' ? { fund } : {}), note: note.trim() || undefined, clientRef },
+      { businessDate: date, amountCents, ...(book === 'icecream' ? { fund } : {}), ...(segment ? { segment } : {}), note: note.trim() || undefined, clientRef },
       { onSuccess: (r) => { toast.success('Opening balance saved.'); notifyCashWarnings(toast, r.warnings); onClose(); } },
     );
   };
 
   const err = set.error;
   return (
-    <FormDialog title={`Set opening balance - ${CASHBOOK_LABEL[book]}`} submitLabel="Save" canSubmit={canSubmit} loading={set.isPending}
+    <FormDialog title={`Set opening balance - ${scope}`} submitLabel="Save" canSubmit={canSubmit} loading={set.isPending}
       error={errorBanner(err, ['businessDate', 'amountCents', 'fund', 'note'])} onSubmit={submit} onClose={onClose}>
       <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-        The money the {CASHBOOK_LABEL[book]} book held when you started. It is not income. Use the date you started, which can be in the past.
+        The money the {scope} book held when you started. It is not income. Use the date you started, which can be in the past.
         {book === 'icecream' && ' Each fund has its own opening balance.'}
       </p>
       <TextField label="Date" type="date" value={date} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(err, 'businessDate')} />

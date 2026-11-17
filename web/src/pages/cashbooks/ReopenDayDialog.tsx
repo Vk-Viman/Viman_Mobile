@@ -10,8 +10,8 @@ import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useReopenDay } from '../../api/cashbooks';
 import { errorBanner, fieldError } from '../../lib/errors';
+import { scopeLabel } from '../../lib/segments';
 import type { DailyClosing } from '../../types/cashbooks';
-import { CASHBOOK_LABEL } from './shared';
 
 /** Shortest and longest reopen reason the server accepts. */
 const MIN_REASON = 3;
@@ -38,10 +38,11 @@ export function ReopenDayDialog({ closing, onClose }: { closing: DailyClosing; o
 
   const err = reopen.error;
   return (
-    <FormDialog title={`Reopen ${closing.businessDate} - ${CASHBOOK_LABEL[closing.book]}`} submitLabel="Reopen day" canSubmit={canSubmit}
+    <FormDialog title={`Reopen ${closing.businessDate} - ${scopeLabel(closing.book, closing.segment)}`} submitLabel="Reopen day" canSubmit={canSubmit}
       loading={reopen.isPending} error={errorBanner(err, ['reason'])} onSubmit={submit} onClose={onClose}>
       <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-        Reopening lets records dated {closing.businessDate} be added, voided or returned again in the {CASHBOOK_LABEL[closing.book]} book.
+        Reopening lets records dated {closing.businessDate} be added, voided or returned again in the {scopeLabel(closing.book, closing.segment)} book
+        {closing.segment && ' (only this segment: the others are not affected)'}.
         The reopen and your reason are recorded in the audit log. Close the day again when you have finished.
       </p>
       <TextField label={`Reason (required, ${MIN_REASON}-${MAX_REASON} characters)`} value={reason} maxLength={MAX_REASON} autoComplete="off"
