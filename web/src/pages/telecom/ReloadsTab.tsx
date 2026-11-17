@@ -30,7 +30,7 @@ import { ProviderRatesCard } from './ProviderRatesCard';
 import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
 import { ReloadCorrection } from '../corrections/TelecomCorrections';
 import { ReloadDialog } from './ReloadDialog';
-import { DateCell, StatusCell, rateLabel } from './shared';
+import { DateCell, SegmentCell, StatusCell, rateLabel } from './shared';
 import { TelecomSummaryCard } from './TelecomSummaryCard';
 
 /** The tab. */
@@ -61,6 +61,7 @@ export function ReloadsTab() {
   const columns: Column<ReloadSale>[] = [
     { key: 'date', header: 'Date', render: (r) => <DateCell date={r.businessDate} backdated={r.backdated} /> },
     { key: 'prov', header: 'Provider', render: (r) => <span className="font-medium text-slate-900">{r.providerName}</span> },
+    { key: 'seg', header: 'Segment', render: (r) => <SegmentCell segment={r.segment} /> },
     { key: 'sales', header: 'Collected (Rs.)', align: 'right', render: (r) => <Money cents={r.salesCents} /> },
     { key: 'rate', header: 'Rate', align: 'right', render: (r) => rateLabel(r.commissionBp) },
     {

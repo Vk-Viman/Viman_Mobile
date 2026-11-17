@@ -8,6 +8,13 @@ import { PostedStatusBadge } from '../../components/StatusBadges';
 import { bpToPercent, rupeesToCents } from '../../lib/units';
 import type { PostedStatus } from '../../types/api';
 import { MAX_TELECOM_CENTS } from './commission';
+import { SEGMENT_LABEL } from '../../lib/segments';
+import type { StoredSegment } from '../../types/segments';
+
+/** The segment of a record as a small badge ("Dialog Reloads"; legacy records read "Telecom before segments"). */
+export function SegmentCell({ segment }: { segment: StoredSegment }) {
+  return <Badge tone={segment === 'legacy' ? 'amber' : 'neutral'}>{SEGMENT_LABEL[segment]}</Badge>;
+}
 
 /** Business date plus an amber "Backdated" badge when the entry was dated before the day it was saved (section 12). */
 export function DateCell({ date, backdated }: { date: string; backdated: boolean }) {

@@ -29,7 +29,7 @@ import type { EzCashSale, EzCashSaleQuery } from '../../types/telecom';
 import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
 import { EzCashCorrection } from '../corrections/TelecomCorrections';
 import { EzCashDialog } from './EzCashDialog';
-import { DateCell, StatusCell, rateLabel } from './shared';
+import { DateCell, SegmentCell, StatusCell, rateLabel } from './shared';
 import { TelecomSummaryCard } from './TelecomSummaryCard';
 
 /** The tab. */
@@ -54,6 +54,7 @@ export function EzCashTab() {
 
   const columns: Column<EzCashSale>[] = [
     { key: 'date', header: 'Date', render: (r) => <DateCell date={r.businessDate} backdated={r.backdated} /> },
+    { key: 'seg', header: 'Segment', render: (r) => <SegmentCell segment={r.segment} /> },
     { key: 'bills', header: 'Bills collected (Rs.)', align: 'right', render: (r) => <Money cents={r.billTotalCents} /> },
     { key: 'rate', header: 'Rate', align: 'right', render: (r) => rateLabel(r.commissionBp) },
     { key: 'comm', header: 'Commission (Rs.)', align: 'right', render: (r) => <Money cents={r.commissionCents} className="font-semibold" /> },
@@ -75,7 +76,7 @@ export function EzCashTab() {
       <TelecomSummaryCard />
       <Card title="EZCash entries" actions={<Button onClick={() => setCreating(true)}><Plus size={16} aria-hidden="true" /> Record EZCash bills</Button>}>
         <p className="mb-4 text-sm text-slate-500">
-          Bills paid through Dialog EZCash. The whole amount goes into the Telecom cash book; only the commission is income.
+          Bills paid through Dialog EZCash. They belong to Dialog Reloads. The whole amount goes into the Telecom cash book; only the commission is income.
           {settings.data && <> Current rate: <strong>{rateLabel(settings.data.rates.ezcashCommissionBp)}</strong> (change it in Settings &gt; Rates).</>}
         </p>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

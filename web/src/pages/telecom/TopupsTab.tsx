@@ -26,7 +26,7 @@ import { PAGE_SIZE } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
 import type { PostedStatus } from '../../types/api';
 import type { Topup, TopupKind, TopupQuery } from '../../types/telecom';
-import { DateCell, StatusCell } from './shared';
+import { DateCell, SegmentCell, StatusCell } from './shared';
 import { TelecomSummaryCard } from './TelecomSummaryCard';
 import { TopupDialog } from './TopupDialog';
 import { CorrectButton, useCorrectionBadges } from '../../components/CorrectionBadges';
@@ -63,6 +63,7 @@ export function TopupsTab() {
       key: 'kind', header: 'For',
       render: (t) => (t.kind === 'wallet_topup' ? <Badge tone="neutral">EZCash wallet</Badge> : <span className="font-medium text-slate-900">{t.providerName}</span>),
     },
+    { key: 'seg', header: 'Segment', render: (t) => <SegmentCell segment={t.segment} /> },
     { key: 'amount', header: 'Paid out (Rs.)', align: 'right', render: (t) => <Money cents={t.amountCents} /> },
     { key: 'note', header: 'Notes', render: (t) => t.notes || '—' },
     { key: 'status', header: 'Status', render: (t) => <span><StatusCell status={t.status} reason={t.voidReason} />{badgesFor(t.id)}</span> },
