@@ -37,12 +37,20 @@ import {
 import type { PreviewRow, ProductRef } from './excel-opening-stock.ts';
 import { getPool, receiveStock, reverseMovements } from './inventory.service.ts';
 import { assertDayOpen } from './day-closing.ts';
+import { segmentOfProduct } from './segments.ts';
+import type { CashScope } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
   isBackdatedToday, notFound, trimmed, validationError,
 } from './validation.ts';
 import type { Fields } from './validation.ts';
+
+/** The closed-day scope of a product: Shop, or its Telecom Cards segment (`legacy` without a provider). */
+function productScope(conn: DatabaseSync, productId: number): CashScope {
+  const book = getProduct(conn, productId)?.book ?? 'shop';
+  return { book, segment: book === 'telecom' ? (segmentOfProduct(conn, productId) ?? 'legacy') : null };
+}
 
 /** The ledger table name the batch's stock movements point at (`ref_table`). */
 const REF_TABLE = 'opening_stock_batches';
@@ -128,8 +136,8 @@ function postBatch(conn: DatabaseSync, p: {
   businessDate: string; source: BatchSource; fileName: string | null; notes: string; clientRef: string;
   lines: LineInput[];
 }): OpeningBatchDetail {
-  // R9: opening stock lands in the book of each product; a closed day of any of them refuses the batch.
-  assertDayOpen(conn, p.lines.map((l) => getProduct(conn, l.productId)?.book ?? 'shop'), p.businessDate);
+  // R9: opening stock lands in the scope of each product (Shop, or a provider's Cards segment); a closed day of any of them refuses the batch.
+  assertDayOpen(conn, p.lines.map((l) => productScope(conn, l.productId)), p.businessDate);
   const totalValueCents = p.lines.reduce((sum, l) => sum + l.valueCents, 0);
   if (!Number.isSafeInteger(totalValueCents)) throw validationError({ items: 'The batch total is too large.' });
   const batchId = insertBatch(conn, {
@@ -241,8 +249,8 @@ export function voidOpeningBatch(ctx: AppContext, id: number, body: { reason: st
     const header = getBatch(conn, id);
     if (!header) throw notFound('Opening stock batch');
     const lines = loadLines(conn, id);
-    // R9: a void is judged on the batch's own date, in the book of each product.
-    assertDayOpen(conn, lines.map((l) => getProduct(conn, l.productId)?.book ?? 'shop'), header.businessDate);
+    // R9: a void is judged on the batch's own date, in the scope of each product.
+    assertDayOpen(conn, lines.map((l) => productScope(conn, l.productId)), header.businessDate);
     if (header.status === 'void') throw alreadyVoid('opening stock batch');
     const before = toDetail(conn, header);
 
