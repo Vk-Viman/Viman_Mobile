@@ -25,6 +25,8 @@ import type { LossBook, LossReason, LossSource, LossStatus, StockLossRow } from 
 import { logAudit } from './audit.service.ts';
 import { issueStock, outflowValue, reverseMovements } from './inventory.service.ts';
 import { assertDayOpen } from './day-closing.ts';
+import { segmentOfProduct } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -35,7 +37,7 @@ import type { Fields } from './validation.ts';
 /** A stock loss as returned by the API (adds `backdated` and the rounded `unitCostCents`). */
 export interface StockLoss {
   id: number; businessDate: string; postedAt: string; backdated: boolean; productId: number; productName: string;
-  book: LossBook; qty: number; costCents: number; unitCostCents: number; reason: LossReason; note: string;
+  book: LossBook; segment: StoredSegment | null; qty: number; costCents: number; unitCostCents: number; reason: LossReason; note: string;
   source: LossSource; status: LossStatus; voidedAt: string | null; voidReason: string | null; clientRef: string;
   /** The sales return that caused a `damaged_return` loss; null for manual losses. */
   salesReturnId: number | null;
@@ -44,7 +46,7 @@ export interface StockLoss {
 function toLoss(r: StockLossRow): StockLoss {
   return {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
-    productId: r.productId, productName: r.productName, book: r.book, qty: r.qty, costCents: r.costCents,
+    productId: r.productId, productName: r.productName, book: r.book, segment: r.segment, qty: r.qty, costCents: r.costCents,
     unitCostCents: mulDivRound(r.costCents, 1, r.qty), reason: r.reason, note: r.note, source: r.source,
     status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
     salesReturnId: r.salesReturnId,
@@ -64,7 +66,7 @@ export function getStockLoss(ctx: AppContext, id: number): StockLoss {
 
 /** Lists losses newest first; `totalCostCents` sums only POSTED losses that match the filters. */
 export function listStockLosses(ctx: AppContext, q: {
-  from?: string; to?: string; productId?: number; book?: LossBook; reason?: LossReason; status?: LossStatus;
+  from?: string; to?: string; productId?: number; book?: LossBook; segment?: StoredSegment; reason?: LossReason; status?: LossStatus;
   limit: number; offset: number;
 }): { items: StockLoss[]; total: number; totalCostCents: number } {
   const { items, total, totalCostCents } = listStockLossRows(ctx.database.conn, q);
@@ -94,17 +96,27 @@ export function createStockLoss(ctx: AppContext, body: StockLossCreate): { item:
 
     const product = getProduct(conn, body.productId);
     if (!product) throw validationError({ productId: 'Product not found.' });
-    assertDayOpen(conn, [product.book], body.businessDate); // R9: the product's book
     if (product.kind !== 'stock') {
       throw new AppError(400, 'PRODUCT_NOT_STOCKABLE', 'Only stock products can be written off.',
         { productId: 'Only stock products can be written off.' });
     }
+    // 13D: a Telecom loss belongs to the product's Cards segment; a product without a provider (legacy) cannot get new records.
+    let segment: StoredSegment | null = null;
+    if (product.book === 'telecom') {
+      segment = segmentOfProduct(conn, product.id);
+      if (segment === null || segment === 'legacy') {
+        throw new AppError(409, 'SEGMENT_LEGACY_REFUSED',
+          `${product.name} has no provider, so a loss cannot be recorded for it. Link its category to a provider first.`,
+          { productId: 'This product has no provider (legacy).' });
+      }
+    }
+    assertDayOpen(conn, [{ book: product.book, segment }], body.businessDate); // R9: the product's scope
 
     // The cost is the value the weighted-average outflow will remove; the record is written first (the
     // movement refers to it) and the movement must remove exactly that value.
     const costCents = outflowValue(conn, product.id, body.qty);
     const id = insertStockLoss(conn, {
-      businessDate: body.businessDate, productId: product.id, book: product.book, qty: body.qty, costCents,
+      businessDate: body.businessDate, productId: product.id, book: product.book, segment, qty: body.qty, costCents,
       reason: body.reason, note, clientRef: body.clientRef,
     });
     const out = issueStock(conn, {
@@ -136,7 +148,7 @@ export function voidStockLoss(ctx: AppContext, id: number, body: { reason: strin
   return runWrite(ctx, (conn) => {
     const row = getStockLossRow(conn, id);
     if (!row) throw notFound('Stock loss');
-    assertDayOpen(conn, [row.book], row.businessDate); // R9: a void is judged on the loss's own date
+    assertDayOpen(conn, [{ book: row.book, segment: row.segment }], row.businessDate); // R9: a void is judged on the loss's own date
     // A damaged-return loss has no stock movement of its own and is part of its return; undoing it alone would
     // leave the return's COGS reversal without its write-off.
     if (row.source === 'damaged_return') {

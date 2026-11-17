@@ -20,6 +20,7 @@ import { Pager } from '../../components/Pager';
 import { SearchField } from '../../components/SearchField';
 import { SelectField } from '../../components/SelectField';
 import { Spinner } from '../../components/Spinner';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useCorrectionBadges } from '../../components/CorrectionBadges';
 import { useSuppliers } from '../../api/catalog';
@@ -84,6 +85,7 @@ export function PurchasesPage() {
     { key: 'bill', header: 'Bill no', render: (p) => p.billNo || '—' },
     { key: 'sup', header: 'Supplier', render: (p) => p.supplierName ?? '—' },
     { key: 'book', header: 'Book', render: (p) => <BookBadge book={p.book} /> },
+    { key: 'segment', header: 'Segment', render: (p) => (p.segment ? SEGMENT_LABEL[p.segment] : '�') },
     { key: 'items', header: 'Items', align: 'right', render: (p) => p.items.length },
     { key: 'total', header: 'Total (Rs.)', align: 'right', render: (p) => <Money cents={p.totalCents} /> },
     { key: 'status', header: 'Status', render: (p) => <span><PostedStatusBadge status={p.status} />{p.status === 'void' && p.voidReason && <span className="mt-1 block text-xs text-slate-500">{p.voidReason}</span>}{badgesFor(p.id)}</span> },

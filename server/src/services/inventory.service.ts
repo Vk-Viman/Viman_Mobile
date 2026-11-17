@@ -25,6 +25,8 @@ import {
   getMovement, insertMovement, listMovements, sumMovements, sumMovementsAsOf,
 } from '../repositories/stock-movements.repo.ts';
 import type { MovementRow, MovementType as RepoMovementType } from '../repositories/stock-movements.repo.ts';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS, isCardsSegment } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { getProductItem } from './catalog.service.ts';
 import type { Product } from './catalog.service.ts';
 
@@ -290,11 +292,20 @@ export function reverseMovements(conn: DatabaseSync, movementIds: number[], reas
   return created;
 }
 
+const CARDS_SEGMENTS = TELECOM_SEGMENTS.filter((s) => isCardsSegment(s));
+/** A Telecom product's segment from the view map; a Telecom product is never NULL there (`legacy` without a provider). */
+function segmentOfMap(map: Map<number, StoredSegment | null>, productId: number): StoredSegment {
+  return map.get(productId) ?? 'legacy';
+}
+
 /** One row of the stock valuation report. */
 export interface ValuationItem {
   productId: number; code: string | null; name: string; categoryId: number; categoryName: string;
-  book: 'shop' | 'telecom'; active: boolean; qty: number; valueCents: number; avgUnitCostCents: number | null;
+  book: 'shop' | 'telecom'; /** Telecom Cards segment of the product (`legacy` while its category has no provider); null for Shop. */
+  segment: StoredSegment | null; active: boolean; qty: number; valueCents: number; avgUnitCostCents: number | null;
 }
+/** One Telecom segment's share of the valuation (BUSINESS_RULES 13D). */
+export interface ValuationSegment { segment: StoredSegment; label: string; qty: number; valueCents: number }
 /** Stock valuation: items plus totals overall and per book. Totals are of the shown items. */
 export interface Valuation {
   asOf: string | null;
@@ -302,6 +313,8 @@ export interface Valuation {
   totals: {
     qty: number; valueCents: number;
     byBook: { shop: { qty: number; valueCents: number }; telecom: { qty: number; valueCents: number } };
+    /** The four Cards segments always (Reloads hold no stock), plus `legacy` only when it holds stock; sums to `byBook.telecom`. */
+    byTelecomSegment: ValuationSegment[];
   };
 }
 
@@ -314,7 +327,7 @@ export interface Valuation {
  * @param q.includeInactive Also list inactive products (default on).
  */
 export function valuation(ctx: AppContext, q: {
-  book?: 'shop' | 'telecom'; categoryId?: number; asOf?: string; includeZero?: boolean; includeInactive?: boolean;
+  book?: 'shop' | 'telecom'; segment?: StoredSegment; categoryId?: number; asOf?: string; includeZero?: boolean; includeInactive?: boolean;
 }): Valuation {
   const conn = ctx.database.conn;
   const includeZero = q.includeZero === true;
@@ -327,6 +340,13 @@ export function valuation(ctx: AppContext, q: {
   if (q.categoryId !== undefined) query.categoryId = q.categoryId;
   if (!includeInactive) query.active = true;
 
+  const segmentOf = new Map<number, StoredSegment | null>(
+    (conn.prepare('SELECT product_id, segment FROM v_product_segment').all() as unknown as Array<{ product_id: number | bigint; segment: StoredSegment | null }>)
+      .map((r) => [Number(r.product_id), r.segment]),
+  );
+  const bySegment = new Map<StoredSegment, ValuationSegment>(
+    CARDS_SEGMENTS.map((seg) => [seg, { segment: seg, label: SEGMENT_LABEL[seg], qty: 0, valueCents: 0 }]),
+  );
   const items: ValuationItem[] = [];
   const totals = {
     qty: 0, valueCents: 0,
@@ -336,15 +356,24 @@ export function valuation(ctx: AppContext, q: {
     if (p.kind !== 'stock') continue; // services hold no stock
     const pool = pools ? (pools.get(p.id) ?? { qty: 0, valueCents: 0 }) : { qty: p.qtyOnHand, valueCents: p.stockValueCents };
     if (!includeZero && pool.qty === 0 && pool.valueCents === 0) continue;
+    const segment = p.book === 'telecom' ? (segmentOfMap(segmentOf, p.id)) : null;
+    if (q.segment !== undefined && segment !== q.segment) continue;
     items.push({
       productId: p.id, code: p.code, name: p.name, categoryId: p.categoryId, categoryName: p.categoryName,
-      book: p.book, active: p.active, qty: pool.qty, valueCents: pool.valueCents,
+      book: p.book, segment, active: p.active, qty: pool.qty, valueCents: pool.valueCents,
       avgUnitCostCents: pool.qty > 0 ? mulDivRound(pool.valueCents, 1, pool.qty) : null,
     });
     totals.qty += pool.qty;
     totals.valueCents += pool.valueCents;
     totals.byBook[p.book].qty += pool.qty;
     totals.byBook[p.book].valueCents += pool.valueCents;
+    if (segment !== null) {
+      let seg = bySegment.get(segment);
+      if (!seg) { seg = { segment, label: SEGMENT_LABEL[segment], qty: 0, valueCents: 0 }; bySegment.set(segment, seg); }
+      seg.qty += pool.qty;
+      seg.valueCents += pool.valueCents;
+    }
   }
-  return { asOf: q.asOf ?? null, items, totals };
+  const byTelecomSegment = [...bySegment.values()].filter((s) => s.segment !== 'legacy' || s.qty !== 0 || s.valueCents !== 0);
+  return { asOf: q.asOf ?? null, items, totals: { ...totals, byTelecomSegment } };
 }

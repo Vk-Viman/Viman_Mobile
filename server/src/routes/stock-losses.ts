@@ -9,6 +9,8 @@
  * Items carry `source` ('manual' | 'damaged_return') and `salesReturnId`; voiding a damaged-return loss is
  * refused by the service (409 DAMAGED_RETURN_LOSS).
  */
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { checkStockLossCorrection, correctStockLoss, optionalDate, previewStockLossCorrection } from '../services/correction-other.ts';
@@ -52,6 +54,7 @@ const listQuery = {
     to: dateQuery,
     productId: intQuery,
     book: bookQuery,
+    segment: STORED_SEGMENT_SCHEMA,
     reason: reasonEnum,
     status: { type: 'string', enum: ['posted', 'void'] },
     limit: intQuery,
@@ -68,7 +71,7 @@ export function registerStockLossRoutes(app: FastifyInstance, ctx: AppContext): 
 
   app.get('/stock-losses', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      from?: string; to?: string; productId?: string; book?: 'shop' | 'telecom';
+      from?: string; to?: string; productId?: string; book?: 'shop' | 'telecom'; segment?: StoredSegment;
       reason?: 'damaged' | 'lost' | 'expired' | 'other'; status?: 'posted' | 'void'; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
@@ -78,6 +81,7 @@ export function registerStockLossRoutes(app: FastifyInstance, ctx: AppContext): 
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.productId !== undefined) q.productId = Number(raw.productId);
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.reason !== undefined) q.reason = raw.reason;
     if (raw.status !== undefined) q.status = raw.status;
     return listStockLosses(ctx, q);

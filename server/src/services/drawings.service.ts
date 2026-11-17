@@ -30,6 +30,8 @@ import type { CashWarning } from './cash-warnings.ts';
 import { issueStock, outflowValue, reverseMovements } from './inventory.service.ts';
 import { assertDayOpen } from './day-closing.ts';
 import { assertFundMatchesBook } from './fund-rules.ts';
+import { segmentOfProduct } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -39,7 +41,7 @@ import type { Fields } from './validation.ts';
 
 /** A drawing as returned by the API (adds the `backdated` flag). */
 export interface Drawing {
-  id: number; businessDate: string; postedAt: string; backdated: boolean; book: DrawingBook; fund: DrawingFund | null;
+  id: number; businessDate: string; postedAt: string; backdated: boolean; book: DrawingBook; segment: StoredSegment | null; fund: DrawingFund | null;
   kind: DrawingKind; amountCents: number; productId: number | null; productName: string | null; qty: number | null; note: string;
   status: DrawingStatus; voidedAt: string | null; voidReason: string | null; clientRef: string;
 }
@@ -47,7 +49,7 @@ export interface Drawing {
 function toDrawing(r: DrawingRow): Drawing {
   return {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
-    book: r.book, fund: r.fund, kind: r.kind, amountCents: r.amountCents, productId: r.productId, productName: r.productName,
+    book: r.book, segment: r.segment, fund: r.fund, kind: r.kind, amountCents: r.amountCents, productId: r.productId, productName: r.productName,
     qty: r.qty, note: r.note, status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
   };
 }
@@ -125,18 +127,28 @@ function createGoodsDrawing(ctx: AppContext, body: DrawingCreate, note: string):
 
     const product = getProduct(conn, productId);
     if (!product) throw validationError({ productId: 'Product not found.' });
-    assertDayOpen(conn, [product.book], body.businessDate); // R9: the product's book
     if (product.kind !== 'stock') {
       throw new AppError(400, 'PRODUCT_NOT_STOCKABLE', 'Only stock products can be taken for personal use.',
         { productId: 'Only stock products can be taken for personal use.' });
     }
+    // 13D: a Telecom goods drawing belongs to the product's Cards segment (a product without a provider cannot get new records).
+    let segment: StoredSegment | null = null;
+    if (product.book === 'telecom') {
+      segment = segmentOfProduct(conn, product.id);
+      if (segment === null || segment === 'legacy') {
+        throw new AppError(409, 'SEGMENT_LEGACY_REFUSED',
+          `${product.name} has no provider, so it cannot be taken for personal use. Link its category to a provider first.`,
+          { productId: 'This product has no provider (legacy).' });
+      }
+    }
+    assertDayOpen(conn, [{ book: product.book, segment }], body.businessDate); // R9: the product's scope
 
     // amount = the stock cost removed (never the selling price); no revenue, COGS, expense or cash entry.
     // The drawing row is written first because the stock movement refers to its id, so its amount is worked
     // out beforehand with the same formula the movement will use (`outflowValue` = what `issueStock` removes).
     const amountCents = outflowValue(conn, product.id, qty);
     const id = insertDrawing(conn, {
-      businessDate: body.businessDate, book: product.book, kind: 'goods', amountCents, productId: product.id, qty,
+      businessDate: body.businessDate, book: product.book, segment, kind: 'goods', amountCents, productId: product.id, qty,
       note, clientRef: body.clientRef,
     });
     const out = issueStock(conn, {
@@ -210,7 +222,7 @@ export function voidDrawing(ctx: AppContext, id: number, body: { reason: string 
   return runWrite(ctx, (conn) => {
     const row = getDrawingRow(conn, id);
     if (!row) throw notFound('Drawing');
-    assertDayOpen(conn, [row.book], row.businessDate); // R9: a void is judged on the drawing's own date
+    assertDayOpen(conn, [{ book: row.book, segment: row.segment }], row.businessDate); // R9: a void is judged on the drawing's own date
     if (row.status === 'void') throw alreadyVoid('drawing');
     const before = toDrawing(row);
 

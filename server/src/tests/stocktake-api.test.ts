@@ -44,7 +44,7 @@ async function p20(s: ApiBase): Promise<number> {
 }
 
 // Exact field list of a stocktake in API responses (contract check).
-const ST_KEYS = ['backdated', 'book', 'businessDate', 'clientRef', 'completedAt', 'id', 'items', 'notes', 'postedAt', 'status', 'voidReason', 'voidedAt'];
+const ST_KEYS = ['backdated', 'book', 'businessDate', 'clientRef', 'completedAt', 'id', 'items', 'notes', 'postedAt', 'segment', 'status', 'voidReason', 'voidedAt'];
 const ITEM_KEYS = ['countedQty', 'differenceQty', 'expectedQty', 'gainUnitCostCents', 'id', 'productCode', 'productId', 'productName', 'valueDeltaCents'];
 
 // =============================================================================================

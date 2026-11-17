@@ -26,7 +26,10 @@ import { useToast } from '../../components/Toast';
 import { useCreateStocktake, useStocktakes } from '../../api/stock';
 import { useBusinessDate } from '../../hooks/useBusinessDate';
 import { useClientRef } from '../../hooks/useClientRef';
+import { SegmentSelect } from '../../components/SegmentSelect';
 import { PAGE_SIZE } from '../../lib/constants';
+import { SEGMENT_LABEL } from '../../lib/segments';
+import type { TelecomSegment } from '../../types/segments';
 import { errorBanner, fieldError } from '../../lib/errors';
 import type { Book, Stocktake, StocktakeQuery, StocktakeStatus } from '../../types/api';
 import { STATUS_LABEL, STATUS_TONE } from './shared';
@@ -46,12 +49,14 @@ function NewStocktakeDialog({ onClose }: { onClose: () => void }) {
   const { today, date: effDate, setDate } = useBusinessDate();
   const [book, setBook] = useState<Book>('shop');
   const [notes, setNotes] = useState('');
+  // A Telecom stocktake counts the cards of ONE provider (a Cards segment).
+  const [segment, setSegment] = useState<TelecomSegment | ''>('');
 
-  const canSubmit = Boolean(effDate) && !create.isPending;
+  const canSubmit = Boolean(effDate) && !create.isPending && (book !== 'telecom' || segment !== '');
 
   const submit = () => {
     create.mutate(
-      { businessDate: effDate, book, notes: notes.trim() || undefined, clientRef },
+      { businessDate: effDate, book, segment: book === 'telecom' && segment !== '' ? segment : undefined, notes: notes.trim() || undefined, clientRef },
       {
         onSuccess: (res) => {
           toast.success('Draft stocktake created. Enter your counts.');
@@ -64,7 +69,7 @@ function NewStocktakeDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <FormDialog title="New stocktake" submitLabel="Create and open count sheet" canSubmit={canSubmit} loading={create.isPending} error={errorBanner(create.error, ['businessDate', 'book', 'notes'])} onSubmit={submit} onClose={onClose}>
+    <FormDialog title="New stocktake" submitLabel="Create and open count sheet" canSubmit={canSubmit} loading={create.isPending} error={errorBanner(create.error, ['businessDate', 'book', 'segment', 'notes'])} onSubmit={submit} onClose={onClose}>
       <div>
         <TextField label="Date" type="date" value={effDate} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(create.error, 'businessDate')} />
         <BackdatedNotice date={effDate} today={today} />
@@ -73,6 +78,10 @@ function NewStocktakeDialog({ onClose }: { onClose: () => void }) {
         <option value="shop">Shop</option>
         <option value="telecom">Telecom</option>
       </SelectField>
+      {book === 'telecom' && (
+        <SegmentSelect label="Provider's cards" kinds={['cards']} value={segment} onChange={setSegment} error={fieldError(create.error, 'segment')}
+          hint="A Telecom stocktake counts the cards of one provider. Make one stocktake per provider." />
+      )}
       <TextField label="Notes (optional)" value={notes} maxLength={MAX_NOTES} onChange={(e) => setNotes(e.target.value)} autoComplete="off" error={fieldError(create.error, 'notes')} />
     </FormDialog>
   );
@@ -115,6 +124,7 @@ export function StocktakeTab() {
       ),
     },
     { key: 'book', header: 'Book', render: (s) => <BookBadge book={s.book} /> },
+    { key: 'segment', header: 'Segment', render: (s) => (s.segment ? SEGMENT_LABEL[s.segment] : '—') },
     { key: 'status', header: 'Status', render: (s) => <Badge tone={STATUS_TONE[s.status]}>{STATUS_LABEL[s.status]}</Badge> },
     { key: 'items', header: 'Items', align: 'right', render: (s) => s.items.length },
     { key: 'notes', header: 'Notes', render: (s) => s.notes || 'â€”' },

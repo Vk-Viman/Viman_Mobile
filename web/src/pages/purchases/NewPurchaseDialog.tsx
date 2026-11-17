@@ -33,6 +33,8 @@ import { errorBanner } from '../../lib/errors';
 import { formatLKR } from '../../lib/format';
 import { BOOK_LABEL } from '../../lib/constants';
 import { rupeesToCents } from '../../lib/units';
+import { SEGMENT_LABEL } from '../../lib/segments';
+import type { StoredSegment } from '../../types/segments';
 import { ProductDialog } from '../products/ProductDialog';
 import { centsPerUnit, parseIntStrict } from './helpers';
 import type { Book, Product, PurchaseCreate } from '../../types/api';
@@ -49,6 +51,8 @@ const MAX_CENTS = 99_999_999_999;
 const MAX_LINES = 100;
 const MAX_BILL_NO = 40;
 const MAX_NOTES = 500;
+/** The Cards segment of a chosen product (its category's provider); undefined for Shop products or while the server has not sent it. */
+const segmentOfLine = (l: Line): StoredSegment | undefined => (l.product as (Product & { segment?: StoredSegment | null }) | null)?.segment ?? undefined;
 const newLine = (key: number): Line => ({ key, categoryId: null, product: null, packs: '1', packSize: '1', total: '' });
 
 /**
@@ -107,7 +111,10 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
   const grand = parsed.reduce((s, n) => s + (n.totalOk && n.cents !== null ? n.cents : 0), 0);
   // R-FD: not after today. Backdating is fine. (YYYY-MM-DD strings compare correctly as text.)
   const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(effDate) && (!today || effDate <= today);
-  const canSubmit = book !== '' && lines.length >= 1 && lineValid.every(Boolean) && dateOk && billNo.length <= MAX_BILL_NO && notes.length <= MAX_NOTES && Boolean(today);
+  // 13D: one Telecom bill = one provider. Lines of different providers are explained here; the server (MIXED_SEGMENTS) decides.
+  const lineSegments = new Set(lines.map(segmentOfLine).filter((x): x is StoredSegment => x !== undefined));
+  const mixedProviders = book === 'telecom' && lineSegments.size > 1;
+  const canSubmit = book !== '' && !mixedProviders && lines.length >= 1 && lineValid.every(Boolean) && dateOk && billNo.length <= MAX_BILL_NO && notes.length <= MAX_NOTES && Boolean(today);
 
   // Server field errors: those with a visible input are shown there; the rest are collected into the banner.
   const fe = err instanceof ApiError ? err.fields : {};
@@ -174,7 +181,7 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
             <option value="telecom">{BOOK_LABEL.telecom}</option>
           </SelectField>
           <p className="mt-1 text-xs text-slate-500">
-            Shop and Telecom items must be on separate bills (split into two bills).
+            Shop and Telecom items must be on separate bills, and a Telecom bill holds the cards of one provider only (split the bill by provider).
             {book ? ` This bill is for the ${BOOK_LABEL[book]} book.` : ' Choose the book first; then pick a category and a product for each line.'}
           </p>
           <p className="mt-1 text-xs text-slate-500">Example: 1 box × 10 pieces for Rs. 1,320 → 10 units at Rs. 132.00 each.</p>
@@ -199,6 +206,9 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
                     onCategoryChange={(id) => update(l.key, { categoryId: id })}
                     onCreateProduct={(ctx) => setCreating({ key: l.key, categoryId: ctx.categoryId })}
                   />
+                  {book === 'telecom' && segmentOfLine(l) && (
+                    <p className="mt-1 text-xs text-slate-600">Provider: <span className="font-medium">{SEGMENT_LABEL[segmentOfLine(l) as StoredSegment]}</span></p>
+                  )}
                   {fe[`items.${i}.productId`] && <p className="mt-1 text-sm text-red-600">{fe[`items.${i}.productId`]}</p>}
                   <div className="mt-3 grid grid-cols-2 items-start gap-3 sm:grid-cols-[6rem_7rem_9rem_1fr_1fr_auto]">
                     <TextField label="Packs" inputMode="numeric" className="[&_input]:text-right" value={l.packs} onChange={(e) => update(l.key, { packs: e.target.value })}
@@ -225,6 +235,11 @@ export function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
                 </div>
               );
             })}
+            {mixedProviders && (
+              <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                This bill has cards of more than one provider ({[...lineSegments].map((x) => SEGMENT_LABEL[x]).join(', ')}). Split the bill by provider: one bill per provider.
+              </p>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Button variant="secondary" disabled={lines.length >= MAX_LINES} onClick={() => setLines((ls) => [...ls, newLine(nextKey.current++)])}>
                 <Plus size={16} aria-hidden="true" /> Add line

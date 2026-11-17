@@ -60,8 +60,9 @@ function addReturn(c: DatabaseSync, purchaseId: number, date: string): number {
 // Raw-SQL helper: insert a cash entry (default: shop purchase_payment of -Rs 1.00, today).
 function addCash(c: DatabaseSync, o: { book?: string; type?: string; amount?: number; fund?: string | null; date?: string; reverses?: number | null }): number {
   return Number(c.prepare(
-    `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, reverses_entry_id) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(o.book ?? 'shop', o.date ?? today(), o.type ?? 'purchase_payment', o.amount ?? -100, o.fund ?? null, o.reverses ?? null).lastInsertRowid);
+    `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, reverses_entry_id, segment) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(o.book ?? 'shop', o.date ?? today(), o.type ?? 'purchase_payment', o.amount ?? -100, o.fund ?? null, o.reverses ?? null,
+    o.book === 'telecom' ? 'dialog_cards' : null).lastInsertRowid); // Telecom rows name a segment (migration 024)
 }
 
 // Migration 004 adds the Phase 3 tables (stock ledger, cash, purchases) and guard triggers.

@@ -13,6 +13,7 @@ import { ErrorState } from '../../components/ErrorState';
 import { Modal } from '../../components/Modal';
 import { Money } from '../../components/Money';
 import { Spinner } from '../../components/Spinner';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { usePurchase } from '../../api/purchases';
 import { formatDateTime } from '../../lib/format';
@@ -46,6 +47,7 @@ export function PurchaseDetailDialog({ id, onClose }: { id: number; onClose: () 
               <Row k="Bill no" v={p.billNo || '—'} />
               <Row k="Supplier" v={p.supplierName ?? '—'} />
               <Row k="Book" v={<BookBadge book={p.book} />} />
+              {p.segment && <Row k="Segment" v={SEGMENT_LABEL[p.segment]} />}
               <Row k="Status" v={<PostedStatusBadge status={p.status} />} />
               <Row k="Total paid" v={<Money cents={p.totalCents} className="font-semibold" />} />
               <Row k="Notes" v={p.notes || '—'} />

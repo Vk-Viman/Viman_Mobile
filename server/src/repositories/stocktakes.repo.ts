@@ -8,6 +8,7 @@
  * draft -> completed | void and completed -> void are allowed. No business rules live in this file.
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../services/segments.ts';
 import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
 
 export type StocktakeBook = 'shop' | 'telecom';
@@ -15,7 +16,7 @@ export type StocktakeStatus = 'draft' | 'completed' | 'void';
 
 /** Stocktake header. */
 export interface StocktakeRow {
-  id: number; businessDate: string; postedAt: string; book: StocktakeBook; status: StocktakeStatus;
+  id: number; businessDate: string; postedAt: string; book: StocktakeBook; segment: StoredSegment | null; status: StocktakeStatus;
   notes: string; clientRef: string; completedAt: string | null; voidedAt: string | null; voidReason: string | null;
 }
 /** One counted product; the `expected*`/`difference*`/`valueDelta` columns are filled only when completed. */
@@ -27,7 +28,7 @@ export interface StocktakeItemRow {
 
 type N = number | bigint;
 interface Raw {
-  id: N; business_date: string; posted_at: string; book: StocktakeBook; status: StocktakeStatus;
+  id: N; business_date: string; posted_at: string; book: StocktakeBook; segment: StoredSegment | null; status: StocktakeStatus;
   notes: string; client_ref: string; completed_at: string | null; voided_at: string | null; void_reason: string | null;
 }
 interface RawItem {
@@ -35,22 +36,22 @@ interface RawItem {
   expected_qty: N | null; difference_qty: N | null; value_delta_cents: N | null; gain_unit_cost_cents: N | null;
 }
 
-const SELECT = `SELECT id, business_date, posted_at, book, status, notes, client_ref, completed_at, voided_at, void_reason FROM stocktakes`;
+const SELECT = `SELECT id, business_date, posted_at, book, segment, status, notes, client_ref, completed_at, voided_at, void_reason FROM stocktakes`;
 
 function map(r: Raw): StocktakeRow {
   return {
-    id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book, status: r.status,
+    id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book, segment: r.segment, status: r.status,
     notes: r.notes, clientRef: r.client_ref, completedAt: r.completed_at, voidedAt: r.voided_at, voidReason: r.void_reason,
   };
 }
 
 /** Inserts an empty draft stocktake and returns its id. */
 export function insertStocktake(conn: DatabaseSync, s: {
-  businessDate: string; book: StocktakeBook; notes: string; clientRef: string;
+  businessDate: string; book: StocktakeBook; segment: StoredSegment | null; notes: string; clientRef: string;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO stocktakes (business_date, book, notes, client_ref) VALUES (?, ?, ?, ?)`,
-  ).run(s.businessDate, s.book, s.notes, s.clientRef);
+    `INSERT INTO stocktakes (business_date, book, segment, notes, client_ref) VALUES (?, ?, ?, ?, ?)`,
+  ).run(s.businessDate, s.book, s.segment, s.notes, s.clientRef);
   return Number(res.lastInsertRowid);
 }
 
@@ -68,13 +69,14 @@ export function getStocktakeByClientRef(conn: DatabaseSync, ref: string): Stockt
 
 /** Lists stocktakes, newest business date first, with the total number of matches. */
 export function listStocktakes(conn: DatabaseSync, q: {
-  from?: string; to?: string; book?: StocktakeBook; status?: StocktakeStatus; limit: number; offset: number;
+  from?: string; to?: string; book?: StocktakeBook; segment?: StoredSegment; status?: StocktakeStatus; limit: number; offset: number;
 }): { items: StocktakeRow[]; total: number } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
   if (q.from !== undefined) { where.push('business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('business_date <= ?'); params.push(q.to); }
   if (q.book !== undefined) { where.push('book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('segment = ?'); params.push(q.segment); }
   if (q.status !== undefined) { where.push('status = ?'); params.push(q.status); }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';
   const total = Number((conn.prepare(`SELECT COUNT(*) AS n FROM stocktakes${w}`).get(...params) as unknown as { n: N }).n);

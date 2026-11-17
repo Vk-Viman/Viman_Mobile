@@ -22,7 +22,12 @@ const val = async (s: ApiBase, qs = '') => (await get(s.app, `/inventory/valuati
 const row = (v: any, name: string) => v.items.find((i: any) => i.name === name);
 
 // Exact field list of one report line (contract check).
-const ITEM_KEYS = ['active', 'avgUnitCostCents', 'book', 'categoryId', 'categoryName', 'code', 'name', 'productId', 'qty', 'valueCents'];
+const ITEM_KEYS = ['active', 'avgUnitCostCents', 'book', 'categoryId', 'categoryName', 'code', 'name', 'productId', 'qty', 'segment', 'valueCents'];
+/** byTelecomSegment of a world whose Telecom stock is all Dialog Cards (what mkTelecom creates): the four Cards segments, no legacy. */
+const segs = (qty: number, valueCents: number) => [
+  { segment: 'dialog_cards', label: 'Dialog Cards', qty, valueCents }, { segment: 'mobitel_cards', label: 'Mobitel Cards', qty: 0, valueCents: 0 },
+  { segment: 'airtel_cards', label: 'Airtel Cards', qty: 0, valueCents: 0 }, { segment: 'hutch_cards', label: 'Hutch Cards', qty: 0, valueCents: 0 },
+];
 
 // (Hand totals of this fixture: shop 20 + 3 + 7 + 2 = 32 units; value 700,000 + 1,000 + 10,000 + 5 = 711,005;
 // telecom 10 / 50,000; all together 42 units / 761,005. Cherry has no stock and the service has no stock pool.)
@@ -54,7 +59,7 @@ describe('GET /inventory/valuation - live', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual({
       asOf: null, items: [],
-      totals: { qty: 0, valueCents: 0, byBook: { shop: { qty: 0, valueCents: 0 }, telecom: { qty: 0, valueCents: 0 } } },
+      totals: { qty: 0, valueCents: 0, byBook: { shop: { qty: 0, valueCents: 0 }, telecom: { qty: 0, valueCents: 0 } }, byTelecomSegment: segs(0, 0) },
     });
   });
 
@@ -77,6 +82,7 @@ describe('GET /inventory/valuation - live', () => {
     expect(v.totals).toEqual({
       qty: 42, valueCents: 761005,
       byBook: { shop: { qty: 32, valueCents: 711005 }, telecom: { qty: 10, valueCents: 50000 } },
+      byTelecomSegment: segs(10, 50000),
     });
     expect(v.items.reduce((a: number, i: any) => a + i.qty, 0)).toBe(v.totals.qty);
     expect(v.items.reduce((a: number, i: any) => a + i.valueCents, 0)).toBe(v.totals.valueCents);
@@ -94,7 +100,7 @@ describe('GET /inventory/valuation - live', () => {
     expect((await val(s, 'includeZero=false')).items).toHaveLength(5);
     const ni = await val(s, 'includeInactive=false');
     expect(ni.items.map((i: any) => i.name)).toEqual(['apple', 'Banana', 'Half', 'Zed Card']);
-    expect(ni.totals).toEqual({ qty: 35, valueCents: 751005, byBook: { shop: { qty: 25, valueCents: 701005 }, telecom: { qty: 10, valueCents: 50000 } } });
+    expect(ni.totals).toEqual({ qty: 35, valueCents: 751005, byBook: { shop: { qty: 25, valueCents: 701005 }, telecom: { qty: 10, valueCents: 50000 } }, byTelecomSegment: segs(10, 50000) });
     expect((await val(s, 'includeInactive=true')).items).toHaveLength(5);
     const both = await val(s, 'includeInactive=false&includeZero=true');
     expect(both.items.map((i: any) => i.name)).toEqual(['apple', 'Banana', 'cherry', 'Half', 'Zed Card']);
@@ -106,10 +112,10 @@ describe('GET /inventory/valuation - live', () => {
     await catalog(s);
     const t = await val(s, 'book=telecom');
     expect(t.items.map((i: any) => i.name)).toEqual(['Zed Card']);
-    expect(t.totals).toEqual({ qty: 10, valueCents: 50000, byBook: { shop: { qty: 0, valueCents: 0 }, telecom: { qty: 10, valueCents: 50000 } } });
+    expect(t.totals).toEqual({ qty: 10, valueCents: 50000, byBook: { shop: { qty: 0, valueCents: 0 }, telecom: { qty: 10, valueCents: 50000 } }, byTelecomSegment: segs(10, 50000) });
     const sh = await val(s, 'book=shop');
     expect(sh.items).toHaveLength(4);
-    expect(sh.totals).toEqual({ qty: 32, valueCents: 711005, byBook: { shop: { qty: 32, valueCents: 711005 }, telecom: { qty: 0, valueCents: 0 } } });
+    expect(sh.totals).toEqual({ qty: 32, valueCents: 711005, byBook: { shop: { qty: 32, valueCents: 711005 }, telecom: { qty: 0, valueCents: 0 } }, byTelecomSegment: segs(0, 0) });
     const cat = await val(s, `categoryId=${s.ids['Snacks and Drinks']}`);
     expect(cat.items.map((i: any) => i.name)).toEqual(['Banana']);
     expect(cat.totals.qty).toBe(3);
@@ -166,7 +172,7 @@ describe('GET /inventory/valuation?asOf= (business-date basis)', () => {
     // before everything
     let v = await val(s, `asOf=${daysAgo(11)}`);
     expect(v.items).toEqual([]);
-    expect(v.totals).toEqual({ qty: 0, valueCents: 0, byBook: { shop: { qty: 0, valueCents: 0 }, telecom: { qty: 0, valueCents: 0 } } });
+    expect(v.totals).toEqual({ qty: 0, valueCents: 0, byBook: { shop: { qty: 0, valueCents: 0 }, telecom: { qty: 0, valueCents: 0 } }, byTelecomSegment: segs(0, 0) });
     expect(v.asOf).toBe(daysAgo(11));
     expect((await val(s, `asOf=${daysAgo(11)}&includeZero=true`)).items.map((i: any) => [i.name, i.qty, i.valueCents, i.avgUnitCostCents])).toEqual([
       ['X item', 0, 0, null], ['Y item', 0, 0, null],
@@ -279,6 +285,7 @@ describe('valuation equals the live pool', () => {
     expect(v.totals).toEqual({
       qty: 43, valueCents: 797500,
       byBook: { shop: { qty: 25, valueCents: 707500 }, telecom: { qty: 18, valueCents: 90000 } },
+      byTelecomSegment: segs(18, 90000),
     });
     expect(num(s, 'SELECT SUM(stock_value_cents) FROM products')).toBe(797500);
     // the "as of today" view is the same figures
