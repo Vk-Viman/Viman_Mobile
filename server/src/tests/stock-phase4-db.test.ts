@@ -32,8 +32,8 @@ const uniq = () => `cref-${seq++}-${Math.random().toString(36).slice(2, 8)}`;
 // Raw-SQL helper: insert a stocktake header with the given status/dates (defaults to a draft for today in the shop book).
 function addST(c: DatabaseSync, o: { date?: string; book?: string; status?: string; completedAt?: string | null; voidedAt?: string | null; voidReason?: string | null; ref?: string } = {}): number {
   return Number(c.prepare(
-    `INSERT INTO stocktakes (business_date, book, status, completed_at, voided_at, void_reason, client_ref) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(o.date ?? today(), o.book ?? 'shop', o.status ?? 'draft', o.completedAt ?? null, o.voidedAt ?? null, o.voidReason ?? null, o.ref ?? uniq()).lastInsertRowid);
+    `INSERT INTO stocktakes (business_date, book, segment, status, completed_at, voided_at, void_reason, client_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(o.date ?? today(), o.book ?? 'shop', o.book === 'telecom' ? 'dialog_cards' : null, o.status ?? 'draft', o.completedAt ?? null, o.voidedAt ?? null, o.voidReason ?? null, o.ref ?? uniq()).lastInsertRowid);
 }
 // Raw-SQL helper: add a counted line (default counted quantity 5) to a stocktake.
 const addItem = (c: DatabaseSync, st: number, product: number, counted = 5): number =>
@@ -47,17 +47,17 @@ const NOW = '2026-01-01T00:00:00.000Z';
 // Phase 5: o.salesReturnId links the loss to a sales return (required exactly when source = 'damaged_return').
 function addLoss(c: DatabaseSync, product: number, o: Record<string, any> = {}): number {
   return Number(c.prepare(
-    `INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, source, status, client_ref, voided_at, void_reason, sales_return_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(o.date ?? today(), product, o.book ?? 'shop', o.qty ?? 1, o.cost ?? 100, o.reason ?? 'damaged', o.source ?? 'manual',
+    `INSERT INTO stock_losses (business_date, product_id, book, segment, qty, cost_cents, reason, source, status, client_ref, voided_at, void_reason, sales_return_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(o.date ?? today(), product, o.book ?? 'shop', o.book === 'telecom' ? 'dialog_cards' : null, o.qty ?? 1, o.cost ?? 100, o.reason ?? 'damaged', o.source ?? 'manual',
     o.status ?? 'posted', o.ref ?? uniq(), o.voidedAt ?? null, o.voidReason ?? null, o.salesReturnId ?? null).lastInsertRowid);
 }
 // Raw-SQL helper: insert an owner drawing row (goods by default, shop book, amount 100).
 function addDrawing(c: DatabaseSync, o: Record<string, any> = {}): number {
   return Number(c.prepare(
-    `INSERT INTO owner_drawings (business_date, book, fund, kind, amount_cents, product_id, qty, status, client_ref, voided_at, void_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(o.date ?? today(), o.book ?? 'shop', o.fund ?? null, o.kind ?? 'goods', o.amount ?? 100, o.product ?? null, o.qty ?? null,
+    `INSERT INTO owner_drawings (business_date, book, segment, fund, kind, amount_cents, product_id, qty, status, client_ref, voided_at, void_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(o.date ?? today(), o.book ?? 'shop', o.book === 'telecom' ? 'dialog_cards' : null, o.fund ?? null, o.kind ?? 'goods', o.amount ?? 100, o.product ?? null, o.qty ?? null,
     o.status ?? 'posted', o.ref ?? uniq(), o.voidedAt ?? null, o.voidReason ?? null).lastInsertRowid);
 }
 
@@ -248,8 +248,9 @@ describe('stocktake_items table', () => {
     const shopP = sqlProduct(c, { book: 'shop' });
     const telP = sqlProduct(c, { book: 'telecom' });
     const svc = sqlProduct(c, { kind: 'service' });
-    expect(msgOf(() => addItem(c, shopSt, telP))).toMatch(/PRODUCT_NOT_IN_BOOK/);
-    expect(msgOf(() => addItem(c, telSt, shopP))).toMatch(/PRODUCT_NOT_IN_BOOK/);
+    expect(msgOf(() => addItem(c, shopSt, telP))).toMatch(/PRODUCT_NOT_IN_BOOK|SEGMENT_MISMATCH/);
+    // Migration 024/026's segment trigger fires first for a Telecom header: either code refuses the write.
+    expect(msgOf(() => addItem(c, telSt, shopP))).toMatch(/PRODUCT_NOT_IN_BOOK|SEGMENT_MISMATCH/);
     expect(msgOf(() => addItem(c, shopSt, svc))).toMatch(/PRODUCT_NOT_IN_BOOK/);
     addItem(c, shopSt, shopP);
     addItem(c, telSt, telP);
@@ -307,12 +308,12 @@ describe('stock_losses table', () => {
     sqlSaleItem(c, sale, p);
     const ret = sqlReturn(c, sale);
     addLoss(c, p, { source: 'damaged_return', salesReturnId: ret });
-    addLoss(c, p, { book: 'telecom' });
+    addLoss(c, sqlProduct(c, { book: 'telecom' }), { book: 'telecom' }); // a Telecom loss needs a card product (segment = the product's)
     addLoss(c, p, { cost: 0 });
     expect(msgOf(() => addLoss(c, p, { reason: 'stolen' }))).toMatch(/CHECK/);
     expect(msgOf(() => addLoss(c, p, { source: 'x' }))).toMatch(/CHECK/);
     expect(msgOf(() => addLoss(c, p, { status: 'draft' }))).toMatch(/CHECK/);
-    expect(msgOf(() => addLoss(c, p, { book: 'icecream' }))).toMatch(/CHECK/);
+    expect(msgOf(() => addLoss(c, p, { book: 'icecream' }))).toMatch(/CHECK|SEGMENT_MISMATCH/); // 026's product-scope trigger fires first; both refuse
     expect(msgOf(() => addLoss(c, p, { qty: 0 }))).toMatch(/CHECK/);
     expect(msgOf(() => addLoss(c, p, { qty: -2 }))).toMatch(/CHECK/);
     expect(msgOf(() => addLoss(c, p, { cost: -1 }))).toMatch(/CHECK/);
@@ -390,7 +391,7 @@ describe('owner_drawings table', () => {
     const p = sqlProduct(c);
     const id = addDrawing(c, { product: p, qty: 2 });
     expect(c.prepare('SELECT status, note, kind FROM owner_drawings WHERE id = ?').get(id)).toMatchObject({ status: 'posted', note: '', kind: 'goods' });
-    addDrawing(c, { product: p, qty: 1, book: 'telecom' });
+    addDrawing(c, { product: sqlProduct(c, { book: 'telecom' }), qty: 1, book: 'telecom' });
     expect(msgOf(() => addDrawing(c, { kind: 'goods' }))).toMatch(/CHECK/);                       // no product, no qty
     expect(msgOf(() => addDrawing(c, { qty: 2 }))).toMatch(/CHECK/);                              // no product
     expect(msgOf(() => addDrawing(c, { product: p, qty: 0 }))).toMatch(/CHECK/);

@@ -38,7 +38,7 @@ async function pUnits(s: ApiBase, units: number, value: number, mk = mkProduct):
 
 // Exact field list of a stock loss in API responses.
 const KEYS = ['backdated', 'book', 'businessDate', 'clientRef', 'costCents', 'id', 'note', 'postedAt', 'productId', 'productName', 'qty',
-  'reason', 'salesReturnId', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt'];
+  'reason', 'salesReturnId', 'segment', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt'];
 
 // Recording a loss: costing, rounding, validation, idempotency, book, dates.
 describe('POST /stock-losses - create', () => {

@@ -111,7 +111,7 @@ export function listStocktakes(ctx: AppContext, q: {
  *
  * @throws AppError 400 VALIDATION_ERROR (unknown/duplicate product) or PRODUCT_NOT_IN_BOOK.
  */
-function checkItems(conn: DatabaseSync, book: StocktakeBook, segment: StoredSegment | null, items: StocktakeItemInput[]): void {
+function checkItems(conn: DatabaseSync, book: StocktakeBook, segment: StoredSegment | null | undefined, items: StocktakeItemInput[]): void {
   const bad: Fields = {};
   const wrongBook: Fields = {};
   const wrongSegment: Fields = {};
@@ -125,7 +125,7 @@ function checkItems(conn: DatabaseSync, book: StocktakeBook, segment: StoredSegm
       seen.add(p.id);
       if (p.kind !== 'stock') wrongBook[key] = 'Only stock products can be counted.';
       else if (p.book !== book) wrongBook[key] = `This product belongs to the ${p.book} book, not ${book}.`;
-      else if (book === 'telecom' && segmentOfProduct(conn, p.id) !== segment) {
+      else if (book === 'telecom' && segment !== undefined && segmentOfProduct(conn, p.id) !== segment) {
         wrongSegment[key] = `${p.name} is not in ${segment ? SEGMENT_LABEL[segment] : 'this segment'}. A Telecom stocktake covers one provider's cards.`;
       }
     }
@@ -195,6 +195,7 @@ export function createStocktake(ctx: AppContext, body: StocktakeCreate): { item:
     if (existing) return { item: toStocktake(conn, existing), created: false };
 
     const items = body.items ?? [];
+    checkItems(conn, body.book, undefined, items); // unknown / service / other-book products first
     const segment = resolveStocktakeSegment(conn, body.book, body.segment, items);
     checkItems(conn, body.book, segment, items);
     const id = insertStocktake(conn, {
