@@ -17,9 +17,12 @@ import { apiBase, daysAgo, mkProduct, mkTelecom, today } from './helpers/invento
 import type { ApiBase } from './helpers/inventory.ts';
 import { err, mvsByRef, num, poolOf, productsSnap, reconOk } from './helpers/phase4.ts';
 import {
-  cashBal, cashOfRef, cl, clc, lossRows, returnNew, returnOk, rl, sellNew, sellOk, SALE_ITEM_KEYS, SALE_KEYS, SALE_TOTALS_KEYS, snap5, stocked,
+  cashBal, cashOfRef, cl, clc, lossRows, returnNew, returnOk, rl, sellNew, sellOk, SALE_ITEM_KEYS, SALE_KEYS as SALE_KEYS_BASE, SALE_TOTALS_KEYS, snap5, stocked,
   voidSaleNew,
 } from './helpers/phase5.ts';
+
+// 13D: every sale also carries its `segment` (null for Shop, the provider's cards segment for Telecom).
+const SALE_KEYS = [...SALE_KEYS_BASE, 'segment'].sort();
 
 const env = new TestEnv();
 afterEach(async () => { vi.restoreAllMocks(); await env.cleanup(); });
