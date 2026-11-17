@@ -68,7 +68,7 @@ function emptyFigures(): TransferFigures {
 /** Adds one transfer into a figure record. */
 function add(f: TransferFigures, t: TransferItem): void {
   f.count += 1; f.totalCents += t.amountCents;
-  const d = f.byDirection[`${t.fromBook}>${t.toBook}`]!;
+  const d = (f.byDirection[`${t.fromBook}>${t.toBook}`] ??= { count: 0, amountCents: 0 }); // `telecom>telecom` = between two Telecom segments
   d.count += 1; d.amountCents += t.amountCents;
   f.byBook[t.fromBook].outCents += t.amountCents; f.byBook[t.fromBook].netCents -= t.amountCents;
   f.byBook[t.toBook].inCents += t.amountCents; f.byBook[t.toBook].netCents += t.amountCents;

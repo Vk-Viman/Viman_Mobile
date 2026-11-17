@@ -198,8 +198,8 @@ export function telecomPnl(conn: DatabaseSync, q: PeriodQuery, segment?: StoredS
   const wanted: StoredSegment[] = segment ? [segment] : [...TELECOM_SEGMENTS, 'legacy'];
   const blocks: TelecomSegmentBlock[] = [];
   for (const code of wanted) {
-    const f = telecomFigures(conn, [...periods, whole], { segment: code });
-    const blockTotals = f.pop()!;
+    const f = telecomFigures(conn, periods, { segment: code });
+    const blockTotals = telecomFigures(conn, [whole], { segment: code })[0]!;
     if (code === 'legacy' && !segment && !hasActivity(blockTotals)) continue; // legacy only when it has activity
     blocks.push({
       segment: code, label: SEGMENT_LABEL[code], kind: code === 'legacy' ? 'legacy' : code.endsWith('_cards') ? 'cards' : 'reloads',

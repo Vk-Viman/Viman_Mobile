@@ -5,8 +5,8 @@
  * written by the shared `reportTablesToXlsx` (lib/report-table.ts). No figure is calculated here, so every sheet equals the matching
  * report for the same range (BUSINESS_RULES 10.6 period rule: month rows are clipped calendar months that add up to the total row).
  *
- * Sheets: Combined P&L (by month), Shop P&L, Telecom P&L, Ice Cream P&L, Ice Cream funds (statement + the separate recognized-profit
- * block, 10.1), Shop / Telecom / Ice Cream cash book, Inventory valuation (as of `to`), Low stock (live), Sales, Purchases, Drawings,
+ * Sheets: Combined P&L (by month), Shop P&L, Telecom P&L (+ by segment), Ice Cream P&L, Ice Cream funds (statement + the separate recognized-profit
+ * block, 10.1), Shop / Telecom (+ per segment) / Ice Cream cash book, Inventory valuation (as of `to`), Low stock (live), Sales, Purchases, Drawings,
  * Printing variance.
  */
 import type { DatabaseSync } from 'node:sqlite';
@@ -40,11 +40,13 @@ export function exportPackTables(conn: DatabaseSync, from: string, to: string): 
     named(combinedPnl(conn, month).table, 'Combined P&L (by month)'),
     named(shopPnl(conn, month).table, 'Shop P&L'),
     named(telecomPnl(conn, month).table, 'Telecom P&L'),
+    named(telecomPnl(conn, month).segmentTable, 'Telecom P&L by segment'),
     named(icecreamPnl(conn, month).table, 'Ice Cream P&L'),
     named(funds.table, 'Ice Cream funds'),
     named(funds.profitTable, 'Ice Cream profit and excess'),
     named(cashbookReport(conn, 'shop', month).table, 'Cash book - Shop'),
     named(cashbookReport(conn, 'telecom', month).table, 'Cash book - Telecom'),
+    named(cashbookReport(conn, 'telecom', month).segmentTable!, 'Cash book - Telecom segments'),
     named(cashbookReport(conn, 'icecream', month).table, 'Cash book - Ice Cream'),
     named(inventoryValuation(conn, { asOf: to }).table, 'Inventory valuation'),
     named(lowStock.table, 'Low stock'),
