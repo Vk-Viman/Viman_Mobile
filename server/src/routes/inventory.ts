@@ -8,6 +8,8 @@
  * Layer: route (thin) -> `inventory.service.ts`, which holds the weighted-average rules (BUSINESS_RULES
  * section 3). These are READ-only endpoints: stock only changes through the write services.
  */
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { isIsoDate } from '../lib/dates.ts';
@@ -38,6 +40,7 @@ const valuationQuery = {
   additionalProperties: false,
   properties: {
     book: bookQuery,
+    segment: STORED_SEGMENT_SCHEMA,
     categoryId: intQuery,
     asOf: dateQuery,
     includeZero: boolQuery,
@@ -49,12 +52,13 @@ const valuationQuery = {
 export function registerInventoryRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/inventory/valuation', { schema: { querystring: valuationQuery } }, async (request) => {
     const raw = request.query as {
-      book?: 'shop' | 'telecom'; categoryId?: string; asOf?: string; includeZero?: string; includeInactive?: string;
+      book?: 'shop' | 'telecom'; segment?: StoredSegment; categoryId?: string; asOf?: string; includeZero?: string; includeInactive?: string;
     };
     // asOf is a report date: any real date is accepted (a future one shows the live figures).
     if (raw.asOf !== undefined && !isIsoDate(raw.asOf)) fail({ asOf: 'must be a valid date (YYYY-MM-DD)' });
     const q: Parameters<typeof valuation>[1] = {};
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.categoryId !== undefined) q.categoryId = Number(raw.categoryId);
     if (raw.asOf !== undefined) q.asOf = raw.asOf;
     const includeZero = parseBool(raw.includeZero);
