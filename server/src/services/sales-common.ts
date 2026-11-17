@@ -24,6 +24,8 @@ import type {
   SaleBook, SaleItemRow, SaleLineType, SaleReturnRow, SaleRow, SaleStatus,
 } from '../repositories/sales.repo.ts';
 import { returnBeforeOriginalError } from './return-rules.ts';
+import { SEGMENT_LABEL, mapSegmentAbort, scopeKey, scopesOf, TELECOM_SEGMENTS } from './segments.ts';
+import type { CashScope, StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import { futureDateError, isBackdated, notFound, validationError } from './validation.ts';
 
@@ -47,7 +49,9 @@ export interface SaleReturn {
 }
 /** A sale with its lines and returns, as returned by the API. */
 export interface Sale {
-  id: number; businessDate: string; postedAt: string; backdated: boolean; book: SaleBook; totalCents: number;
+  id: number; businessDate: string; postedAt: string; backdated: boolean; book: SaleBook;
+  /** NULL for Shop; the provider's cards segment (`dialog_cards` ...) for Telecom; `legacy` for sales before the segments. */
+  segment: StoredSegment | null; totalCents: number;
   cogsCents: number; extraCostCents: number; chargedCostCents: number; grossProfitCents: number; status: SaleStatus;
   notes: string; voidedAt: string | null; voidReason: string | null; clientRef: string; items: SaleItem[];
   returns: SaleReturn[];
@@ -59,8 +63,35 @@ export const SALE_CASH_TYPE: Record<SaleBook, string> = { shop: 'sale_goods', te
 export const REFUND_CASH_TYPE: Record<SaleBook, string> = { shop: 'sale_refund', telecom: 'card_refund' };
 /** Sale line type per book: Shop sells goods, Telecom sells scratch cards. */
 export const LINE_TYPE: Record<SaleBook, SaleLineType> = { shop: 'goods', telecom: 'card' };
-/** Order in which the books are processed and listed: Shop first, then Telecom. */
-export const BOOK_ORDER: readonly SaleBook[] = ['shop', 'telecom'];
+/**
+ * A sale belongs to ONE scope (BUSINESS_RULES 13D): the Shop book, or one Telecom card segment (provider). The scopes are
+ * processed and listed in this order: Shop, then Dialog, Mobitel, Airtel, Hutch cards (`scopesOf` sorts that way).
+ */
+export type SaleScope = CashScope;
+
+/** The scope of a stored sale (what its cash, returns, voids and day-closing checks are judged in). */
+export function saleScope(sale: { book: SaleBook; segment: StoredSegment | null }): SaleScope {
+  return { book: sale.book, segment: sale.segment };
+}
+
+/** Distinct scopes of the items in processing order: Shop first, then the card segments in display order. */
+export function orderedScopes(items: Iterable<SaleScope>): SaleScope[] {
+  return scopesOf(items);
+}
+
+/** Sorts sale rows in scope order (Shop first, then Dialog, Mobitel, Airtel, Hutch cards, legacy last). */
+export function sortBySaleScope<T extends { book: SaleBook; segment: StoredSegment | null }>(rows: T[]): T[] {
+  const order = new Map(orderedScopes(rows.map(saleScope)).map((s, i) => [scopeKey(s), i]));
+  return [...rows].sort((a, b) => (order.get(scopeKey(saleScope(a))) as number) - (order.get(scopeKey(saleScope(b))) as number));
+}
+
+/** Owner-facing name of a sale's scope: "Shop" or "Dialog Cards". */
+export function saleScopeName(scope: { book: SaleBook; segment: StoredSegment | null }): string {
+  return scope.segment ? SEGMENT_LABEL[scope.segment] : 'Shop';
+}
+
+/** The four card segments (documented here so the order is visible next to `BOOK_ORDER`'s replacement). */
+export const SALE_CARD_SEGMENTS: readonly StoredSegment[] = TELECOM_SEGMENTS.filter((s) => s.endsWith('_cards'));
 
 // ---------- DTO assembly ----------
 
@@ -92,7 +123,7 @@ export function toSaleReturn(conn: DatabaseSync, r: SaleReturnRow): SaleReturn {
 export function toSale(conn: DatabaseSync, h: SaleRow): Sale {
   return {
     id: h.id, businessDate: h.businessDate, postedAt: h.postedAt, backdated: isBackdated(h.businessDate, h.postedAt),
-    book: h.book, totalCents: h.totalCents, cogsCents: h.cogsCents, extraCostCents: h.extraCostCents,
+    book: h.book, segment: h.segment, totalCents: h.totalCents, cogsCents: h.cogsCents, extraCostCents: h.extraCostCents,
     chargedCostCents: h.cogsCents + h.extraCostCents,
     grossProfitCents: h.totalCents - (h.cogsCents + h.extraCostCents),
     status: h.status, notes: h.notes, voidedAt: h.voidedAt, voidReason: h.voidReason, clientRef: h.clientRef,
@@ -138,6 +169,7 @@ function mapSalesAbort(err: unknown, originalDate?: string): never {
     throw new AppError(400, 'VALIDATION_ERROR', 'Some fields are invalid.',
       { items: 'An item does not belong to this sale.' });
   }
+  mapSegmentAbort(err); // segment trigger aborts (024-026) end in a clean 400/409
   throw err;
 }
 

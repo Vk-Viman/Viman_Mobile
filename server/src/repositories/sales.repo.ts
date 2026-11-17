@@ -7,12 +7,13 @@
  * Layer: repository - SQL only, no business rules. `sales.service.ts` decides prices, stock, cash, rounding of
  * return portions (C5), R-FD/R-RD and the audit row. The triggers of migration 006 are the backstop: a sale can
  * only go posted -> void, its date, amounts and cost snapshot never change (R1, C5), a return line cannot take
- * back more than was sold, and returns are append-only. `(client_ref, book)` is unique so a repeated
- * submission cannot create a second sale, while one cart may still create a shop sale AND a telecom sale.
+ * back more than was sold, and returns are append-only. `(client_ref, book, segment)` is unique (migration 025) so a repeated
+ * submission cannot create a second sale, while one cart may still create a Shop sale AND one sale per Telecom card segment.
  *
  * The posting time (`posted_at`) and the void time are always the DATABASE clock; code never passes them.
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../services/segments.ts';
 import { SQL_NOW_UTC } from './sql-helpers.ts';
 
 export type SaleBook = 'shop' | 'telecom';
@@ -25,7 +26,7 @@ export type SaleLineType = 'goods' | 'card';
  * costs (C13); both before any returns.
  */
 export interface SaleRow {
-  id: number; businessDate: string; postedAt: string; book: SaleBook; totalCents: number; cogsCents: number;
+  id: number; businessDate: string; postedAt: string; book: SaleBook; segment: StoredSegment | null; totalCents: number; cogsCents: number;
   extraCostCents: number; status: SaleStatus; notes: string; clientRef: string; voidedAt: string | null;
   voidReason: string | null;
 }
@@ -59,7 +60,7 @@ export interface ReturnedAmounts { qty: number; revenueCents: number; cogsCents:
 
 type N = number | bigint;
 interface RawSale {
-  id: N; business_date: string; posted_at: string; book: SaleBook; total_cents: N; cogs_cents: N;
+  id: N; business_date: string; posted_at: string; book: SaleBook; segment: StoredSegment | null; total_cents: N; cogs_cents: N;
   extra_cost_cents: N; status: SaleStatus; notes: string; client_ref: string; voided_at: string | null; void_reason: string | null;
 }
 interface RawItem {
@@ -77,7 +78,7 @@ interface RawReturnItem {
   revenue_cents: N; cogs_cents: N; extra_cost_cents: N;
 }
 
-const SALE_SELECT = `SELECT s.id, s.business_date, s.posted_at, s.book, s.total_cents,
+const SALE_SELECT = `SELECT s.id, s.business_date, s.posted_at, s.book, s.segment, s.total_cents,
   COALESCE((SELECT SUM(i.cogs_cents) FROM sale_items i WHERE i.sale_id = s.id), 0) AS cogs_cents,
   COALESCE((SELECT SUM(i.extra_cost_cents) FROM sale_items i WHERE i.sale_id = s.id), 0) AS extra_cost_cents,
   s.status, s.notes, s.client_ref, s.voided_at, s.void_reason FROM sales s`;
@@ -95,7 +96,7 @@ const RETURN_ITEM_SELECT = `SELECT ri.id, ri.sales_return_id, ri.sale_item_id, i
 
 function mapSale(r: RawSale): SaleRow {
   return {
-    id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book,
+    id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book, segment: r.segment ?? null,
     totalCents: Number(r.total_cents), cogsCents: Number(r.cogs_cents),
     extraCostCents: Number(r.extra_cost_cents), status: r.status, notes: r.notes,
     clientRef: r.client_ref, voidedAt: r.voided_at, voidReason: r.void_reason,
@@ -131,14 +132,14 @@ function mapReturnItem(r: RawReturnItem): SaleReturnItemRow {
  * Inserts a sale header (status 'posted', posting time from the DB clock).
  * @param s the header; `totalCents` is the sum of its lines' revenue (the service computes it)
  * @returns the new sale id. Throws with `FUTURE_DATE_NOT_ALLOWED` (R-FD) or a UNIQUE error on a repeated
- *          `(clientRef, book)`.
+ *          `(clientRef, book, segment)`. `segment` is NULL for Shop and one of the four `*_cards` codes for Telecom.
  */
 export function insertSale(conn: DatabaseSync, s: {
-  businessDate: string; book: SaleBook; totalCents: number; notes: string; clientRef: string;
+  businessDate: string; book: SaleBook; segment: StoredSegment | null; totalCents: number; notes: string; clientRef: string;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO sales (business_date, book, total_cents, notes, client_ref) VALUES (?, ?, ?, ?, ?)`,
-  ).run(s.businessDate, s.book, s.totalCents, s.notes, s.clientRef);
+    `INSERT INTO sales (business_date, book, segment, total_cents, notes, client_ref) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(s.businessDate, s.book, s.segment, s.totalCents, s.notes, s.clientRef);
   return Number(res.lastInsertRowid);
 }
 
@@ -168,12 +169,28 @@ export function getSale(conn: DatabaseSync, id: number): SaleRow | undefined {
 }
 
 /**
- * The sale already saved under this client reference IN THIS BOOK (idempotent retry), or undefined.
- * A single cart can create one sale per book with the same reference, so the book is part of the key.
+ * Every sale already saved under this client reference (idempotent retry): one cart makes one sale per scope (Shop and each
+ * Telecom card segment), all with the same reference. Unordered; the service sorts them Shop first.
  */
-export function getSaleByClientRef(conn: DatabaseSync, clientRef: string, book: SaleBook): SaleRow | undefined {
-  const r = conn.prepare(`${SALE_SELECT} WHERE s.client_ref = ? AND s.book = ?`).get(clientRef, book) as unknown as RawSale | undefined;
-  return r ? mapSale(r) : undefined;
+export function listSalesByClientRef(conn: DatabaseSync, clientRef: string): SaleRow[] {
+  const rows = conn.prepare(`${SALE_SELECT} WHERE s.client_ref = ?`).all(clientRef) as unknown as RawSale[];
+  return rows.map(mapSale);
+}
+
+/**
+ * Writes the stock-loss row of a DAMAGED returned line (source `damaged_return`) in the sale's own scope. A private insert on
+ * purpose: the loss belongs to the sale's (book, segment) - which for a legacy sale stays `legacy` - and not to the product's
+ * current segment, and this package must not depend on the stock-losses repository's signature.
+ */
+export function insertDamagedReturnLoss(conn: DatabaseSync, l: {
+  businessDate: string; productId: number; book: SaleBook; segment: StoredSegment | null; qty: number; costCents: number;
+  note: string; clientRef: string; salesReturnId: number;
+}): number {
+  const res = conn.prepare(
+    `INSERT INTO stock_losses (business_date, product_id, book, segment, qty, cost_cents, reason, note, source, client_ref, sales_return_id)
+     VALUES (?, ?, ?, ?, ?, ?, 'damaged', ?, 'damaged_return', ?, ?)`,
+  ).run(l.businessDate, l.productId, l.book, l.segment, l.qty, l.costCents, l.note, l.clientRef, l.salesReturnId);
+  return Number(res.lastInsertRowid);
 }
 
 /** The lines of one sale in receipt order (`lineNo`). */
@@ -198,13 +215,14 @@ export function getSaleItem(conn: DatabaseSync, id: number): SaleItemRow | undef
  *          of refunds of POSTED returns made against those sales (a voided return no longer counts, R-VR).
  */
 export function listSales(conn: DatabaseSync, q: {
-  from?: string; to?: string; book?: SaleBook; status?: SaleStatus; productId?: number; limit: number; offset: number;
+  from?: string; to?: string; book?: SaleBook; segment?: StoredSegment; status?: SaleStatus; productId?: number; limit: number; offset: number;
 }): { items: SaleRow[]; total: number; totals: SalesTotals } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
   if (q.from !== undefined) { where.push('s.business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('s.business_date <= ?'); params.push(q.to); }
   if (q.book !== undefined) { where.push('s.book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('s.segment = ?'); params.push(q.segment); }
   if (q.status !== undefined) { where.push('s.status = ?'); params.push(q.status); }
   if (q.productId !== undefined) {
     where.push('EXISTS (SELECT 1 FROM sale_items x WHERE x.sale_id = s.id AND x.product_id = ?)');
