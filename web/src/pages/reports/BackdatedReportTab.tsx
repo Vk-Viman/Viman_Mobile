@@ -11,6 +11,8 @@ import { useBackdatedReport } from '../../api/reportsOperational';
 import type { OpsBook } from '../../types/reportsOperational';
 import { OpsDownload, OpsFilters, OpsHeadline, OpsResult } from './opsParts';
 import { ReportTableView, ReportToolbar, useReportPeriod } from './shared';
+import { SegmentFilter } from './SegmentFilter';
+import type { StoredSegment } from '../../types/segments';
 
 const PAGE = 50;
 
@@ -18,8 +20,9 @@ const PAGE = 50;
 export function BackdatedReportTab() {
   const { period, set } = useReportPeriod();
   const [book, setBook] = useState<'' | OpsBook>('');
+  const [segment, setSegment] = useState<'' | StoredSegment>('');
   const [page, setPage] = useState(0);
-  const query = { from: period.from, to: period.to, book };
+  const query = { from: period.from, to: period.to, book, segment };
   const report = useBackdatedReport({ ...query, limit: PAGE, offset: page * PAGE }, period.ready);
   return (
     <div>
@@ -28,6 +31,7 @@ export function BackdatedReportTab() {
         <SelectField label="Book" value={book} onChange={(e) => { setPage(0); setBook(e.target.value as '' | OpsBook); }}>
           <option value="">All</option><option value="shop">Shop</option><option value="telecom">Telecom</option><option value="icecream">Ice Cream</option>
         </SelectField>
+        <SegmentFilter value={segment} onChange={(v) => { setPage(0); setSegment(v); }} />
         <div className="pb-0.5"><OpsDownload path="/reports/backdated" query={query} /></div>
       </OpsFilters>
       <OpsResult query={report}>

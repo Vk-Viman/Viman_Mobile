@@ -13,6 +13,8 @@ import { useCashbookReport, useTransfersReport } from '../../api/reportsFinancia
 import type { FinBook } from '../../types/reportsFinancial';
 import { FinState, FinSwitch, FinTile, FinTiles, FinWarnings, useUrlChoice } from './finParts';
 import { ReportTableView, ReportToolbar, useReportPeriod } from './shared';
+import { SEGMENT_FILTER_VALUES, SegmentFilter } from './SegmentFilter';
+import type { StoredSegment } from '../../types/segments';
 
 const BOOKS: ReadonlyArray<{ value: FinBook; label: string }> = [
   { value: 'shop', label: 'Shop' }, { value: 'telecom', label: 'Telecom' }, { value: 'icecream', label: 'Ice Cream' },
@@ -40,11 +42,14 @@ function TransfersSection({ period }: { period: ReturnType<typeof useReportPerio
 export function CashReportTab() {
   const { period, set } = useReportPeriod();
   const [book, setBook] = useUrlChoice<FinBook>('book', ['shop', 'telecom', 'icecream'], 'shop');
-  const query = useCashbookReport(book, period);
+  const [tseg, setTseg] = useUrlChoice<string>('tseg', SEGMENT_FILTER_VALUES.map((v) => v || 'all'), 'all');
+  const segment = (book === 'telecom' && tseg !== 'all' ? tseg : '') as StoredSegment | '';
+  const query = useCashbookReport(book, period, segment);
   return (
     <div>
       <FinSwitch label="Cash book" options={BOOKS} value={book} onChange={setBook} />
-      <ReportToolbar period={period} set={set} downloadPath={`/reports/cashbook/${book}`} />
+      {book === 'telecom' && <div className="mb-3 max-w-xs"><SegmentFilter value={segment} onChange={(v) => setTseg(v || 'all')} /></div>}
+      <ReportToolbar period={period} set={set} downloadPath={`/reports/cashbook/${book}`} downloadExtra={segment ? { segment } : {}} />
       <FinState query={query}>
         {(r) => (
           <>
@@ -57,6 +62,12 @@ export function CashReportTab() {
                 hint={r.totals.closingCents === r.ledgerBalanceAsOfToCents ? `Equals the cash book balance at ${r.to}` : 'Does not match the ledger - please contact support'} />
             </FinTiles>
             <Card title={r.table.title} className="mb-4"><ReportTableView table={r.table} /></Card>
+            {r.segmentTable && (
+              <Card title="Telecom cash by segment" className="mb-4">
+                <p className="mb-3 text-sm text-slate-600">Each Telecom segment has its own cash. The total is the sum of the segments; a transfer between two segments moves money from one to the other.</p>
+                <ReportTableView table={r.segmentTable} />
+              </Card>
+            )}
             <Card title="Totals by entry type" className="mb-4"><ReportTableView table={r.typeTable} /></Card>
             {r.fundTable && (
               <Card title="Ice Cream funds" className="mb-4">

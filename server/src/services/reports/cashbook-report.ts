@@ -13,6 +13,9 @@
  *  - Ice Cream funds (10.1, 10.2): taken from the FUND LEDGER, so internal fund moves (no cash) show up as `movesNetCents`
  *    and each fund's closing is its real balance; the three closings add up to the Ice Cream book. A fund's in/out
  *    here are the real cash movements only (internal moves are shown apart), so Σ funds in/out = the book's in/out.
+ *  - Telecom segments (13D): Telecom is one book split into eight segments (+ `legacy`); the report of the book is the sum of its
+ *    segments and carries a `segmentTable` (opening / in / out / closing per segment over the range, + the Telecom total) like the
+ *    Ice Cream `fundTable`. An optional `segment` gives that segment's own report (balances, rows, types, closing all of that segment).
  * A report date is a business date and may be in the future (it just shows today's figures, R-FD is for writes).
  * The Telecom book is not expected to reconcile to Telecom profit (R14); this report is about cash, not profit.
  */
@@ -22,8 +25,10 @@ import type { Granularity, Period, ReportCell, ReportColumn, ReportTable } from 
 import { ICE_FUNDS } from '../../repositories/icecream-funds.repo.ts';
 import type { CashBook, IceFund } from '../../repositories/cash-entries.repo.ts';
 import { FUND_LABEL, negativeBalanceWarning, negativeFundWarning } from '../cash-warnings.ts';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS } from '../segments.ts';
+import type { StoredSegment } from '../segments.ts';
 import type { CashWarning } from '../cash-warnings.ts';
-import { sumByPeriod, sumByPeriodAndGroup, wholePeriod } from './fin-common.ts';
+import { segClause, sumByPeriod, sumByPeriodAndGroup, wholePeriod } from './fin-common.ts';
 import type { PeriodRow } from './fin-common.ts';
 import type { PeriodQuery } from './pnl-shop.ts';
 
@@ -53,25 +58,32 @@ export interface CashbookFigures {
   funds?: Record<IceFund, FundPeriod>;
 }
 
+/** One Telecom segment over the whole report range (opening before `from`, closing at `to`). */
+export interface SegmentPeriod { segment: StoredSegment; label: string; openingCents: number; inCents: number; outCents: number; closingCents: number }
+
 /** The full answer of `GET /reports/cashbook/:book`. */
 export interface CashbookReport {
-  book: CashBook; from: string; to: string; granularity: Granularity;
+  book: CashBook; /** Telecom only: the segment the report is limited to (null = the whole book). */ segment: StoredSegment | null; from: string; to: string; granularity: Granularity;
   rows: Array<PeriodRow<CashbookFigures>>; totals: CashbookFigures;
   /** The book's ledger balance as of `to`, summed independently: always equals the last row's closing. */
   ledgerBalanceAsOfToCents: number;
   table: ReportTable; typeTable: ReportTable; fundTable?: ReportTable; warnings: CashWarning[];
+  /** Telecom only: one entry per segment (legacy only when it has entries); the totals row equals the book's totals. */
+  segments?: SegmentPeriod[]; segmentTable?: ReportTable;
 }
 
 type N = number | bigint;
 
 /** Ledger balance of a book of all entries dated BEFORE `date` (0 for an empty book). */
-function balanceBefore(conn: DatabaseSync, book: CashBook, date: string): number {
-  const r = conn.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS t FROM cash_entries WHERE book = ? AND business_date < ?').get(book, date) as unknown as { t: N };
+function balanceBefore(conn: DatabaseSync, book: CashBook, date: string, segment?: StoredSegment): number {
+  const sg = segClause('segment', { segment });
+  const r = conn.prepare(`SELECT COALESCE(SUM(amount_cents), 0) AS t FROM cash_entries WHERE book = ? AND business_date < ?${sg.sql}`).get(book, date, ...sg.params) as unknown as { t: N };
   return Number(r.t);
 }
 
-function balanceThrough(conn: DatabaseSync, book: CashBook, date: string): number {
-  const r = conn.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS t FROM cash_entries WHERE book = ? AND business_date <= ?').get(book, date) as unknown as { t: N };
+function balanceThrough(conn: DatabaseSync, book: CashBook, date: string, segment?: StoredSegment): number {
+  const sg = segClause('segment', { segment });
+  const r = conn.prepare(`SELECT COALESCE(SUM(amount_cents), 0) AS t FROM cash_entries WHERE book = ? AND business_date <= ?${sg.sql}`).get(book, date, ...sg.params) as unknown as { t: N };
   return Number(r.t);
 }
 
@@ -117,19 +129,20 @@ function fundsByPeriod(conn: DatabaseSync, periods: readonly Period[]): Array<Re
 }
 
 /** Figures for each period (opening carried forward from the ledger balance before the first period). */
-export function cashbookFigures(conn: DatabaseSync, book: CashBook, periods: readonly Period[]): CashbookFigures[] {
+export function cashbookFigures(conn: DatabaseSync, book: CashBook, periods: readonly Period[], segment?: StoredSegment): CashbookFigures[] {
   const from = periods[0]!.from;
   const to = periods[periods.length - 1]!.to;
+  const sg = segClause('segment', { segment });
   const sums = sumByPeriod(conn, periods,
     `SELECT business_date AS d, SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END) AS i,
             SUM(CASE WHEN amount_cents < 0 THEN -amount_cents ELSE 0 END) AS o
-       FROM cash_entries WHERE book = ? AND business_date BETWEEN ? AND ? GROUP BY business_date`, [book, from, to], ['i', 'o'] as const);
+       FROM cash_entries WHERE book = ? AND business_date BETWEEN ? AND ?${sg.sql} GROUP BY business_date`, [book, from, to, ...sg.params], ['i', 'o'] as const);
   const types = sumByPeriodAndGroup(conn, periods,
     `SELECT business_date AS d, type AS g, SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END) AS i,
             SUM(CASE WHEN amount_cents < 0 THEN -amount_cents ELSE 0 END) AS o
-       FROM cash_entries WHERE book = ? AND business_date BETWEEN ? AND ? GROUP BY business_date, type`, [book, from, to], ['i', 'o'] as const);
+       FROM cash_entries WHERE book = ? AND business_date BETWEEN ? AND ?${sg.sql} GROUP BY business_date, type`, [book, from, to, ...sg.params], ['i', 'o'] as const);
   const funds = book === 'icecream' ? fundsByPeriod(conn, periods) : null;
-  let opening = balanceBefore(conn, book, from);
+  let opening = balanceBefore(conn, book, from, segment);
   return periods.map((_, i) => {
     const closing = opening + sums[i]!.i - sums[i]!.o;
     const fig: CashbookFigures = { openingCents: opening, inCents: sums[i]!.i, outCents: sums[i]!.o, closingCents: closing, byType: typeTotals(types, i) };
@@ -171,20 +184,23 @@ function flatFunds(label: string, f: Record<IceFund, FundPeriod>): Record<string
  * The cash book report of one book for a date range.
  *
  * @param q.granularity `day` or `month` rows; the totals row spans the whole range (opening = balance before `from`).
+ * @param segment Telecom only: the report of that segment alone (ignored for the other books, which have no segments).
  */
-export function cashbookReport(conn: DatabaseSync, book: CashBook, q: PeriodQuery): CashbookReport {
+export function cashbookReport(conn: DatabaseSync, book: CashBook, q: PeriodQuery, segment?: StoredSegment): CashbookReport {
+  const seg = book === 'telecom' ? segment : undefined;
   const periods = listPeriods(q.from, q.to, q.granularity);
-  const figs = cashbookFigures(conn, book, periods);
-  const totals = cashbookFigures(conn, book, [wholePeriod(q.from, q.to)])[0]!;
+  const figs = cashbookFigures(conn, book, periods, seg);
+  const totals = cashbookFigures(conn, book, [wholePeriod(q.from, q.to)], seg)[0]!;
   const rows = periods.map((period, i) => ({ period, ...figs[i]! }));
   const table: ReportTable = {
-    title: `${book === 'icecream' ? 'Ice Cream' : book === 'shop' ? 'Shop' : 'Telecom'} cash book`, columns: COLUMNS,
+    title: `${book === 'icecream' ? 'Ice Cream' : book === 'shop' ? 'Shop' : seg ? `Telecom - ${SEGMENT_LABEL[seg]}` : 'Telecom'} cash book`, columns: COLUMNS,
     rows: rows.map((r) => ({ period: r.period.label, opening: r.openingCents, in: r.inCents, out: r.outCents, closing: r.closingCents })),
     totals: { period: 'Total', opening: totals.openingCents, in: totals.inCents, out: totals.outCents, closing: totals.closingCents },
     notes: [
       'Closing = opening + money in - money out. Each period opens with the previous period\'s closing; the last closing equals the cash book balance at the end date.',
       'A voided record appears as an opposite row on the original date, so it nets to zero in its own period.',
       ...(book === 'telecom' ? ['The Telecom cash book is not expected to match Telecom profit (reload float is not tracked, R14).'] : []),
+      ...(book === 'telecom' && !seg ? ['The Telecom cash book is the sum of its segments (Dialog Reloads, Dialog Cards ...): see the table by segment.'] : []),
     ],
   };
   const typeTable: ReportTable = {
@@ -197,9 +213,30 @@ export function cashbookReport(conn: DatabaseSync, book: CashBook, q: PeriodQuer
     totals: { type: 'Total', in: totals.inCents, out: totals.outCents, net: totals.inCents - totals.outCents },
   };
   const report: CashbookReport = {
-    book, from: q.from, to: q.to, granularity: q.granularity, rows, totals,
-    ledgerBalanceAsOfToCents: balanceThrough(conn, book, q.to), table, typeTable, warnings: [],
+    book, segment: seg ?? null, from: q.from, to: q.to, granularity: q.granularity, rows, totals,
+    ledgerBalanceAsOfToCents: balanceThrough(conn, book, q.to, seg), table, typeTable, warnings: [],
   };
+  if (book === 'telecom') {
+    const codes: StoredSegment[] = seg ? [seg] : [...TELECOM_SEGMENTS, 'legacy'];
+    const whole = wholePeriod(q.from, q.to);
+    const parts: SegmentPeriod[] = [];
+    for (const code of codes) {
+      const f = cashbookFigures(conn, book, [whole], code)[0]!;
+      if (code === 'legacy' && !seg && f.openingCents === 0 && f.inCents === 0 && f.outCents === 0) continue; // legacy only when it has entries
+      parts.push({ segment: code, label: SEGMENT_LABEL[code], openingCents: f.openingCents, inCents: f.inCents, outCents: f.outCents, closingCents: f.closingCents });
+    }
+    report.segments = parts;
+    report.segmentTable = {
+      title: 'Telecom cash book by segment',
+      columns: [
+        { key: 'segment', label: 'Segment', kind: 'text' }, { key: 'opening', label: 'Opening balance', kind: 'money' },
+        { key: 'in', label: 'Money in', kind: 'money' }, { key: 'out', label: 'Money out', kind: 'money' }, { key: 'closing', label: 'Closing balance', kind: 'money' },
+      ],
+      rows: parts.map((x) => ({ segment: x.label, opening: x.openingCents, in: x.inCents, out: x.outCents, closing: x.closingCents })),
+      totals: { segment: seg ? 'Total (this segment)' : 'Telecom total', opening: totals.openingCents, in: totals.inCents, out: totals.outCents, closing: totals.closingCents },
+      notes: ['Each segment has its own cash; the Telecom total is the sum of the segments. Transfers between two segments move money out of one and into the other (net zero in the total).'],
+    };
+  }
   if (book === 'icecream') {
     report.fundTable = {
       title: 'Ice Cream funds', columns: FUND_COLUMNS,
@@ -210,7 +247,10 @@ export function cashbookReport(conn: DatabaseSync, book: CashBook, q: PeriodQuer
       ],
     };
   }
-  if (report.ledgerBalanceAsOfToCents < 0) {
+  if (book === 'telecom') {
+    // R13 / 13D: a negative balance is a warning, judged PER SEGMENT (never the Telecom total).
+    for (const x of report.segments!) if (x.closingCents < 0) report.warnings.push(negativeBalanceWarning({ book, segment: x.segment }, x.closingCents));
+  } else if (report.ledgerBalanceAsOfToCents < 0) {
     report.warnings.push(negativeBalanceWarning(book, report.ledgerBalanceAsOfToCents)); // R13: a warning, never an error
   }
   if (book === 'icecream') {

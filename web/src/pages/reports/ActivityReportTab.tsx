@@ -12,6 +12,8 @@ import { useDrawingsReport, usePrintingReport, usePurchasesReport, useSalesRepor
 import type { PeriodQuery, StockBook } from '../../types/reportsOperational';
 import { OpsDownload, OpsFilters, OpsHeadline, OpsResult, OpsTables, SectionPills, useOpsSection } from './opsParts';
 import { ReportToolbar, useReportPeriod } from './shared';
+import { SegmentFilter } from './SegmentFilter';
+import type { StoredSegment } from '../../types/segments';
 
 const SECTIONS = ['sales', 'purchases', 'drawings', 'printing'] as const;
 type Section = typeof SECTIONS[number];
@@ -22,11 +24,12 @@ const ITEMS: Array<{ key: Section; label: string }> = [
 /** Sales per period and book. */
 function SalesSection({ q }: { q: PeriodQuery & { ready: boolean } }) {
   const [book, setBook] = useState<'' | StockBook>('');
-  const query = { from: q.from, to: q.to, granularity: q.granularity, book };
+  const [segment, setSegment] = useState<'' | StoredSegment>('');
+  const query = { from: q.from, to: q.to, granularity: q.granularity, book, segment };
   const report = useSalesReport(query, q.ready);
   return (
     <>
-      <OpsFilters><BookFilterSelect value={book} onChange={(v) => setBook(v as '' | StockBook)} /><div className="pb-0.5"><OpsDownload path="/reports/sales" query={query} /></div></OpsFilters>
+      <OpsFilters><BookFilterSelect value={book} onChange={(v) => setBook(v as '' | StockBook)} /><SegmentFilter value={segment} onChange={setSegment} /><div className="pb-0.5"><OpsDownload path="/reports/sales" query={query} /></div></OpsFilters>
       <OpsResult query={report}>
         {(r) => (
           <>
@@ -42,11 +45,12 @@ function SalesSection({ q }: { q: PeriodQuery & { ready: boolean } }) {
 /** Purchases per period, supplier and product, net of purchase returns. */
 function PurchasesSection({ q }: { q: PeriodQuery & { ready: boolean } }) {
   const [book, setBook] = useState<'' | StockBook>('');
-  const query = { from: q.from, to: q.to, granularity: q.granularity, book };
+  const [segment, setSegment] = useState<'' | StoredSegment>('');
+  const query = { from: q.from, to: q.to, granularity: q.granularity, book, segment };
   const report = usePurchasesReport(query, q.ready);
   return (
     <>
-      <OpsFilters><BookFilterSelect value={book} onChange={(v) => setBook(v as '' | StockBook)} /><div className="pb-0.5"><OpsDownload path="/reports/purchases" query={query} /></div></OpsFilters>
+      <OpsFilters><BookFilterSelect value={book} onChange={(v) => setBook(v as '' | StockBook)} /><SegmentFilter value={segment} onChange={setSegment} /><div className="pb-0.5"><OpsDownload path="/reports/purchases" query={query} /></div></OpsFilters>
       <OpsResult query={report}>
         {(r) => (
           <>
@@ -62,7 +66,8 @@ function PurchasesSection({ q }: { q: PeriodQuery & { ready: boolean } }) {
 /** Cash and goods drawings, with capital and transfers shown separately. */
 function DrawingsSection({ q }: { q: PeriodQuery & { ready: boolean } }) {
   const [book, setBook] = useState('');
-  const query = { from: q.from, to: q.to, granularity: q.granularity, book };
+  const [segment, setSegment] = useState<'' | StoredSegment>('');
+  const query = { from: q.from, to: q.to, granularity: q.granularity, book, segment };
   const report = useDrawingsReport(query, q.ready);
   return (
     <>
@@ -70,6 +75,7 @@ function DrawingsSection({ q }: { q: PeriodQuery & { ready: boolean } }) {
         <SelectField label="Book" value={book} onChange={(e) => setBook(e.target.value)}>
           <option value="">All</option><option value="shop">Shop</option><option value="telecom">Telecom</option><option value="icecream">Ice Cream</option>
         </SelectField>
+        <SegmentFilter value={segment} onChange={setSegment} />
         <div className="pb-0.5"><OpsDownload path="/reports/drawings" query={query} /></div>
       </OpsFilters>
       <OpsResult query={report}>
