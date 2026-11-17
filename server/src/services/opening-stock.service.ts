@@ -297,7 +297,7 @@ function inUse(fields: Fields, lines: Array<{ productId: number; onHand: number;
 export async function openingStockTemplate(ctx: AppContext): Promise<Buffer> {
   const products = listProducts(ctx.database.conn, { active: true, limit: Number.MAX_SAFE_INTEGER, offset: 0 }).items
     .filter((p) => p.kind === 'stock')
-    .map((p) => ({ sku: p.code, name: p.name, categoryName: p.categoryName, book: p.book }));
+    .map((p) => ({ sku: p.code, name: p.name, categoryName: p.categoryName, book: p.book, providerName: segmentInfo(ctx.database.conn, p.id).providerName }));
   return buildTemplate(products);
 }
 
@@ -343,13 +343,26 @@ function importDate(date: string | undefined): string {
   return d;
 }
 
+/**
+ * The Telecom segment (`legacy` while the category has no provider) and provider name of a product, for the import validator
+ * (package D's `ProductRef.segment` / `providerName`: a legacy Telecom product is refused with LEGACY_PRODUCT). Shop: both null.
+ */
+function segmentInfo(conn: DatabaseSync, productId: number): { segment: string | null; providerName: string | null } {
+  const r = conn.prepare(
+    `SELECT v.segment AS segment, rp.name AS provider_name FROM v_product_segment v
+       JOIN products p ON p.id = v.product_id JOIN categories c ON c.id = p.category_id
+       LEFT JOIN reload_providers rp ON rp.id = c.provider_id WHERE v.product_id = ?`,
+  ).get(productId) as unknown as { segment: string | null; provider_name: string | null } | undefined;
+  return { segment: r?.segment ?? null, providerName: r?.provider_name ?? null };
+}
+
 /** Product lookup by SKU for the validator. */
 function skuLookup(conn: DatabaseSync): (sku: string) => ProductRef | undefined {
   return (sku) => {
     const p = findProductByCode(conn, sku);
-    return p ? {
-      id: p.id, name: p.name, active: p.active, kind: p.kind, categoryName: p.categoryName, book: p.book,
-    } : undefined;
+    if (!p) return undefined;
+    const ref = { id: p.id, name: p.name, active: p.active, kind: p.kind, categoryName: p.categoryName, book: p.book, ...segmentInfo(conn, p.id) };
+    return ref as ProductRef;
   };
 }
 
@@ -357,7 +370,7 @@ function skuLookup(conn: DatabaseSync): (sku: string) => ProductRef | undefined 
 function nameLookup(conn: DatabaseSync): (name: string) => ProductRef[] {
   return (name) => listProducts(conn, { q: name, limit: 50, offset: 0 }).items
     .filter((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())
-    .map((p) => ({ id: p.id, name: p.name, active: p.active, kind: p.kind, categoryName: p.categoryName, book: p.book }));
+    .map((p) => ({ id: p.id, name: p.name, active: p.active, kind: p.kind, categoryName: p.categoryName, book: p.book, ...segmentInfo(conn, p.id) }) as ProductRef);
 }
 
 function summarize(rows: PreviewRow[]): ImportSummary {
