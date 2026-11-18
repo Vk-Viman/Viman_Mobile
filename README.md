@@ -463,7 +463,8 @@ Size guide: **S** = about a day, **M** = a few days, **L** = a week or more (rou
 | Windows installer, auto-start with Windows, tray icon, auto-update | The launcher is a `.bat` file |
 | Other languages (Sinhala, Tamil), dark mode | English, light only |
 | Multi-shop or multi-PC | One PC, one user |
-| Tax/VAT, discounts and promotions | Not modelled. A discount design (manually typed rupee amounts, Shop products only) is only a proposal: [`PROPOSAL_SALES_DISCOUNTS.md`](PROPOSAL_SALES_DISCOUNTS.md), not approved or built (today the price can be typed per line) |
+| Tax/VAT and promotions | Not modelled |
+| Sales discounts (Shop products only) | **Approved design, not built yet** (2026-11-17): the cashier will type a fixed rupee discount per unit on a Shop item and/or one rupee discount for the whole Shop part of the bill; Telecom products never get a discount; a Shop price typed below the normal price is recorded as a discount; reports will show Gross Sales, Discounts and Net Sales for Shop. Details: [`PROPOSAL_SALES_DISCOUNTS.md`](PROPOSAL_SALES_DISCOUNTS.md) |
 | Importing historical data | Fresh start by design |
 
 ### 10.2 Recommended before real daily use
