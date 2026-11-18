@@ -71,10 +71,11 @@ Non-cash: goods drawing (no P&L) · stock loss / stocktake (Stock adjustments li
 - **Warnings, not blocks (R13):** price < min price, price < snapshot cost, service cost > price, qty > 0 with value 0, negative cash-book balance.
 
 ## 5. Telecom
-- Reload (one or more entries per provider per day; providers Dialog, Mobitel, Hutch, Airtel): `commission = mulDivRound(sales, rateBp, 10000) + extra` (extra ≥ 0, default 0; rate snapshotted, default 600 bp; each provider may carry its own rate, otherwise the shop default applies). Telecom cash +sales. No reload stock, float, or balances.
+- Reload (one or more entries per provider per day; providers Dialog, Mobitel, Hutch, Airtel): `commission = mulDivRound(sales, rateBp, 10000) + extra` (extra ≥ 0, default 0; rate snapshotted, default 600 bp; each provider may carry its own rate, otherwise the shop default applies). Telecom cash +sales (**+ the extra from 2026-11-18, rule 13F, once implemented: the extra is money received from the customer and is also commission income**; until then cash = sales only). No reload stock, float, or balances.
 - EZCash (under Dialog): `commission = mulDivRound(billTotal, rateBp, 10000)`, default 80 bp; it uses the shop-wide EZCash rate and does not depend on the provider's reload rate. Telecom cash +billTotal; wallet top-ups are cash-outs.
 - Scratch cards: stock products in the Scratch Cards category (book `telecom`); normal stock sale with COGS.
 - Example: 50,000 @ 600 bp + 50 extra → 3,050 commission; 50,000 @ 80 bp → 400.
+- Example (13F): reload 198.00, customer pays 200.00 (extra 2.00) at 600 bp → commission 11.88 + 2.00 = 13.88; Telecom cash +200.00 once rule 13F is implemented.
 - R14: Telecom cash book will not reconcile to Telecom profit (no float tracking — owner decision).
 - **Segments (§13D, as built).** A reload and a provider top-up belong to that provider's Reloads segment; EZCash and a wallet top-up to Dialog Reloads; a scratch-card product, sale, purchase, stock loss, stocktake and personal-use drawing to the Cards segment of the provider linked to the product's category (every Telecom category is linked to one provider; a Telecom stock product needs such a category, otherwise `PRODUCT_NEEDS_PROVIDER`). A cart with cards of several providers is saved as one sale per provider; a purchase or stocktake may hold cards of ONE provider only (`MIXED_SEGMENTS`). The reload commission, EZCash rate and rounding extra rules above are unchanged.
 
@@ -298,6 +299,16 @@ Owner decisions: **Option A**; **EZCash goes under Dialog Reloads**; **each Tele
 - **TS-4 Mixed card cart.** Cards of several providers in one cart are saved as one sale per segment (like Shop + Telecom today); a Shop line and Telecom lines are saved as separate sales as today.
 - **TS-5 Unchanged.** Commission rates per provider and the rounding extra; weighted-average costing; C13; returns and voids (reversal entries stay in the original's segment); append-only ledgers; closed-day protection in the database; the "correct this entry" feature (the replacement keeps the segment).
 - **TS-6 Legacy rows.** Rows that exist before the migration keep working under one read-only segment "Telecom before segments"; nothing is rewritten. No new record can use it.
+
+## 13F. Reload extra is cash received — APPROVED by the owner 2026-11-18, **NOT YET IMPLEMENTED** (changes rule §5; built after the sales-discount feature, migration number after 028)
+Owner example: a reload of Rs 198.00 is sold and the customer pays **Rs 200.00**. The Rs 2.00 is the "extra" (the owner's rounding top-up). It is real money received, so it must be in the cash book, and it is also commission income.
+- **RX-1 Cash.** The cash entry of a reload entry is `reload_collection = collected + extra` (what the customer actually pays), in the provider's Reloads segment. Example: collected 198.00, extra 2.00 -> Telecom cash **+200.00**.
+- **RX-2 Commission unchanged.** `commission = mulDivRound(collected, rateBp, 10000) + extra`. Example: 6% of 198.00 = 11.88, plus the extra 2.00 = **13.88** commission (income). Rates, rate snapshots, the Phase 2 rate-preservation rule for corrections and the Telecom P&L formulas do not change (the P&L already includes the extra).
+- **RX-3 Not tracked (R14 unchanged).** The provider's credit (198.00 in the example) and any float are still not tracked; the Telecom cash book still does not reconcile to Telecom profit.
+- **RX-4 EZCash and top-ups unchanged.** EZCash has no extra (cash = bill total); provider and wallet top-ups are unchanged.
+- **RX-5 Existing records.** Entries already saved keep their recorded cash (collected only); nothing is rewritten. Each reload row records which rule produced its cash entry (a flag set by the migration: 0 for existing rows, 1 for new rows), so the restore validator, reports and corrections apply the right expectation per row: expected cash = `collected` for flag 0, `collected + extra` for flag 1.
+- **RX-6 Voids and corrections.** A void reverses the full cash entry (collected + extra) in the same segment and date; a correction voids the original and enters the replacement under RX-1/RX-2 with the original commission rate preserved (13E); negative-cash warnings, closed days per segment and every other guard are unchanged.
+- **RX-7 Reports and screens.** The Telecom cash book and its segment tile show the received amount (collected + extra); the Reloads screen shows "Cash received" beside collected, extra and commission; the validator invariant "per-segment `reload_collection` entries equal the posted reload totals" uses RX-5; Telecom P&L figures are unchanged.
 
 ## 14. Owner decisions log (Phase 1 final review)
 
