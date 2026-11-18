@@ -650,8 +650,10 @@ describe('daily closings', () => {
 
 // =============================================================================================
 describe('R13 - one shared negative-cash warning for every cash-out write', () => {
-  const NEG = (book: string, cents: number, label: string, money: string) => ({
+  // a Telecom warning names its segment (13D): the `segment` code and the label "Telecom - <Provider> Reloads"
+  const NEG = (book: string, cents: number, label: string, money: string, segment?: string) => ({
     code: 'NEGATIVE_CASH_BALANCE', book, balanceCents: cents,
+    ...(segment ? { segment } : {}),
     message: `The ${label} cash book is now below zero (${money}). Check that the opening balance and sales are recorded.`,
   });
 
@@ -674,7 +676,7 @@ describe('R13 - one shared negative-cash warning for every cash-out write', () =
     const prov = (await get(s.app, '/reload-providers')).body.items[0];
     const top = await post(s.app, '/telecom/topups', { businessDate: today(), kind: 'provider_topup', providerId: prov.id, amountCents: 2500, clientRef: ref() });
     expect(top.status).toBe(201);
-    expect(top.body.warnings).toEqual([NEG('telecom', -2500, 'Telecom', '-Rs. 25.00')]);
+    expect(top.body.warnings).toEqual([NEG('telecom', -2500, `Telecom - ${prov.name} Reloads`, '-Rs. 25.00', `${String(prov.name).toLowerCase()}_reloads`)]);
     expect(bookBal(s, 'telecom')).toBe(-2500);
   });
 

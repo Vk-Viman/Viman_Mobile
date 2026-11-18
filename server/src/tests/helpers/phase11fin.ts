@@ -187,7 +187,8 @@ export async function buildFinWorld(s: ApiBase, withVoids = true): Promise<FinWo
   must(await lossNew(s, A, 1, { businessDate: '2025-03-20', reason: 'lost' }), 'loss A');
   must(await capNew(s, { businessDate: '2025-03-20', book: 'icecream', fund: 'cost', amountCents: 40000 }), 'ice capital');
   if (withVoids) must(await trVoid(s, (must(await tr(s, 'telecom', 'shop', 7777, { businessDate: '2025-03-20' }), 'transfer void')).item.id), 'void transfer');
-  must(await countNew(s, 'telecom', 5685713, { businessDate: '2025-03-20', note: 'Over' }), 'telecom count');
+  // Telecom counts are per segment (13D): counting Dialog Reloads (hand sum 5,543,457 on 03-20: over 800; 5,637,257 on 04-06: short 300) keeps every Telecom total of the old single-book figures.
+  must(await countNew(s, 'telecom', 5544257, { businessDate: '2025-03-20', segment: 'dialog_reloads', note: 'Over' }), 'telecom count');
   if (withVoids) must(await lossVoid(s, (must(await lossNew(s, C, 1, { businessDate: '2025-03-21', reason: 'other' }), 'loss C')).item.id), 'void loss C');
   // ---- 03-24 .. 03-28
   must(await post(s.app, `/purchases/${pe.id}/returns`, { businessDate: '2025-03-24', items: [{ purchaseItemId: pe.items[0].id, units: 1 }], clientRef: ref() }), 'purchase return');
@@ -206,7 +207,7 @@ export async function buildFinWorld(s: ApiBase, withVoids = true): Promise<FinWo
   await moveOk(s, 'cost', 'profit', 3000, { businessDate: '2025-04-03' });
   must(await psNew(s, { businessDate: '2025-04-04', qty: 20 }, 'BW_2S'), 'print April');
   must(await countNew(s, 'shop', 606000, { businessDate: '2025-04-05', note: 'Over' }), 'shop count 2');
-  must(await countNew(s, 'telecom', 5778413, { businessDate: '2025-04-06', note: 'Short' }), 'telecom count 2');
+  must(await countNew(s, 'telecom', 5636957, { businessDate: '2025-04-06', segment: 'dialog_reloads', note: 'Short' }), 'telecom count 2');
   void cl; void sid; void ezVoid;
   return { A, B, C, E, X, s1, s2 };
 }

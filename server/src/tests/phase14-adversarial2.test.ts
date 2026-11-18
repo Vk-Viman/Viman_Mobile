@@ -143,12 +143,12 @@ describe('daily closings and opening balances', () => {
     expect([f.status, f.body.error?.code]).toEqual([400, 'FUTURE_DATE_NOT_ALLOWED']);
     await must(await closeNew(s, 'shop', D(3)), 'close');
     expect((await get(s.app, `/daily-closings/status?book=shop&businessDate=${D(3)}`)).body.isClosed).toBe(true);
-    expect((await get(s.app, `/daily-closings/status?book=telecom&businessDate=${D(3)}`)).body.isClosed).toBe(false);
+    expect((await get(s.app, `/daily-closings/status?book=telecom&segment=dialog_reloads&businessDate=${D(3)}`)).body.isClosed).toBe(false);
     // section 8 (migration 016): the day before the closed day D(3) is protected; before 016 this was accepted (201)
     const before = await unchanged(s, () => post(s.app, '/capital', { businessDate: D(4), book: 'shop', amountCents: 1, clientRef: ref() }));
     expect([before.status, before.body.error?.code]).toEqual([409, 'BACKDATE_BEFORE_CLOSED_DAY']);
     expect((await post(s.app, '/capital', { businessDate: D(2), book: 'shop', amountCents: 1, clientRef: ref() })).status).toBe(201);
-    expect((await post(s.app, '/capital', { businessDate: D(3), book: 'telecom', amountCents: 1, clientRef: ref() })).status).toBe(201);
+    expect((await post(s.app, '/capital', { businessDate: D(3), book: 'telecom', segment: 'dialog_reloads', amountCents: 1, clientRef: ref() })).status).toBe(201);
     const c = await unchanged(s, () => capNew(s, { businessDate: D(3), book: 'shop', amountCents: 1 }));
     expect([c.status, c.body.error?.code]).toEqual([409, 'DAY_CLOSED']);
     // a TRANSFER touching a closed book on either side is refused, whichever side

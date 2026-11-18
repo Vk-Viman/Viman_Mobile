@@ -293,7 +293,7 @@ describe('category provider API (13D): Telecom categories only, locked once the 
     const loose = (await post(s.app, '/categories', { name: 'Loose cards', book: 'telecom' })).body.item;
     const r = await post(s.app, '/products', { name: 'Card 50', categoryId: loose.id, kind: 'stock', sellPriceCents: 5000, minPriceCents: 4000 });
     expect(r.status).toBe(400);
-    expect(err(r)).toMatchObject({ code: 'PRODUCT_NEEDS_PROVIDER', fields: { categoryId: 'Choose a category linked to a provider.' } });
+    expect(err(r)).toMatchObject({ code: 'PRODUCT_NEEDS_PROVIDER', fields: { categoryId: 'Choose a Telecom category that is linked to a provider (Dialog, Mobitel, Airtel or Hutch) first.' } });
     expect(Number((s.ctx.database.conn.prepare('SELECT COUNT(*) AS n FROM products').get() as { n: number | bigint }).n)).toBe(0);
     expect((await post(s.app, '/products', { name: 'Service', categoryId: loose.id, kind: 'service', sellPriceCents: 5000, minPriceCents: 0, reorderLevel: 0 })).status).toBe(201);
     expect((await post(s.app, '/products', { name: 'Shop item', categoryId: s.ids['Other'], kind: 'stock', sellPriceCents: 5000, minPriceCents: 0 })).status).toBe(201);

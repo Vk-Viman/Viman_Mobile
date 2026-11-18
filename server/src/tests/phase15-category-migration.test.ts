@@ -50,6 +50,12 @@ describe('migration 015 on a database that already holds data', () => {
       cashbooks: (await get(s1.app, '/cashbooks')).body,
     };
     const snapBefore = snapshotAll(s1.ctx);
+    // Migration 024 (Telecom segments, a LATER version than the one re-applied below) added categories.provider_id, an index and two triggers. The rewind
+    // to the schema-14 table form drops them with the table, so the values and the objects are kept here and put back after the re-applied 015.
+    const providerOf = rows(s1.ctx, 'SELECT id, provider_id FROM categories WHERE provider_id IS NOT NULL ORDER BY id');
+    const catsTableSql = String(rows(s1.ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'categories'")[0]!.sql);
+    const later024 = rows(s1.ctx, "SELECT type, name, sql FROM sqlite_master WHERE tbl_name = 'categories' AND name IN ('idx_categories_provider', 'trg_categories_provider_insert', 'trg_categories_provider_update') ORDER BY type DESC, name");
+    expect(later024.map((o) => o.name)).toEqual(['trg_categories_provider_insert', 'trg_categories_provider_update', 'idx_categories_provider']);
     const catsBefore = rows(s1.ctx, 'SELECT id, name, book, is_default, active, created_at, updated_at FROM categories ORDER BY id');
     const linksBefore = rows(s1.ctx, 'SELECT id, category_id, book FROM products ORDER BY id');
     expect(catsBefore.length).toBe(14); // 12 seeded + Pens + Top-up cards
@@ -72,7 +78,7 @@ describe('migration 015 on a database that already holds data', () => {
     raw.exec('CREATE TEMP TABLE c_bak AS SELECT * FROM categories');
     raw.exec('DROP TABLE categories');
     raw.exec(ddl('table', 'categories'));
-    raw.exec('INSERT INTO categories SELECT * FROM c_bak ORDER BY id');
+    raw.exec('INSERT INTO categories (id, name, book, is_default, active, created_at, updated_at) SELECT id, name, book, is_default, active, created_at, updated_at FROM c_bak ORDER BY id');
     raw.exec(ddl('trigger', 'trg_categories_default_locked'));
     raw.exec(ddl('trigger', 'trg_categories_book_has_products'));
     raw.exec('DROP TABLE c_bak');
@@ -87,6 +93,12 @@ describe('migration 015 on a database that already holds data', () => {
 
     // ---- start the app on it: migration 015 runs on real data
     const b2 = await env.build({ dataDir });
+    // put migration 024's column, values, index and triggers back exactly as they were (the re-applied 015 re-created `categories` with its own columns only)
+    expect(rows(b2.ctx, "SELECT name FROM sqlite_master WHERE tbl_name = 'categories' AND name LIKE '%provider%'")).toEqual([]);
+    b2.ctx.database.conn.exec('ALTER TABLE categories ADD COLUMN provider_id INTEGER REFERENCES reload_providers(id)');
+    for (const r of providerOf) b2.ctx.database.conn.prepare('UPDATE categories SET provider_id = ? WHERE id = ?').run(r.provider_id, r.id);
+    for (const o of later024) b2.ctx.database.conn.exec(String(o.sql));
+    expect(String(rows(b2.ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'categories'")[0]!.sql)).toBe(catsTableSql);
     const s2 = await apiBase(b2);
     expect(rows(s2.ctx, 'SELECT version FROM schema_migrations ORDER BY version').map((r) => Number(r.version))).toEqual(Array.from({ length: latestVersion() }, (_, i) => i + 1)); // every migration, 015 included (was a literal 15)
 
@@ -100,15 +112,16 @@ describe('migration 015 on a database that already holds data', () => {
 
     // schema as designed: no autoindex, the per-book index, the two old triggers and the delete guard
     expect(objects(s2.ctx.database.conn)).toEqual([
-      'index:ux_categories_book_name', 'table:categories',
+      'index:idx_categories_provider', 'index:ux_categories_book_name', 'table:categories', // idx_categories_provider and the two provider triggers: migration 024
       'trigger:trg_categories_book_has_products', 'trigger:trg_categories_default_locked', 'trigger:trg_categories_no_delete',
+      'trigger:trg_categories_provider_insert', 'trigger:trg_categories_provider_update',
     ]);
     expect(String(rows(s2.ctx, "SELECT sql FROM sqlite_master WHERE name = 'ux_categories_book_name'")[0]!.sql))
       .toBe('CREATE UNIQUE INDEX ux_categories_book_name ON categories(book, name COLLATE NOCASE)');
     expect(rows(s2.ctx, 'PRAGMA index_list(categories)').filter((i) => Number(i.unique) === 1).map((i) => i.name)).toEqual(['ux_categories_book_name']);
     // the products triggers and FK still point at the new table
     expect(rows(s2.ctx, "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'products' AND sql LIKE '%categories%' ORDER BY name").map((r) => r.name))
-      .toEqual(['trg_products_book_insert', 'trg_products_book_update']);
+      .toEqual(['trg_products_book_insert', 'trg_products_book_update', 'trg_products_needs_provider', 'trg_products_segment_locked']); // the last two: migration 024 (they read categories.provider_id)
     expect(rows(s2.ctx, 'PRAGMA foreign_key_list(products)').some((f) => f.table === 'categories' && f.from === 'category_id')).toBe(true);
 
     // the API gives the same answers as before the migration
@@ -125,7 +138,8 @@ describe('migration 015 on a database that already holds data', () => {
     expect(() => s2.ctx.database.conn.prepare('DELETE FROM categories WHERE id = ?').run(pens.id)).toThrow(/CATEGORY_DELETE_FORBIDDEN/);
     expect(() => s2.ctx.database.conn.prepare("UPDATE categories SET book = 'telecom' WHERE id = ?").run(pens.id)).toThrow(/CATEGORY_HAS_PRODUCTS/);
     expect(() => s2.ctx.database.conn.prepare("UPDATE categories SET name = 'X' WHERE name = 'Perfume'").run()).toThrow(/DEFAULT_CATEGORY_LOCKED/);
-    const created = await post(s2.app, '/products', { name: 'After migration', kind: 'stock', sellPriceCents: 100, minPriceCents: 50, newCategory: { name: 'Brand new', book: 'telecom' } });
+    const provId = (await get(s2.app, '/reload-providers')).body.items[0].id; // a new Telecom card category must name its provider (13D)
+    const created = await post(s2.app, '/products', { name: 'After migration', kind: 'stock', sellPriceCents: 100, minPriceCents: 50, newCategory: { name: 'Brand new', book: 'telecom', providerId: provId } });
     expect(created.status).toBe(201);
     expect(created.body.item.categoryId).toBe(16); // ids continue after the highest old id (15 = 'pens' in telecom)
     await assertGlobalInvariants(s2);

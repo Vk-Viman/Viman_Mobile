@@ -8,6 +8,7 @@ import { expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../../app.ts';
 import { get, post, put } from './catalog.ts';
+import { SEGMENTS } from './segments.ts';
 import { buy, daysAgo, mkProduct, mkTelecom, ref } from './inventory.ts';
 import type { ApiBase } from './inventory.ts';
 import { drawNew, lossNew, lossVoid, stComplete, stDraft } from './phase4.ts';
@@ -167,7 +168,8 @@ export async function buildWorld14(s: ApiBase): Promise<World14> {
   await must(await lossNew(s, R, 1, { ...on('08-15'), reason: 'lost' }), 'loss R');
   const lossO = await must(await lossNew(s, S, 1, { ...on('08-15'), reason: 'other' }), 'loss S other');
   await must(await lossVoid(s, lossO.item.id), 'void loss');
-  await must(await countNew(s, 'telecom', 7844566, { ...on('08-15'), note: 'Over by two hundred' }), 'telecom count over');
+  // Telecom counts are per segment now (13D): the count is of Dialog Reloads (hand sum of its rows 7,024,567 on 08-15 and 8,424,567 on 09-10), so the over/short (+200, -300) and every Telecom total keep the hand figures.
+  await must(await countNew(s, 'telecom', 7044567, { ...on('08-15'), segment: 'dialog_reloads', note: 'Over by two hundred' }), 'telecom count over');
 
   // ---- 08-16 Sat
   await must(await tr(s, 'icecream', 'shop', rs(1000), { ...on('08-16'), fromFund: 'profit' }), 'transfer ice>shop');
@@ -208,7 +210,7 @@ export async function buildWorld14(s: ApiBase): Promise<World14> {
   await must(await capNew(s, { ...on('09-09'), book: 'icecream', fund: 'electricity', amountCents: rs(500) }), 'ice capital');
   // ---- 09-10 counts (over / short) and 09-12 ice cream closing
   await must(await countNew(s, 'shop', 2977000, { ...on('09-10'), note: 'Over by 120' }), 'shop count sept');
-  await must(await countNew(s, 'telecom', 9694566, { ...on('09-10'), note: 'Short by 300' }), 'telecom count sept');
+  await must(await countNew(s, 'telecom', 8394567, { ...on('09-10'), segment: 'dialog_reloads', note: 'Short by 300' }), 'telecom count sept');
   await must(await countNew(s, 'icecream', 1440000, { ...on('09-10'), fund: 'profit', note: 'Short by 100' }), 'ice count');
   const icl = await must(await closeNew(s, 'icecream', '2025-09-12'), 'close ice');
   const a = await payNew(s, 'other_cost', rs(50), { fund: 'cost', ...on('09-12') });
@@ -575,7 +577,7 @@ export function rng14(seed: number): () => number {
 }
 
 interface Delta {
-  cash: Array<{ book: Book; amt: number; fund?: Fund }>;
+  cash: Array<{ book: Book; amt: number; fund?: Fund; dr?: boolean }>;
   fund: Array<{ fund: Fund; amt: number }>;
   stock: Array<{ pid: number; qty: number; value: number }>;
 }
@@ -599,10 +601,13 @@ export class Simulation {
   rnd: () => number;
   seed: number;
   cash: Record<Book, number> = { shop: 0, telecom: 0, icecream: 0 };
+  /** Balance of the Telecom Dialog Reloads segment alone (13D): the entry-chosen Telecom writes and the cash counts of the simulation use it; every other Telecom flow sits in another segment. */
+  cashDR = 0;
+  provDialog = 0;
   fund: Record<Fund, number> = { cost: 0, electricity: 0, profit: 0 };
   stock = new Map<number, { qty: number; value: number }>();
   closed = new Set<string>();
-  closingIds = new Map<string, number>();
+  closingIds = new Map<string, number[]>();
   recs: Rec[] = [];
   shopP: number[] = [];
   telP: number[] = [];
@@ -667,7 +672,7 @@ export class Simulation {
 
   // ---------- model ----------
   apply(d: Delta, sign: 1 | -1): void {
-    for (const c of d.cash) { this.cash[c.book] += sign * c.amt; if (c.book === 'icecream') this.fund[c.fund!] += sign * c.amt; }
+    for (const c of d.cash) { this.cash[c.book] += sign * c.amt; if (c.book === 'telecom' && c.dr) this.cashDR += sign * c.amt; if (c.book === 'icecream') this.fund[c.fund!] += sign * c.amt; }
     for (const f of d.fund) this.fund[f.fund] += sign * f.amt;
     for (const st of d.stock) { const p = this.stock.get(st.pid)!; p.qty += sign * st.qty; p.value += sign * st.value; }
   }
@@ -776,10 +781,10 @@ export class Simulation {
     for (const n of names) this.shopP.push((await mkProduct(s, { name: `Sim ${n} ${this.seed}`, sellPriceCents: 50000, minPriceCents: 100 })).id);
     for (const n of ['K', 'L']) this.telP.push((await mkTelecom(s, { name: `Sim ${n} ${this.seed}`, sellPriceCents: 10000, minPriceCents: 100 })).id);
     for (const pid of [...this.shopP, ...this.telP]) this.stock.set(pid, { qty: 0, value: 0 });
-    this.prov = Object.values(await providerIds(s));
+    const provIds = await providerIds(s); this.prov = Object.values(provIds); this.provDialog = provIds.Dialog!;
     const d = daysAgo(14);
     await must(await openNew(s, 'shop', { businessDate: d, amountCents: 5000000 }), 'open shop'); this.cash.shop += 5000000;
-    await must(await openNew(s, 'telecom', { businessDate: d, amountCents: 3000000 }), 'open telecom'); this.cash.telecom += 3000000;
+    await must(await openNew(s, 'telecom', { businessDate: d, amountCents: 3000000 }), 'open telecom'); this.cash.telecom += 3000000; this.cashDR += 3000000;
     await must(await openNew(s, 'icecream', { businessDate: d, amountCents: 400000, fund: 'cost' }), 'open ice cost'); this.cash.icecream += 400000; this.fund.cost += 400000;
     await must(await openNew(s, 'icecream', { businessDate: d, amountCents: 100000, fund: 'profit' }), 'open ice profit'); this.cash.icecream += 100000; this.fund.profit += 100000;
     const o1 = this.shopP[0]!; const o2 = this.telP[0]!;
@@ -805,8 +810,8 @@ export class Simulation {
     this.apply(rec.delta, 1);
     return full;
   }
-  cashRec(kind: string, id: number, date: string, book: Book, amt: number, fund?: Fund, url: string | null = null): Rec {
-    return this.addRec({ kind, id, date, books: [book], delta: { cash: [{ book, amt, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: url });
+  cashRec(kind: string, id: number, date: string, book: Book, amt: number, fund?: Fund, url: string | null = null, dr = false): Rec {
+    return this.addRec({ kind, id, date, books: [book], delta: { cash: [{ book, amt, ...(fund ? { fund } : {}), ...(dr ? { dr } : {}) }], fund: [], stock: [] }, voidUrl: url });
   }
 
   // ---------- operations ----------
@@ -1006,24 +1011,25 @@ export class Simulation {
     const amt = this.int(100, 90000);
     if (t === 0 || t === 1) { // expense
       const book: Book = this.chance(0.6) ? 'shop' : 'telecom'; const date = this.date([book]); if (!date) return;
-      const body = { businessDate: date, book, category: this.pick(CATS), amountCents: amt, description: 'sim', clientRef: ref() };
+      const body = { businessDate: date, book, ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), category: this.pick(CATS), amountCents: amt, description: 'sim', clientRef: ref() };
       const out = await this.expectCreated('expense', await post(this.s.app, '/expenses', body));
       this.lastExpense = body;
-      this.cashRec('expense', out.item.id, date, book, -amt, undefined, `/expenses/${out.item.id}/void`);
+      this.cashRec('expense', out.item.id, date, book, -amt, undefined, `/expenses/${out.item.id}/void`, book === 'telecom');
     } else if (t === 2) { // reload
       const date = this.date(['telecom']); if (!date) return;
       const extra = this.chance(0.3) ? this.int(0, 500) : undefined;
-      const out = await this.expectCreated('reload', await post(this.s.app, '/reload-sales', { businessDate: date, providerId: this.pick(this.prov), salesCents: amt, ...(extra !== undefined ? { extraCents: extra } : {}), clientRef: ref() }));
-      this.cashRec('reload', out.item.id, date, 'telecom', amt, undefined, `/reload-sales/${out.item.id}/void`);
+      const reloadProv = this.pick(this.prov);
+      const out = await this.expectCreated('reload', await post(this.s.app, '/reload-sales', { businessDate: date, providerId: reloadProv, salesCents: amt, ...(extra !== undefined ? { extraCents: extra } : {}), clientRef: ref() }));
+      this.cashRec('reload', out.item.id, date, 'telecom', amt, undefined, `/reload-sales/${out.item.id}/void`, reloadProv === this.provDialog);
     } else if (t === 3) { // ezcash
       const date = this.date(['telecom']); if (!date) return;
       const out = await this.expectCreated('ezcash', await post(this.s.app, '/ezcash-sales', { businessDate: date, billTotalCents: amt, clientRef: ref() }));
-      this.cashRec('ezcash', out.item.id, date, 'telecom', amt, undefined, `/ezcash-sales/${out.item.id}/void`);
+      this.cashRec('ezcash', out.item.id, date, 'telecom', amt, undefined, `/ezcash-sales/${out.item.id}/void`, true);
     } else if (t === 4) { // top-up
       const date = this.date(['telecom']); if (!date) return;
-      const provider = this.chance(0.5);
-      const out = await this.expectCreated('topup', await post(this.s.app, '/telecom/topups', { businessDate: date, kind: provider ? 'provider_topup' : 'wallet_topup', ...(provider ? { providerId: this.pick(this.prov) } : {}), amountCents: amt, clientRef: ref() }));
-      this.cashRec('topup', out.item.id, date, 'telecom', -amt, undefined, `/telecom/topups/${out.item.id}/void`);
+      const provider = this.chance(0.5); const topProv = provider ? this.pick(this.prov) : 0;
+      const out = await this.expectCreated('topup', await post(this.s.app, '/telecom/topups', { businessDate: date, kind: provider ? 'provider_topup' : 'wallet_topup', ...(provider ? { providerId: topProv } : {}), amountCents: amt, clientRef: ref() }));
+      this.cashRec('topup', out.item.id, date, 'telecom', -amt, undefined, `/telecom/topups/${out.item.id}/void`, !provider || topProv === this.provDialog);
     } else if (t === 5) { // print sale or supplies
       const date = this.date(['shop']); if (!date) return;
       if (this.chance(0.6)) {
@@ -1039,19 +1045,19 @@ export class Simulation {
       const book: Book = this.pick(['shop', 'telecom', 'icecream']); const date = this.date([book]); if (!date) return;
       const fund: Fund | undefined = book === 'icecream' ? this.pick(FUNDS) : undefined;
       if (t === 6) {
-        const out = await this.expectCreated('cash drawing', await post(this.s.app, '/drawings', { kind: 'cash', businessDate: date, book, ...(fund ? { fund } : {}), amountCents: amt, clientRef: ref() }));
-        this.cashRec('cashdraw', out.item.id, date, book, -amt, fund, `/drawings/${out.item.id}/void`);
+        const out = await this.expectCreated('cash drawing', await post(this.s.app, '/drawings', { kind: 'cash', businessDate: date, book, ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), ...(fund ? { fund } : {}), amountCents: amt, clientRef: ref() }));
+        this.cashRec('cashdraw', out.item.id, date, book, -amt, fund, `/drawings/${out.item.id}/void`, book === 'telecom');
       } else {
-        const out = await this.expectCreated('capital', await post(this.s.app, '/capital', { businessDate: date, book, ...(fund ? { fund } : {}), amountCents: amt, clientRef: ref() }));
-        this.cashRec('capital', out.item.id, date, book, amt, fund, `/capital-entries/${out.item.id}/void`);
+        const out = await this.expectCreated('capital', await post(this.s.app, '/capital', { businessDate: date, book, ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), ...(fund ? { fund } : {}), amountCents: amt, clientRef: ref() }));
+        this.cashRec('capital', out.item.id, date, book, amt, fund, `/capital-entries/${out.item.id}/void`, book === 'telecom');
       }
     } else { // transfer
       const from: Book = this.pick(['shop', 'telecom', 'icecream']); let to: Book = this.pick(['shop', 'telecom', 'icecream']);
       if (to === from) to = from === 'shop' ? 'telecom' : 'shop';
       const date = this.date([from, to]); if (!date) return;
       const ff: Fund | undefined = from === 'icecream' ? this.pick(FUNDS) : undefined; const tf: Fund | undefined = to === 'icecream' ? this.pick(FUNDS) : undefined;
-      const out = await this.expectCreated('transfer', await post(this.s.app, '/cash-transfers', { businessDate: date, fromBook: from, toBook: to, ...(ff ? { fromFund: ff } : {}), ...(tf ? { toFund: tf } : {}), amountCents: amt, clientRef: ref() }));
-      this.addRec({ kind: 'transfer', id: out.item.id, date, books: [from, to], delta: { cash: [{ book: from, amt: -amt, ...(ff ? { fund: ff } : {}) }, { book: to, amt, ...(tf ? { fund: tf } : {}) }], fund: [], stock: [] }, voidUrl: `/cash-transfers/${out.item.id}/void` });
+      const out = await this.expectCreated('transfer', await post(this.s.app, '/cash-transfers', { businessDate: date, fromBook: from, toBook: to, ...(from === 'telecom' ? { fromSegment: 'dialog_reloads' } : {}), ...(to === 'telecom' ? { toSegment: 'dialog_reloads' } : {}), ...(ff ? { fromFund: ff } : {}), ...(tf ? { toFund: tf } : {}), amountCents: amt, clientRef: ref() }));
+      this.addRec({ kind: 'transfer', id: out.item.id, date, books: [from, to], delta: { cash: [{ book: from, amt: -amt, ...(ff ? { fund: ff } : {}), ...(from === 'telecom' ? { dr: true } : {}) }, { book: to, amt, ...(tf ? { fund: tf } : {}), ...(to === 'telecom' ? { dr: true } : {}) }], fund: [], stock: [] }, voidUrl: `/cash-transfers/${out.item.id}/void` });
     }
   }
 
@@ -1059,15 +1065,15 @@ export class Simulation {
     const book: Book = this.pick(['shop', 'telecom', 'icecream']);
     const today = daysAgo(0);
     const before = countsAll(this.s.ctx);
-    const expected = this.cash[book];
+    const expected = book === 'telecom' ? this.cashDR : this.cash[book];
     const delta = this.chance(0.2) ? 0 : this.int(-4000, 4000);
     const counted = Math.max(0, expected + delta); const diff = counted - expected;
     const fund: Fund | undefined = book === 'icecream' ? this.pick(FUNDS) : undefined;
-    const r = await post(this.s.app, '/cash-counts', { businessDate: today, book, countedCents: counted, ...(fund && diff !== 0 ? { fund } : {}), ...(diff !== 0 ? { note: 'sim count' } : {}), clientRef: ref() });
+    const r = await post(this.s.app, '/cash-counts', { businessDate: today, book, ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), countedCents: counted, ...(fund && diff !== 0 ? { fund } : {}), ...(diff !== 0 ? { note: 'sim count' } : {}), clientRef: ref() });
     if (this.isClosed([book], today)) return this.refuse('count', r, 409, 'DAY_CLOSED', before);
     const out = await this.expectCreated('count', r);
     expect([out.item.expectedCents, out.item.differenceCents], 'count expected/difference vs model').toEqual([expected, diff]);
-    if (diff !== 0) this.addRec({ kind: 'count', id: out.item.id, date: today, books: [book], delta: { cash: [{ book, amt: diff, ...(fund ? { fund } : {}) }], fund: [], stock: [] }, voidUrl: `/cash-counts/${out.item.id}/void`, ice: { type: 'count', diff } });
+    if (diff !== 0) this.addRec({ kind: 'count', id: out.item.id, date: today, books: [book], delta: { cash: [{ book, amt: diff, ...(fund ? { fund } : {}), ...(book === 'telecom' ? { dr: true } : {}) }], fund: [], stock: [] }, voidUrl: `/cash-counts/${out.item.id}/void`, ice: { type: 'count', diff } });
     if (diff !== 0 && book === 'icecream') this.ice.RP += diff; // cash over/short is a recognition event whatever fund is chosen (C4)
   }
 
@@ -1150,16 +1156,22 @@ export class Simulation {
   async opClose(): Promise<void> {
     const book: Book = this.pick(['shop', 'telecom', 'icecream']); const date = daysAgo(this.int(0, 14));
     const key = `${book}|${date}`; const before = countsAll(this.s.ctx);
-    const r = await post(this.s.app, '/daily-closings', { book, businessDate: date, clientRef: ref() });
+    // Telecom closes per segment (13D): the simulation closes all eight together, so "Telecom closed on a date" keeps its old meaning.
+    const segs: Array<string | undefined> = book === 'telecom' ? [...SEGMENTS] : [undefined];
+    const r = await post(this.s.app, '/daily-closings', { book, ...(segs[0] ? { segment: segs[0] } : {}), businessDate: date, clientRef: ref() });
     if (this.closed.has(key)) return this.refuse('close', r, 409, 'DAY_ALREADY_CLOSED', before);
-    const out = await this.expectCreated('close', r);
-    this.closed.add(key); this.closingIds.set(key, out.item.id);
+    const first = await this.expectCreated('close', r);
+    const ids = [first.item.id as number];
+    for (const sg of segs.slice(1)) ids.push((await this.expectCreated(`close ${sg}`, await post(this.s.app, '/daily-closings', { book, segment: sg, businessDate: date, clientRef: ref() }))).item.id);
+    this.closed.add(key); this.closingIds.set(key, ids);
   }
   async opReopen(): Promise<void> {
     const keys = [...this.closed]; if (!keys.length) return;
     const key = this.pick(keys);
-    const r = await post(this.s.app, `/daily-closings/${this.closingIds.get(key)}/reopen`, { reason: 'sim reopen' });
-    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    for (const id of this.closingIds.get(key)!) {
+      const r = await post(this.s.app, `/daily-closings/${id}/reopen`, { reason: 'sim reopen' });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
     this.closed.delete(key);
   }
 
@@ -1170,8 +1182,8 @@ export class Simulation {
     const before = countsAll(this.s.ctx);
     let r: { status: number; body: any };
     if (book === 'icecream') r = await post(this.s.app, '/icecream/payments', { businessDate: date, kind: 'materials', fund: 'cost', amountCents: 500, description: 'closed', clientRef: ref() });
-    else if (this.chance(0.5)) r = await post(this.s.app, '/expenses', { businessDate: date, book, category: 'other', amountCents: 500, description: 'closed', clientRef: ref() });
-    else r = await post(this.s.app, '/cash-transfers', { businessDate: date, fromBook: book, toBook: book === 'shop' ? 'telecom' : 'shop', amountCents: 500, clientRef: ref() });
+    else if (this.chance(0.5)) r = await post(this.s.app, '/expenses', { businessDate: date, book, ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), category: 'other', amountCents: 500, description: 'closed', clientRef: ref() });
+    else r = await post(this.s.app, '/cash-transfers', { businessDate: date, fromBook: book, toBook: book === 'shop' ? 'telecom' : 'shop', ...(book === 'telecom' ? { fromSegment: 'dialog_reloads' } : { toSegment: 'dialog_reloads' }), amountCents: 500, clientRef: ref() });
     await this.refuse('closed-day attempt', r, 409, 'DAY_CLOSED', before);
   }
 

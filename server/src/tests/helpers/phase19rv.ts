@@ -152,6 +152,8 @@ import { mkProduct, mkTelecom, ref } from './inventory.ts';
 import { err } from './phase4.ts';
 import { mdr, voidSaleNew } from './phase5.ts';
 import { closeNew, openNew, reopenNew } from './phase8.ts';
+import { SEGMENTS } from './segments.ts';
+import type { SegmentCode } from './segments.ts';
 import { voidReturnNew } from './phase17.ts';
 import { dash } from './phase12.ts';
 
@@ -183,7 +185,7 @@ export class RvSim {
   purs: MPur[] = []; sales: MSale[] = []; rets: MRet[] = [];
   /** stock adjustment COSTS (+ cost / - gain) of purchase returns, purchase voids and sales-return voids, attributed to their business date */
   adj: Array<{ book: Book; date: string; amt: number }> = [];
-  closings = new Map<string, { id: number; closed: boolean }>();
+  closings = new Map<string, { id: number; ids: number[]; closed: boolean }>();
 
   constructor(s: ApiBase, seed: number) { this.s = s; this.seed = seed; this.rnd = rng14(seed); }
 
@@ -492,18 +494,22 @@ export class RvSim {
     const open = DATES.filter((d) => !this.closedDates(book).includes(d));
     if (open.length === 0) return;
     const date = this.pick(open);
-    const r = await this.attempt('close', () => closeNew(this.s, book, date), null);
+    // Telecom closes per segment (13D): the model closes all eight together, so "Telecom closed on a date" keeps its old meaning, and the
+    // expected cash of the Telecom book is the sum of the eight closings' expected cash
+    const segs: Array<SegmentCode | undefined> = book === 'telecom' ? [...SEGMENTS] : [undefined];
+    const items: any[] = [];
+    for (const sg of segs) items.push((await this.attempt('close', () => closeNew(this.s, book, date, sg ? { segment: sg } : {}), null)).body.item);
     const expected = this.ledger.filter((e) => e.book === book && e.date <= date).reduce((a, e) => a + e.amt, 0);
-    expect(r.body.item.expectedCents, 'closing expected cash').toBe(expected);
-    this.closings.set(`${book}|${date}`, { id: r.body.item.id, closed: true });
+    expect(items.reduce((a, it) => a + it.expectedCents, 0), 'closing expected cash').toBe(expected);
+    this.closings.set(`${book}|${date}`, { id: items[0].id, ids: items.map((it) => it.id), closed: true });
   }
 
   async opReopen(): Promise<void> {
     if (this.closings.size === 0) return this.opClose();
     const [key, c] = this.pick([...this.closings]);
     const exp: Exp | null = c.closed ? null : { status: 409, code: 'DAY_NOT_CLOSED' };
-    await this.attempt('reopen', () => reopenNew(this.s, c.id, 'random reopen'), exp);
-    if (!exp) this.closings.set(key, { id: c.id, closed: false });
+    for (const id of c.ids) await this.attempt('reopen', () => reopenNew(this.s, id, 'random reopen'), exp);
+    if (!exp) this.closings.set(key, { id: c.id, ids: c.ids, closed: false });
   }
 
   // ---------------------------------------------------------------- the comparison after every operation
