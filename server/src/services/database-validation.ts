@@ -13,7 +13,7 @@
  *   migration_records     versions 1..N all present, names and SHA-256 checksums equal to the program's migration files
  *   schema_objects        tables (and columns), indexes and triggers equal a reference database built from migrations 1..N
  *   trial_upgrade         a temporary COPY is upgraded to the current version with the real `migrate()` and must succeed
- *   stock_reconciliation, cash_ledger, icecream_funds, returned_qty, void_reversals, future_dates
+ *   stock_reconciliation, cash_ledger, icecream_funds, returned_qty, void_reversals, future_dates, segments
  *                         business invariants, evaluated on the upgraded copy (see database-validation-invariants.ts)
  * Unique indexes and append-only triggers are part of `schema_objects`; their data-level effect is covered by
  * `integrity_check` (an index must agree with its table). A change inside free-text columns (names, notes) keeps the
