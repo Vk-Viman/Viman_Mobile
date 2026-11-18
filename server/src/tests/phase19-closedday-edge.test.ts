@@ -12,10 +12,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { get, post } from './helpers/catalog.ts';
-import { apiBase, daysAgo, daysAhead, ref, today } from './helpers/inventory.ts';
+import { apiBase, daysAgo, daysAhead, mkTelecom, ref, today } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
 import { err, num, sql } from './helpers/phase4.ts';
-import { cl, returnNew, rl, sellNew, sellOk } from './helpers/phase5.ts';
+import { cl, returnNew, rl, sellNew, sellOk, stocked } from './helpers/phase5.ts';
+import { ez, rel, topWallet } from './helpers/phase6.ts';
+import { SEGMENTS } from './helpers/segments.ts';
+import { seg } from './helpers/seg.ts';
 import { closeNew, countNew, countVoid, openNew, reopenNew } from './helpers/phase8.ts';
 import { capNew, drawCash, tr } from './helpers/phase9.ts';
 import { dayNew, moveNew, payNew } from './helpers/phase10.ts';
@@ -29,6 +32,8 @@ import {
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
+/** 13D: the segment of a Telecom write made by the default builders (reloads, EZCash, top-ups, entry-chosen records, transfer sides). */
+const RL = 'dialog_reloads';
 const fresh = async () => { const s = await apiBase(await env.build()); return { s, fx: await fixture(s, { returns: 2 }) }; };
 
 // =============================================================================================
@@ -126,7 +131,7 @@ describe('D2 clientRef replay after the day was closed later', () => {
       ['cash drawing', '/drawings', (d) => ({ kind: 'cash', businessDate: d, book: 'shop', amountCents: 100, clientRef: k('cashdraw') })],
       ['goods drawing', '/drawings', (d) => ({ kind: 'goods', businessDate: d, productId: fx.shopP.id, qty: 1, clientRef: k('goodsdraw') })],
       ['stock loss', '/stock-losses', (d) => ({ businessDate: d, productId: fx.shopP.id, qty: 1, reason: 'damaged', clientRef: k('loss') })],
-      ['transfer', '/cash-transfers', (d) => ({ businessDate: d, fromBook: 'shop', toBook: 'telecom', amountCents: 100, clientRef: k('transfer') })],
+      ['transfer', '/cash-transfers', (d) => ({ businessDate: d, fromBook: 'shop', toBook: 'telecom', toSegment: 'dialog_reloads', amountCents: 100, clientRef: k('transfer') })],
       ['reload', '/reload-sales', (d) => ({ businessDate: d, providerId: fx.prov.Dialog, salesCents: 10000, clientRef: k('reload') })],
       ['ezcash', '/ezcash-sales', (d) => ({ businessDate: d, billTotalCents: 10000, clientRef: k('ezcash') })],
       ['wallet top-up', '/telecom/topups', (d) => ({ businessDate: d, kind: 'wallet_topup', amountCents: 1000, clientRef: k('topup') })],
@@ -327,20 +332,20 @@ describe('D5 closed days in different books', () => {
     await closeBooks(s, ['telecom'], daysAgo(2));   // Telecom latest = D2
     const t = (d: string, from: any = 'shop', to: any = 'telecom') => tr(s, from, to, 100, { businessDate: d });
     // dated D4: after the Shop closed day, but Telecom closed LATER (D2) -> BACKDATE naming Telecom
-    expect(err(await t(daysAgo(4)))).toEqual(backdateBody('telecom', daysAgo(2), daysAgo(4)));
+    expect(err(await t(daysAgo(4)))).toEqual(backdateBody('telecom', daysAgo(2), daysAgo(4), RL));
     // dated D6: both books have a later closed day -> BACKDATE naming the FIRST book (shop)
     expect(err(await t(daysAgo(6)))).toEqual(backdateBody('shop', daysAgo(5), daysAgo(6)));
     // dated D5: Shop DAY_CLOSED (Telecom would be BACKDATE): DAY_CLOSED wins
     expect(err(await t(daysAgo(5)))).toEqual(dayClosedBody('shop', daysAgo(5)));
     // dated D2: Telecom DAY_CLOSED
-    expect(err(await t(daysAgo(2)))).toEqual(dayClosedBody('telecom', daysAgo(2)));
+    expect(err(await t(daysAgo(2)))).toEqual(dayClosedBody('telecom', daysAgo(2), RL));
     // dated D1 (after both): fine
     expect(ok(await t(daysAgo(1)))).toBe(true);
     // Ice Cream is not touched by a Shop -> Telecom transfer even when closed on every day
     await closeBooks(s, ['icecream'], daysAgo(1));
     expect(ok(await t(today()))).toBe(true);
     // precedence across kinds: Telecom -> Ice Cream dated D2: Telecom DAY_CLOSED, Ice Cream BACKDATE (latest closed D1) -> DAY_CLOSED wins
-    expect(err(await tr(s, 'telecom', 'icecream', 100, { businessDate: daysAgo(2), toFund: 'profit' }))).toEqual(dayClosedBody('telecom', daysAgo(2)));
+    expect(err(await tr(s, 'telecom', 'icecream', 100, { businessDate: daysAgo(2), toFund: 'profit' }))).toEqual(dayClosedBody('telecom', daysAgo(2), RL));
     // a Shop line and a Telecom line in one cart: only Telecom has a later closed day
     const cart = await sellNew(s, [cl(fixtureShop(s), 1, 3000)], { businessDate: daysAgo(4) });
     expect(cart.status).toBe(201); // shop-only cart dated D4 > D5: accepted
@@ -352,7 +357,7 @@ describe('D5 closed days in different books', () => {
     const snap = fullSnapshot(s);
     const r = await sellNew(s, [cl(fx.shopP.id, 1, 3000), cl(fx.telP.id, 1, 3000)], { businessDate: E() });
     expect(r.status).toBe(409);
-    expect(err(r)).toEqual(backdateBody('telecom', C(), E()));
+    expect(err(r)).toEqual(backdateBody('telecom', C(), E(), 'dialog_cards'));
     expect(fullSnapshot(s)).toEqual(snap);
     expect(ok(await sellNew(s, [cl(fx.shopP.id, 1, 3000)], { businessDate: E() }))).toBe(true); // Shop alone is fine
   });
@@ -424,8 +429,8 @@ describe('D7 calendar boundaries, leap day, far past, future', () => {
     const { s } = await fresh();
     must(await closeNew(s, 'telecom', today()));
     const w = (d: string) => post(s.app, '/telecom/topups', { businessDate: d, kind: 'wallet_topup', amountCents: 100, clientRef: ref() });
-    expect(err(await w(today()))).toEqual(dayClosedBody('telecom', today()));
-    expect(err(await w(daysAgo(1)))).toEqual(backdateBody('telecom', today(), daysAgo(1)));
+    expect(err(await w(today()))).toEqual(dayClosedBody('telecom', today(), RL));
+    expect(err(await w(daysAgo(1)))).toEqual(backdateBody('telecom', today(), daysAgo(1), RL));
     expect(err(await w(daysAhead(1))).code).toBe('FUTURE_DATE_NOT_ALLOWED');
     expect(err(await w('9999-12-31')).code).toBe('FUTURE_DATE_NOT_ALLOWED');
     expect(err(await closeNew(s, 'telecom', daysAhead(1))).code).toBe('FUTURE_DATE_NOT_ALLOWED');
@@ -532,4 +537,67 @@ describe('D8 concurrent requests: no write may land in a closed day', () => {
     expect(closedSnapshotViolations(s)).toEqual([]);
   });
 });
+
+// =============================================================================================
+describe('D9 (13D) closed days are per Telecom SEGMENT: a closing of one segment never blocks another', () => {
+  it('Dialog Cards closed on C: the SAME-date and earlier writes of Dialog Reloads, Mobitel Cards and the other segments are accepted; only Dialog Cards refuses (exact bodies, nothing written)', async () => {
+    const { s, fx } = await fresh();
+    await seg.closeOk(s, 'dialog_cards', C());
+    const snap = fullSnapshot(s);
+    // a card sale (Dialog Cards): backdated and same-day are refused, naming the segment
+    const card = (d: string) => sellNew(s, [cl(fx.telP.id, 1, 3000)], { businessDate: d });
+    expect(err(await card(E()))).toEqual(backdateBody('telecom', C(), E(), 'dialog_cards'));
+    expect(err(await card(C()))).toEqual(dayClosedBody('telecom', C(), 'dialog_cards'));
+    // a Dialog Cards expense / capital / count are refused too (entry-chosen segment)
+    expect(err(await seg.expense(s, 'dialog_cards', { businessDate: C() }))).toEqual(dayClosedBody('telecom', C(), 'dialog_cards'));
+    expect(err(await seg.capital(s, 'dialog_cards', 1000, { businessDate: E() }))).toEqual(backdateBody('telecom', C(), E(), 'dialog_cards'));
+    expect(fullSnapshot(s)).toEqual(snap);
+    // every OTHER segment takes the same entries on the same dates
+    for (const other of SEGMENTS.filter((x) => x !== 'dialog_cards')) {
+      expect(ok(await seg.expense(s, other, { businessDate: C() })), `${other} expense on C`).toBe(true);
+      expect(ok(await seg.capital(s, other, 1000, { businessDate: E() })), `${other} capital on E`).toBe(true);
+    }
+    // reload / EZCash / top-up (Dialog Reloads) are not blocked by Dialog Cards
+    expect(ok(await rel(s, fx.prov.Dialog!, 10000, { businessDate: C() }))).toBe(true);
+    expect(ok(await rel(s, fx.prov.Dialog!, 10000, { businessDate: E() }))).toBe(true);
+    expect(ok(await ez(s, 10000, { businessDate: E() }))).toBe(true);
+    expect(ok(await topWallet(s, 5000, { businessDate: E() }))).toBe(true);
+    expect(closedSnapshotViolations(s)).toEqual([]);
+  });
+
+  it('backdating before a closed day only matters inside the SAME segment: Mobitel Reloads closed on C refuses a Mobitel reload dated E but not a Dialog reload dated E', async () => {
+    const { s, fx } = await fresh();
+    await seg.closeOk(s, 'mobitel_reloads', C());
+    expect(ok(await rel(s, fx.prov.Dialog!, 10000, { businessDate: E() }))).toBe(true);
+    const m = await rel(s, fx.prov.Mobitel!, 10000, { businessDate: E() });
+    expect(m.status, JSON.stringify(m.body)).toBe(409);
+    expect(err(m)).toEqual(backdateBody('telecom', C(), E(), 'mobitel_reloads'));
+    expect(err(await rel(s, fx.prov.Mobitel!, 10000, { businessDate: C() }))).toEqual(dayClosedBody('telecom', C(), 'mobitel_reloads'));
+    // Mobitel CARDS of the same provider are a different segment: open
+    expect(ok(await seg.expense(s, 'mobitel_cards', { businessDate: C() }))).toBe(true);
+  });
+
+  it('a transfer between two Telecom segments is judged per side: the closed side is named, the open side alone is fine', async () => {
+    const { s } = await fresh();
+    await seg.closeOk(s, 'hutch_cards', C());
+    const t = (d: string, from: string, to: string) => tr(s, 'telecom', 'telecom', 100, { businessDate: d, fromSegment: from, toSegment: to });
+    expect(err(await t(E(), 'dialog_reloads', 'hutch_cards'))).toEqual(backdateBody('telecom', C(), E(), 'hutch_cards'));
+    expect(err(await t(C(), 'hutch_cards', 'dialog_reloads'))).toEqual(dayClosedBody('telecom', C(), 'hutch_cards'));
+    expect(ok(await t(E(), 'dialog_reloads', 'airtel_reloads'))).toBe(true);
+    expect(ok(await t(L(), 'dialog_reloads', 'hutch_cards'))).toBe(true);
+  });
+
+  it('a mixed cart (Shop line + Mobitel card line) is refused whole when only Mobitel Cards is closed; a cart whose Telecom line is Dialog Cards is not affected', async () => {
+    const { s, fx } = await fresh();
+    const mob = await stocked(s, (x, o) => mkTelecom(x, { provider: 'Mobitel', minPriceCents: 0, ...o }), 100, 100000, { sellPriceCents: 3000 });
+    await seg.closeOk(s, 'mobitel_cards', C());
+    const snap = fullSnapshot(s);
+    const r = await sellNew(s, [cl(fx.shopP.id, 1, 3000), cl(mob.id, 1, 3000)], { businessDate: E() });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(err(r)).toEqual(backdateBody('telecom', C(), E(), 'mobitel_cards'));
+    expect(fullSnapshot(s)).toEqual(snap); // not even the Shop half
+    expect(ok(await sellNew(s, [cl(fx.shopP.id, 1, 3000), cl(fx.telP.id, 1, 3000)], { businessDate: E() }))).toBe(true); // Dialog Cards is open
+  });
+});
+
 void openNew; void M;
