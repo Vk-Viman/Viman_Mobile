@@ -36,10 +36,10 @@ export const RETURN_KEYS = [
 export const RETURN_ITEM_KEYS = ['cogsCents', 'extraCostCents', 'id', 'productId', 'productName', 'qty', 'resalable', 'revenueCents', 'saleItemId'].sort();
 /** Sorted keys of the `totals` object of GET /sales (C13 adds extraCostCents and costCents). */
 export const SALE_TOTALS_KEYS = ['cogsCents', 'costCents', 'extraCostCents', 'refundsCents', 'revenueCents'].sort();
-/** Sorted keys of a StockLoss (Phase 5 adds `salesReturnId`). */
+/** Sorted keys of a StockLoss (Phase 5 adds `salesReturnId`; the Telecom segments add `segment`, null outside Telecom). */
 export const LOSS_KEYS = [
   'backdated', 'book', 'businessDate', 'clientRef', 'costCents', 'id', 'note', 'postedAt', 'productId', 'productName', 'qty',
-  'reason', 'salesReturnId', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt',
+  'reason', 'salesReturnId', 'segment', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt',
 ].sort();
 
 let seq5 = 0;
