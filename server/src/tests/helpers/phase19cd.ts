@@ -128,6 +128,8 @@ export interface Op {
   returns?: boolean;
   /** Dates (E, C, L) of Ice Cream daily entries that must exist before the day is closed (replace operation). */
   seedDays?: boolean;
+  /** 13D: the Telecom SEGMENT the write posts into (what a refusal names). Default 'dialog_reloads'; card flows are 'dialog_cards'. Ignored for ops without the Telecom book. */
+  seg?: string;
   create: (fx: Fx, date: string) => Promise<Res>;
   void?: (fx: Fx, created: Res, date: string, focus: Book) => Promise<Res>;
   /** Tables left out of the 'nothing written' comparison (a stocktake's DRAFT is a separate, non-posting write made before the completion). */
@@ -139,6 +141,9 @@ export interface Op {
   /** Voiding is not offered by the API, or is covered through the dedicated operation (e.g. returns). */
   noVoidRecord?: boolean;
 }
+
+/** The segment a refusal of `op` names for `book` (undefined for Shop / Ice Cream: their messages and bodies carry no segment). */
+export const opSegment = (op: Op, book: Book): string | undefined => (book === 'telecom' ? op.seg ?? 'dialog_reloads' : undefined);
 
 const stockedMk = (fx: Fx, book: Book): any => (book === 'shop' ? fx.shopP : fx.telP);
 const bookKey = (b: Book): 'shop' | 'telecom' => (b === 'telecom' ? 'telecom' : 'shop');
@@ -227,6 +232,8 @@ function perBook(book: 'shop' | 'telecom'): Op[] {
       },
     },
   ];
+  // 13D: a Telecom product is a card product (Dialog Cards); a Telecom expense is entered in Dialog Reloads (the default of the builders).
+  if (book === 'telecom') for (const o of ops) o.seg = o.key.startsWith('expense') ? 'dialog_reloads' : 'dialog_cards';
   return ops;
 }
 
@@ -252,7 +259,7 @@ function perCashBook(book: Book): Op[] {
     {
       // Always 1,000 cents above the balance as of its date (or 0 when the balance is negative), so the adjustment (a cash entry) is never zero.
       key: `cash count with adjustment (${book})`, books: [book],
-      create: (fx, d) => { const b = balAsOf(fx.s, book, d); return countNew(fx.s, book, b >= 0 ? b + 1000 : 0, { businessDate: d, note: 'drawer differs', ...fund }); },
+      create: (fx, d) => { const b = balAsOf(fx.s, book, d, book === 'telecom' ? 'dialog_reloads' : null); return countNew(fx.s, book, b >= 0 ? b + 1000 : 0, { businessDate: d, note: 'drawer differs', ...fund }); },
       void: (fx, c) => countVoid(fx.s, c.body.item.id),
     },
   ];
@@ -350,13 +357,13 @@ function transfers(): Op[] {
 /** Operations that touch Shop AND Telecom with one request. */
 const MIXED: Op[] = [
   {
-    key: 'sale cart with a Shop and a Telecom line', books: ['shop', 'telecom'],
+    key: 'sale cart with a Shop and a Telecom line', books: ['shop', 'telecom'], seg: 'dialog_cards',
     create: (fx, d) => sellNew(fx.s, [cl(fx.shopP.id, 1, 3000), cl(fx.telP.id, 1, 3000)], { businessDate: d }),
     // The cart made two sales (one per book). Voiding is per sale, so the audit voids the sale of the `focus` book only.
     void: (fx, c, _d, focus) => voidSaleNew(fx.s, c.body.sales.find((x: any) => x.book === (focus === 'telecom' ? 'telecom' : 'shop')).id),
   },
   {
-    key: 'opening stock batch with a Shop and a Telecom product', books: ['shop', 'telecom'],
+    key: 'opening stock batch with a Shop and a Telecom product', books: ['shop', 'telecom'], seg: 'dialog_cards',
     create: (fx, d) => post(fx.s.app, '/opening-stock', {
       businessDate: d, items: [{ productId: fx.osShop.id, qty: 1, unitCostCents: 1000 }, { productId: fx.osTel.id, qty: 1, unitCostCents: 1000 }], clientRef: ref(),
     }),

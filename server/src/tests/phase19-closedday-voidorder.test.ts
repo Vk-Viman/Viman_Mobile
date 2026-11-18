@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { err } from './helpers/phase4.ts';
-import { C, E, allOps, backdateBody, closeBooks, dayClosedBody, fullSnapshot, must, setupFx } from './helpers/phase19cd.ts';
+import { C, E, allOps, backdateBody, closeBooks, dayClosedBody, fullSnapshot, must, opSegment, setupFx } from './helpers/phase19cd.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
@@ -37,8 +37,8 @@ describe.each(ops)('void order - $key', (op) => {
     } else if (op.key === 'ice cream daily entry (create)') {
       expect(err(again).code).toBe('NOT_FOUND');
     } else {
-      expect(err(again)).toEqual(dayClosedBody(book, C()));
-      expect(err(againE)).toEqual(backdateBody(book, C(), E()));
+      expect(err(again)).toEqual(dayClosedBody(book, C(), opSegment(op, book)));
+      expect(err(againE)).toEqual(backdateBody(book, C(), E(), opSegment(op, book)));
     }
     expect(fullSnapshot(s, op.omit ?? [])).toEqual(snap);
   });
