@@ -20,6 +20,7 @@ Status: ☑ done · ◐ in progress · ☐ not done. Phases 1 to 13 are built, t
 | 12 | Dashboard, charts, Excel export pack | none | Dashboard | ☑ |
 | 13 | Opening stock: manual entry and Excel import | 011 | Opening Stock | ☑ |
 | 14 | Integration, validation, documentation review, final report | none | — | ◐ |
+| 26 | Telecom segments: eight provider x Cards/Reloads segments (cash books, closings, counts, POS split, reports, restore validation) | 024, 025, 026 | Cash Books, Telecom, Products, Sales, Purchases, Reports | ☑ built on `feature/telecom-segments`; ☐ final integration, owner browser check, pull request |
 
 ## Phase 14 — validation checklist
 
@@ -60,7 +61,7 @@ Each item below was checked in the code.
 - **POS service lines** (decision 7): not planned; services use Services → Service types.
 
 ### Awaiting owner approval (designs only, nothing built)
-- Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated cash books: `PROPOSAL_TELECOM_SEGMENTS.md` APPROVED 2026-11-15 (BUSINESS_RULES 13D), to be built after correction Phase 1/2 and the product-name change, before discounts.
+- (built 2026-11-18 on `feature/telecom-segments`; integration pass, owner browser check and the pull request to `main` still to do) Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated segments: `PROPOSAL_TELECOM_SEGMENTS.md`, BUSINESS_RULES 13D, migrations 024-026, backup validation `segments`.
 - (done 2026-11-16) Product names are unique per category (migration 023); the same name may exist in different categories.
 - (done) Correct-this-entry Phase 1 and Phase 2 (`PROPOSAL_TRANSACTION_CORRECTION.md`, BUSINESS_RULES 13E).
 - Sales discounts (per-item, whole-bill, fixed, percentage, limits): `PROPOSAL_SALES_DISCOUNTS.md`.

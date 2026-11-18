@@ -16,6 +16,7 @@
 | **11** | Financial and operational reports, Excel export | ☑ Built, merged (PR #9) |
 | **12** | Dashboard, charts, Excel export pack | ☑ Built, merged (PR #10) |
 | **14** | Integration, independent validation, documentation, release readiness | ◐ In progress (see "Phase 14" below) |
+| **26** | Telecom segments: 8 provider x Cards/Reloads segments, migrations 024-026 | ☑ Built on `feature/telecom-segments` (final integration and pull request pending; see "Telecom segments" below) |
 
 Server test count by milestone: 798 (Phase 5) → 1,127 (Wave 1) → 1,264 (Phase 8) → 1,511 (Wave 3) → 1,639 (Phase 11) → 1,681 (Phase 12) → 1,689 (Phase 14 fixes) → 1,797 (QA suite + defect fix). 0 skipped throughout.
 
