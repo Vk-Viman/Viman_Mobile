@@ -2,7 +2,7 @@
 // (raw SQL with the safety triggers lifted inside the copy only, like phase22-restore-validation). The copy must be refused with the right
 // plain-language failure. The expected message is the sentence a shop owner would read; companions (a second check that also sees the same
 // damage, e.g. the cash ledger) are allowed but `segments` must always be among the failed checks.
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,6 +16,8 @@ import { validateDatabase } from '../services/database-validation.ts';
 import type { ValidationResult } from '../services/database-validation.ts';
 import { checkSegments } from '../services/database-validation-invariants.ts';
 
+// several tests damage and validate 3-4 copies of the database in a row (about 2-3 s each; slower on a busy machine)
+vi.setConfig({ testTimeout: 90000 });
 const env = new TestEnv();
 let work = '';
 let base = '';
