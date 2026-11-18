@@ -61,6 +61,7 @@ Each item below was checked in the code.
 - **POS service lines** (decision 7): not planned; services use Services → Service types.
 
 ### Awaiting owner approval (designs only, nothing built)
+- Reload extra is cash received (owner 2026-11-18, BUSINESS_RULES 13F): reload cash = collected + extra (example 198.00 + 2.00 extra -> cash +200.00, commission 13.88). APPROVED; built after the sales-discount feature (migration after 028; per-row flag for old versus new entries).
 - (built 2026-11-18 on `feature/telecom-segments`; integration pass, owner browser check and the pull request to `main` still to do) Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated segments: `PROPOSAL_TELECOM_SEGMENTS.md`, BUSINESS_RULES 13D, migrations 024-026, backup validation `segments`.
 - (done 2026-11-16) Product names are unique per category (migration 023); the same name may exist in different categories.
 - (done) Correct-this-entry Phase 1 and Phase 2 (`PROPOSAL_TRANSACTION_CORRECTION.md`, BUSINESS_RULES 13E).
