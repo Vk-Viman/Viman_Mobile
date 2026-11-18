@@ -167,7 +167,8 @@ export async function buildWorld14(s: ApiBase): Promise<World14> {
   await must(await lossNew(s, R, 1, { ...on('08-15'), reason: 'lost' }), 'loss R');
   const lossO = await must(await lossNew(s, S, 1, { ...on('08-15'), reason: 'other' }), 'loss S other');
   await must(await lossVoid(s, lossO.item.id), 'void loss');
-  await must(await countNew(s, 'telecom', 7844566, { ...on('08-15'), note: 'Over by two hundred' }), 'telecom count over');
+  // Telecom counts are per segment now (13D): the count is of Dialog Reloads (hand sum of its rows 7,024,567 on 08-15 and 8,424,567 on 09-10), so the over/short (+200, -300) and every Telecom total keep the hand figures.
+  await must(await countNew(s, 'telecom', 7044567, { ...on('08-15'), segment: 'dialog_reloads', note: 'Over by two hundred' }), 'telecom count over');
 
   // ---- 08-16 Sat
   await must(await tr(s, 'icecream', 'shop', rs(1000), { ...on('08-16'), fromFund: 'profit' }), 'transfer ice>shop');
@@ -208,7 +209,7 @@ export async function buildWorld14(s: ApiBase): Promise<World14> {
   await must(await capNew(s, { ...on('09-09'), book: 'icecream', fund: 'electricity', amountCents: rs(500) }), 'ice capital');
   // ---- 09-10 counts (over / short) and 09-12 ice cream closing
   await must(await countNew(s, 'shop', 2977000, { ...on('09-10'), note: 'Over by 120' }), 'shop count sept');
-  await must(await countNew(s, 'telecom', 9694566, { ...on('09-10'), note: 'Short by 300' }), 'telecom count sept');
+  await must(await countNew(s, 'telecom', 8394567, { ...on('09-10'), segment: 'dialog_reloads', note: 'Short by 300' }), 'telecom count sept');
   await must(await countNew(s, 'icecream', 1440000, { ...on('09-10'), fund: 'profit', note: 'Short by 100' }), 'ice count');
   const icl = await must(await closeNew(s, 'icecream', '2025-09-12'), 'close ice');
   const a = await payNew(s, 'other_cost', rs(50), { fund: 'cost', ...on('09-12') });
