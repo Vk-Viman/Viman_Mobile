@@ -414,8 +414,8 @@ describe('Phase 19 date-policy-aware ledger model (phase 8 scenarios, original t
     assertCoverage(cov, 5, 2, 3);
   }, 240000);
 
-  it('seed 7: 300 more operations on a fresh database', async () => {
-    const { stats: st, cov } = await run(7, 300);
+  it('seed 7: 450 more operations on a fresh database', async () => { // 300 before the Telecom segments (13D): the eight-way split of Telecom needs more steps to hit every refusal on a money write
+    const { stats: st, cov } = await run(7, 450);
     expect(st.accepted).toBeGreaterThan(100);
     expect(st.closedRejections).toBeGreaterThan(5);
     assertCoverage(cov, 3, 1, 1);
