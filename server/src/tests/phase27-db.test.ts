@@ -376,7 +376,7 @@ describe('every refusal above is a plain SQL error message, and the integrity of
   it('after a series of refused statements the database is still consistent', () => {
     const { c, shopP, shopSale, tel } = world();
     item(c, shopSale, shopP);
-    for (const o of [{ revenue_cents: 1 }, { unit_discount_cents: 999999 }, { price_reduction_cents: 1 }]) expect(msg(() => item(c, shopSale, shopP, { line_no: 2, ...o }))).not.toBe('');
+    for (const o of [{ revenue_cents: 1 }, { unit_discount_cents: 999999 }, { price_reduction_cents: 1 }] as Row[]) expect(msg(() => item(c, shopSale, shopP, { line_no: 2, ...o }))).not.toBe('');
     expect(msg(() => item(c, tel.dialog_cards!.sale, tel.dialog_cards!.product))).toMatch(/DISCOUNT_NOT_ALLOWED/);
     expect(all(c, 'PRAGMA integrity_check')).toEqual([{ integrity_check: 'ok' }]);
     expect(all(c, 'PRAGMA foreign_key_check')).toEqual([]);
