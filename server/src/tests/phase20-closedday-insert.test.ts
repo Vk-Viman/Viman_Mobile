@@ -284,7 +284,7 @@ describe('M1 (13D): a raw Telecom row is judged by ITS segment only', () => {
     for (const other of SEGMENTS.filter((x) => x !== own)) await seg.closeOk(s, other, C());
     await closeBooks(s, ['shop', 'icecream'], C());
     expect([at(E()), at(C()), at(L())], `${name}: every segment but ${own} closed`).toEqual(['ok', 'ok', 'ok']);
-    const mine = await seg.closeOk(s, own, C());
+    const mine = await seg.closeOk(s, own as any, C());
     expect(at(E()), `${name} before the closed day`).toContain(BACK);
     expect(at(C()), `${name} on the closed day`).toContain(DAY);
     expect(at(L())).toBe('ok');
