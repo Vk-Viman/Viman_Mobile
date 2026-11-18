@@ -125,7 +125,7 @@ describe('migration runner', () => {
       expect(err?.code, m.name).toBe('MIGRATION_CHECKSUM_MISMATCH');
       db.close();
     }
-  });
+  }, 180_000); // one in-memory migration run per migration file (26 now): needs more than the 20 s default under load
 
   it('a database made by a NEWER system is refused (MIGRATION_DB_TOO_NEW); a failing new migration rolls back completely', () => {
     const dir = copyDir(env);
