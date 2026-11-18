@@ -1,0 +1,3894 @@
+{
+  "schemaVersion": 26,
+  "cashbooks": {
+    "books": [
+      {
+        "book": "shop",
+        "balanceCents": 208950,
+        "lastClosedDate": "2025-09-14"
+      },
+      {
+        "book": "telecom",
+        "balanceCents": 8434566,
+        "lastClosedDate": "2025-09-14",
+        "segments": [
+          {
+            "segment": "dialog_cards",
+            "label": "Dialog Cards",
+            "balanceCents": -300000,
+            "lastClosedDate": null
+          },
+          {
+            "segment": "dialog_reloads",
+            "label": "Dialog Reloads",
+            "balanceCents": 8574567,
+            "lastClosedDate": null
+          },
+          {
+            "segment": "mobitel_cards",
+            "label": "Mobitel Cards",
+            "balanceCents": -720000,
+            "lastClosedDate": null
+          },
+          {
+            "segment": "mobitel_reloads",
+            "label": "Mobitel Reloads",
+            "balanceCents": 499999,
+            "lastClosedDate": null
+          },
+          {
+            "segment": "airtel_cards",
+            "label": "Airtel Cards",
+            "balanceCents": -820000,
+            "lastClosedDate": "2025-09-14"
+          },
+          {
+            "segment": "airtel_reloads",
+            "label": "Airtel Reloads",
+            "balanceCents": 550000,
+            "lastClosedDate": null
+          },
+          {
+            "segment": "hutch_cards",
+            "label": "Hutch Cards",
+            "balanceCents": -400000,
+            "lastClosedDate": null
+          },
+          {
+            "segment": "hutch_reloads",
+            "label": "Hutch Reloads",
+            "balanceCents": 1050000,
+            "lastClosedDate": null
+          }
+        ]
+      },
+      {
+        "book": "icecream",
+        "balanceCents": 1440000,
+        "lastClosedDate": null,
+        "funds": {
+          "cost": 890000,
+          "electricity": -500000,
+          "profit": 1050000
+        }
+      }
+    ],
+    "warnings": [
+      {
+        "code": "NEGATIVE_CASH_BALANCE",
+        "book": "telecom",
+        "segment": "dialog_cards",
+        "balanceCents": -300000,
+        "message": "The Telecom - Dialog Cards cash book is now below zero (-Rs. 3,000.00). Check that the opening balance and sales are recorded."
+      },
+      {
+        "code": "NEGATIVE_CASH_BALANCE",
+        "book": "telecom",
+        "segment": "mobitel_cards",
+        "balanceCents": -720000,
+        "message": "The Telecom - Mobitel Cards cash book is now below zero (-Rs. 7,200.00). Check that the opening balance and sales are recorded."
+      },
+      {
+        "code": "NEGATIVE_CASH_BALANCE",
+        "book": "telecom",
+        "segment": "airtel_cards",
+        "balanceCents": -820000,
+        "message": "The Telecom - Airtel Cards cash book is now below zero (-Rs. 8,200.00). Check that the opening balance and sales are recorded."
+      },
+      {
+        "code": "NEGATIVE_CASH_BALANCE",
+        "book": "telecom",
+        "segment": "hutch_cards",
+        "balanceCents": -400000,
+        "message": "The Telecom - Hutch Cards cash book is now below zero (-Rs. 4,000.00). Check that the opening balance and sales are recorded."
+      },
+      {
+        "code": "NEGATIVE_FUND_BALANCE",
+        "book": "icecream",
+        "fund": "electricity",
+        "balanceCents": -500000,
+        "message": "The Ice Cream Electricity fund is now below zero (-Rs. 5,000.00)."
+      }
+    ]
+  },
+  "cashByBook": [
+    {
+      "book": "icecream",
+      "cents": 1440000,
+      "n": 36
+    },
+    {
+      "book": "shop",
+      "cents": 208950,
+      "n": 74
+    },
+    {
+      "book": "telecom",
+      "cents": 8434566,
+      "n": 51
+    }
+  ],
+  "cashBySegment": [
+    {
+      "book": "icecream",
+      "segment": "",
+      "cents": 1440000,
+      "n": 36
+    },
+    {
+      "book": "shop",
+      "segment": "",
+      "cents": 208950,
+      "n": 74
+    },
+    {
+      "book": "telecom",
+      "segment": "airtel_cards",
+      "cents": -820000,
+      "n": 5
+    },
+    {
+      "book": "telecom",
+      "segment": "airtel_reloads",
+      "cents": 550000,
+      "n": 2
+    },
+    {
+      "book": "telecom",
+      "segment": "dialog_cards",
+      "cents": -300000,
+      "n": 4
+    },
+    {
+      "book": "telecom",
+      "segment": "dialog_reloads",
+      "cents": 8574567,
+      "n": 26
+    },
+    {
+      "book": "telecom",
+      "segment": "hutch_cards",
+      "cents": -400000,
+      "n": 4
+    },
+    {
+      "book": "telecom",
+      "segment": "hutch_reloads",
+      "cents": 1050000,
+      "n": 3
+    },
+    {
+      "book": "telecom",
+      "segment": "mobitel_cards",
+      "cents": -720000,
+      "n": 4
+    },
+    {
+      "book": "telecom",
+      "segment": "mobitel_reloads",
+      "cents": 499999,
+      "n": 3
+    }
+  ],
+  "pnlShop": {
+    "segment": "shop",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "goods": {
+          "salesCents": 2614999,
+          "returnsCents": 639999,
+          "revenueCents": 1975000,
+          "costAutomaticCents": 902515,
+          "costExtraCents": 4000,
+          "costOfSalesCents": 906515,
+          "grossProfitCents": 1068485
+        },
+        "services": {
+          "revenueCents": 230000,
+          "costCents": 91000,
+          "grossProfitCents": 139000
+        },
+        "grossProfitCents": 1207485,
+        "expenses": {
+          "totalCents": 1220000,
+          "byCategory": {
+            "water": 80000,
+            "rent": 1000000,
+            "internet": 0,
+            "transport": 0,
+            "repairs": 0,
+            "cleaning_supplies": 45000,
+            "packaging": 25000,
+            "stationery": 0,
+            "other": 70000
+          }
+        },
+        "adjustments": {
+          "lossesCents": 66260,
+          "damagedReturnLossesCents": 30000,
+          "stocktakeLossesCents": 50000,
+          "stocktakeGainsCents": 20020,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 126240
+        },
+        "cashOverShortCents": -5000,
+        "netProfitCents": -143755
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "goods": {
+          "salesCents": 3920000,
+          "returnsCents": 890000,
+          "revenueCents": 3030000,
+          "costAutomaticCents": 1467283,
+          "costExtraCents": 0,
+          "costOfSalesCents": 1467283,
+          "grossProfitCents": 1562717
+        },
+        "services": {
+          "revenueCents": 292000,
+          "costCents": 128650,
+          "grossProfitCents": 163350
+        },
+        "grossProfitCents": 1726067,
+        "expenses": {
+          "totalCents": 1035000,
+          "byCategory": {
+            "water": 0,
+            "rent": 1000000,
+            "internet": 0,
+            "transport": 0,
+            "repairs": 0,
+            "cleaning_supplies": 35000,
+            "packaging": 0,
+            "stationery": 0,
+            "other": 0
+          }
+        },
+        "adjustments": {
+          "lossesCents": 72428,
+          "damagedReturnLossesCents": 40000,
+          "stocktakeLossesCents": 400000,
+          "stocktakeGainsCents": 10010,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 502418
+        },
+        "cashOverShortCents": 11950,
+        "netProfitCents": 200599
+      }
+    ],
+    "totals": {
+      "goods": {
+        "salesCents": 6534999,
+        "returnsCents": 1529999,
+        "revenueCents": 5005000,
+        "costAutomaticCents": 2369798,
+        "costExtraCents": 4000,
+        "costOfSalesCents": 2373798,
+        "grossProfitCents": 2631202
+      },
+      "services": {
+        "revenueCents": 522000,
+        "costCents": 219650,
+        "grossProfitCents": 302350
+      },
+      "grossProfitCents": 2933552,
+      "expenses": {
+        "totalCents": 2255000,
+        "byCategory": {
+          "water": 80000,
+          "rent": 2000000,
+          "internet": 0,
+          "transport": 0,
+          "repairs": 0,
+          "cleaning_supplies": 80000,
+          "packaging": 25000,
+          "stationery": 0,
+          "other": 70000
+        }
+      },
+      "adjustments": {
+        "lossesCents": 138688,
+        "damagedReturnLossesCents": 70000,
+        "stocktakeLossesCents": 450000,
+        "stocktakeGainsCents": 30030,
+        "residualSweepsCents": 0,
+        "purchaseRefundGainCents": 0,
+        "salesReturnVoidGainCents": 0,
+        "netCents": 628658
+      },
+      "cashOverShortCents": 6950,
+      "netProfitCents": 56844
+    },
+    "table": {
+      "title": "Shop profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "goodsRevenue",
+          "label": "Goods sales (net of returns)",
+          "kind": "money"
+        },
+        {
+          "key": "costAutomatic",
+          "label": "Cost: automatic",
+          "kind": "money"
+        },
+        {
+          "key": "costExtra",
+          "label": "Cost: extra",
+          "kind": "money"
+        },
+        {
+          "key": "goodsProfit",
+          "label": "Goods gross profit",
+          "kind": "money"
+        },
+        {
+          "key": "serviceRevenue",
+          "label": "Print/other services",
+          "kind": "money"
+        },
+        {
+          "key": "serviceCost",
+          "label": "Service cost",
+          "kind": "money"
+        },
+        {
+          "key": "serviceProfit",
+          "label": "Service gross profit",
+          "kind": "money"
+        },
+        {
+          "key": "expenses",
+          "label": "Operating expenses",
+          "kind": "money"
+        },
+        {
+          "key": "adjustments",
+          "label": "Stock adjustments (net)",
+          "kind": "money"
+        },
+        {
+          "key": "purchaseRefundGain",
+          "label": "Purchase refund above stock value removed (R4)",
+          "kind": "money"
+        },
+        {
+          "key": "salesReturnVoidGain",
+          "label": "Void-return stock value gain (R-VR)",
+          "kind": "money"
+        },
+        {
+          "key": "overShort",
+          "label": "Cash over / short",
+          "kind": "money"
+        },
+        {
+          "key": "netProfit",
+          "label": "Net profit",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "goodsRevenue": 1975000,
+          "costAutomatic": 902515,
+          "costExtra": 4000,
+          "goodsProfit": 1068485,
+          "serviceRevenue": 230000,
+          "serviceCost": 91000,
+          "serviceProfit": 139000,
+          "expenses": 1220000,
+          "adjustments": 126240,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": -5000,
+          "netProfit": -143755
+        },
+        {
+          "period": "2025-09",
+          "goodsRevenue": 3030000,
+          "costAutomatic": 1467283,
+          "costExtra": 0,
+          "goodsProfit": 1562717,
+          "serviceRevenue": 292000,
+          "serviceCost": 128650,
+          "serviceProfit": 163350,
+          "expenses": 1035000,
+          "adjustments": 502418,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": 11950,
+          "netProfit": 200599
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "goodsRevenue": 5005000,
+        "costAutomatic": 2369798,
+        "costExtra": 4000,
+        "goodsProfit": 2631202,
+        "serviceRevenue": 522000,
+        "serviceCost": 219650,
+        "serviceProfit": 302350,
+        "expenses": 2255000,
+        "adjustments": 628658,
+        "purchaseRefundGain": 0,
+        "salesReturnVoidGain": 0,
+        "overShort": 6950,
+        "netProfit": 56844
+      },
+      "notes": [
+        "Goods and service sales are net of returns; a return counts in the period of the return date.",
+        "Cost = automatic (weighted-average) cost plus any extra cost the cashier added on the sale (C13).",
+        "Printing supplies bought, owner drawings, capital, transfers and opening balances are not in profit.",
+        "There is no electricity expense in the Shop: the whole shop electricity bill is carried by the Ice Cream book.",
+        "Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain - void-return stock value gain.",
+        "Purchase refund above stock value removed (R4): when a returned or voided purchase is refunded in cash for more than the stock value that leaves the shelf, the difference is a gain (shown positive; it is already inside Stock adjustments (net) as a reduction).",
+        "Void-return stock value gain (R-VR): when a sales return is voided, the stock leaves again at the value the return restored, limited to what the stock is worth now; a lower value is a gain (shown positive, already inside Stock adjustments (net)). A voided return itself is not counted anywhere: its sales, cost and extra cost stand as if it had never been recorded."
+      ]
+    },
+    "warnings": []
+  },
+  "pnlTelecom": {
+    "segment": "telecom",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "commissions": {
+          "reloadSalesCents": 4699999,
+          "reloadBaseCommissionCents": 267000,
+          "reloadExtraCents": 2500,
+          "reloadCommissionCents": 269500,
+          "ezcashBillCents": 3734567,
+          "ezcashCommissionCents": 29877
+        },
+        "commissionRevenueCents": 299377,
+        "cards": {
+          "salesCents": 500000,
+          "returnsCents": 0,
+          "revenueCents": 500000,
+          "costAutomaticCents": 450000,
+          "costExtraCents": 10000,
+          "costOfSalesCents": 460000,
+          "grossProfitCents": 40000
+        },
+        "grossProfitCents": 339377,
+        "expenses": {
+          "totalCents": 360000,
+          "byCategory": {
+            "water": 0,
+            "rent": 0,
+            "internet": 150000,
+            "transport": 60000,
+            "repairs": 120000,
+            "cleaning_supplies": 0,
+            "packaging": 0,
+            "stationery": 30000,
+            "other": 0
+          }
+        },
+        "adjustments": {
+          "lossesCents": 0,
+          "damagedReturnLossesCents": 0,
+          "stocktakeLossesCents": 18000,
+          "stocktakeGainsCents": 0,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 18000
+        },
+        "cashOverShortCents": 20000,
+        "netProfitCents": -18623,
+        "memo": {
+          "providerTopupsCents": 1300000,
+          "walletTopupsCents": 500000
+        }
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "commissions": {
+          "reloadSalesCents": 1700000,
+          "reloadBaseCommissionCents": 102000,
+          "reloadExtraCents": 0,
+          "reloadCommissionCents": 102000,
+          "ezcashBillCents": 1000000,
+          "ezcashCommissionCents": 8000
+        },
+        "commissionRevenueCents": 110000,
+        "cards": {
+          "salesCents": 650000,
+          "returnsCents": 240000,
+          "revenueCents": 410000,
+          "costAutomaticCents": 369000,
+          "costExtraCents": 0,
+          "costOfSalesCents": 369000,
+          "grossProfitCents": 41000
+        },
+        "grossProfitCents": 151000,
+        "expenses": {
+          "totalCents": 220000,
+          "byCategory": {
+            "water": 0,
+            "rent": 0,
+            "internet": 220000,
+            "transport": 0,
+            "repairs": 0,
+            "cleaning_supplies": 0,
+            "packaging": 0,
+            "stationery": 0,
+            "other": 0
+          }
+        },
+        "adjustments": {
+          "lossesCents": 0,
+          "damagedReturnLossesCents": 36000,
+          "stocktakeLossesCents": 0,
+          "stocktakeGainsCents": 0,
+          "residualSweepsCents": 0,
+          "purchaseRefundGainCents": 0,
+          "salesReturnVoidGainCents": 0,
+          "netCents": 36000
+        },
+        "cashOverShortCents": -30000,
+        "netProfitCents": -135000,
+        "memo": {
+          "providerTopupsCents": 90000,
+          "walletTopupsCents": 60000
+        }
+      }
+    ],
+    "totals": {
+      "commissions": {
+        "reloadSalesCents": 6399999,
+        "reloadBaseCommissionCents": 369000,
+        "reloadExtraCents": 2500,
+        "reloadCommissionCents": 371500,
+        "ezcashBillCents": 4734567,
+        "ezcashCommissionCents": 37877
+      },
+      "commissionRevenueCents": 409377,
+      "cards": {
+        "salesCents": 1150000,
+        "returnsCents": 240000,
+        "revenueCents": 910000,
+        "costAutomaticCents": 819000,
+        "costExtraCents": 10000,
+        "costOfSalesCents": 829000,
+        "grossProfitCents": 81000
+      },
+      "grossProfitCents": 490377,
+      "expenses": {
+        "totalCents": 580000,
+        "byCategory": {
+          "water": 0,
+          "rent": 0,
+          "internet": 370000,
+          "transport": 60000,
+          "repairs": 120000,
+          "cleaning_supplies": 0,
+          "packaging": 0,
+          "stationery": 30000,
+          "other": 0
+        }
+      },
+      "adjustments": {
+        "lossesCents": 0,
+        "damagedReturnLossesCents": 36000,
+        "stocktakeLossesCents": 18000,
+        "stocktakeGainsCents": 0,
+        "residualSweepsCents": 0,
+        "purchaseRefundGainCents": 0,
+        "salesReturnVoidGainCents": 0,
+        "netCents": 54000
+      },
+      "cashOverShortCents": -10000,
+      "netProfitCents": -153623,
+      "memo": {
+        "providerTopupsCents": 1390000,
+        "walletTopupsCents": 560000
+      }
+    },
+    "table": {
+      "title": "Telecom profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "reloadBase",
+          "label": "Reload commission",
+          "kind": "money"
+        },
+        {
+          "key": "reloadExtra",
+          "label": "Reload rounding extra",
+          "kind": "money"
+        },
+        {
+          "key": "ezcash",
+          "label": "EZCash commission",
+          "kind": "money"
+        },
+        {
+          "key": "cardRevenue",
+          "label": "Scratch-card sales (net)",
+          "kind": "money"
+        },
+        {
+          "key": "cardCost",
+          "label": "Card cost (auto + extra)",
+          "kind": "money"
+        },
+        {
+          "key": "cardProfit",
+          "label": "Card gross profit",
+          "kind": "money"
+        },
+        {
+          "key": "expenses",
+          "label": "Operating expenses",
+          "kind": "money"
+        },
+        {
+          "key": "adjustments",
+          "label": "Stock adjustments (net)",
+          "kind": "money"
+        },
+        {
+          "key": "purchaseRefundGain",
+          "label": "Purchase refund above stock value removed (R4)",
+          "kind": "money"
+        },
+        {
+          "key": "salesReturnVoidGain",
+          "label": "Void-return stock value gain (R-VR)",
+          "kind": "money"
+        },
+        {
+          "key": "overShort",
+          "label": "Cash over / short",
+          "kind": "money"
+        },
+        {
+          "key": "netProfit",
+          "label": "Net profit",
+          "kind": "money"
+        },
+        {
+          "key": "reloadSales",
+          "label": "Memo: reload collections",
+          "kind": "money"
+        },
+        {
+          "key": "ezcashBills",
+          "label": "Memo: EZCash bills collected",
+          "kind": "money"
+        },
+        {
+          "key": "topups",
+          "label": "Memo: provider + wallet top-ups",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "reloadBase": 267000,
+          "reloadExtra": 2500,
+          "ezcash": 29877,
+          "cardRevenue": 500000,
+          "cardCost": 460000,
+          "cardProfit": 40000,
+          "expenses": 360000,
+          "adjustments": 18000,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": 20000,
+          "netProfit": -18623,
+          "reloadSales": 4699999,
+          "ezcashBills": 3734567,
+          "topups": 1800000
+        },
+        {
+          "period": "2025-09",
+          "reloadBase": 102000,
+          "reloadExtra": 0,
+          "ezcash": 8000,
+          "cardRevenue": 410000,
+          "cardCost": 369000,
+          "cardProfit": 41000,
+          "expenses": 220000,
+          "adjustments": 36000,
+          "purchaseRefundGain": 0,
+          "salesReturnVoidGain": 0,
+          "overShort": -30000,
+          "netProfit": -135000,
+          "reloadSales": 1700000,
+          "ezcashBills": 1000000,
+          "topups": 150000
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "reloadBase": 369000,
+        "reloadExtra": 2500,
+        "ezcash": 37877,
+        "cardRevenue": 910000,
+        "cardCost": 829000,
+        "cardProfit": 81000,
+        "expenses": 580000,
+        "adjustments": 54000,
+        "purchaseRefundGain": 0,
+        "salesReturnVoidGain": 0,
+        "overShort": -10000,
+        "netProfit": -153623,
+        "reloadSales": 6399999,
+        "ezcashBills": 4734567,
+        "topups": 1950000
+      },
+      "notes": [
+        "Telecom income is commission only: reload commission (with any rounding extra) and EZCash commission.",
+        "Full reload collections, EZCash bill collections and provider/wallet top-ups are cash movements, not income or cost (memo columns).",
+        "The Telecom cash book does not reconcile to Telecom profit because reload float is not tracked (owner decision, R14).",
+        "Stock adjustments (net) = losses + stocktake losses + residual sweeps - stocktake gains - purchase refund gain (R4: cash refunded above the stock value removed, shown on its own line) - void-return stock value gain (R-VR, shown on its own line).",
+        "Scratch cards are stock products: sales minus automatic and extra cost, net of returns (a voided return is not counted).",
+        "There is no electricity expense in Telecom: the whole shop electricity bill is carried by the Ice Cream book."
+      ]
+    },
+    "warnings": [],
+    "filterSegment": null,
+    "telecomSegments": [
+      {
+        "segment": "dialog_cards",
+        "label": "Dialog Cards",
+        "kind": "cards",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 500000,
+              "returnsCents": 0,
+              "revenueCents": 500000,
+              "costAutomaticCents": 450000,
+              "costExtraCents": 10000,
+              "costOfSalesCents": 460000,
+              "grossProfitCents": 40000
+            },
+            "grossProfitCents": 40000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 18000,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 18000
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 22000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 100000,
+              "returnsCents": 0,
+              "revenueCents": 100000,
+              "costAutomaticCents": 90000,
+              "costExtraCents": 0,
+              "costOfSalesCents": 90000,
+              "grossProfitCents": 10000
+            },
+            "grossProfitCents": 10000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 10000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 0,
+            "reloadBaseCommissionCents": 0,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 0,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 0,
+          "cards": {
+            "salesCents": 600000,
+            "returnsCents": 0,
+            "revenueCents": 600000,
+            "costAutomaticCents": 540000,
+            "costExtraCents": 10000,
+            "costOfSalesCents": 550000,
+            "grossProfitCents": 50000
+          },
+          "grossProfitCents": 50000,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 18000,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 18000
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": 32000,
+          "memo": {
+            "providerTopupsCents": 0,
+            "walletTopupsCents": 0
+          }
+        }
+      },
+      {
+        "segment": "dialog_reloads",
+        "label": "Dialog Reloads",
+        "kind": "reloads",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 3000000,
+              "reloadBaseCommissionCents": 180000,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 180000,
+              "ezcashBillCents": 3734567,
+              "ezcashCommissionCents": 29877
+            },
+            "commissionRevenueCents": 209877,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 209877,
+            "expenses": {
+              "totalCents": 360000,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 150000,
+                "transport": 60000,
+                "repairs": 120000,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 30000,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 20000,
+            "netProfitCents": -130123,
+            "memo": {
+              "providerTopupsCents": 800000,
+              "walletTopupsCents": 500000
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 800000,
+              "reloadBaseCommissionCents": 48000,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 48000,
+              "ezcashBillCents": 1000000,
+              "ezcashCommissionCents": 8000
+            },
+            "commissionRevenueCents": 56000,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 56000,
+            "expenses": {
+              "totalCents": 220000,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 220000,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": -30000,
+            "netProfitCents": -194000,
+            "memo": {
+              "providerTopupsCents": 90000,
+              "walletTopupsCents": 60000
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 3800000,
+            "reloadBaseCommissionCents": 228000,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 228000,
+            "ezcashBillCents": 4734567,
+            "ezcashCommissionCents": 37877
+          },
+          "commissionRevenueCents": 265877,
+          "cards": {
+            "salesCents": 0,
+            "returnsCents": 0,
+            "revenueCents": 0,
+            "costAutomaticCents": 0,
+            "costExtraCents": 0,
+            "costOfSalesCents": 0,
+            "grossProfitCents": 0
+          },
+          "grossProfitCents": 265877,
+          "expenses": {
+            "totalCents": 580000,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 370000,
+              "transport": 60000,
+              "repairs": 120000,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 30000,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 0
+          },
+          "cashOverShortCents": -10000,
+          "netProfitCents": -324123,
+          "memo": {
+            "providerTopupsCents": 890000,
+            "walletTopupsCents": 560000
+          }
+        }
+      },
+      {
+        "segment": "mobitel_cards",
+        "label": "Mobitel Cards",
+        "kind": "cards",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 0,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 0,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 220000,
+              "returnsCents": 40000,
+              "revenueCents": 180000,
+              "costAutomaticCents": 162000,
+              "costExtraCents": 0,
+              "costOfSalesCents": 162000,
+              "grossProfitCents": 18000
+            },
+            "grossProfitCents": 18000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 36000,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 36000
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": -18000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 0,
+            "reloadBaseCommissionCents": 0,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 0,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 0,
+          "cards": {
+            "salesCents": 220000,
+            "returnsCents": 40000,
+            "revenueCents": 180000,
+            "costAutomaticCents": 162000,
+            "costExtraCents": 0,
+            "costOfSalesCents": 162000,
+            "grossProfitCents": 18000
+          },
+          "grossProfitCents": 18000,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 36000,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 36000
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": -18000,
+          "memo": {
+            "providerTopupsCents": 0,
+            "walletTopupsCents": 0
+          }
+        }
+      },
+      {
+        "segment": "mobitel_reloads",
+        "label": "Mobitel Reloads",
+        "kind": "reloads",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 999999,
+              "reloadBaseCommissionCents": 45000,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 45000,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 45000,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 45000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 45000,
+            "memo": {
+              "providerTopupsCents": 500000,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 0,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 0,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 999999,
+            "reloadBaseCommissionCents": 45000,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 45000,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 45000,
+          "cards": {
+            "salesCents": 0,
+            "returnsCents": 0,
+            "revenueCents": 0,
+            "costAutomaticCents": 0,
+            "costExtraCents": 0,
+            "costOfSalesCents": 0,
+            "grossProfitCents": 0
+          },
+          "grossProfitCents": 45000,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 0
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": 45000,
+          "memo": {
+            "providerTopupsCents": 500000,
+            "walletTopupsCents": 0
+          }
+        }
+      },
+      {
+        "segment": "airtel_cards",
+        "label": "Airtel Cards",
+        "kind": "cards",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 0,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 0,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 280000,
+              "returnsCents": 200000,
+              "revenueCents": 80000,
+              "costAutomaticCents": 72000,
+              "costExtraCents": 0,
+              "costOfSalesCents": 72000,
+              "grossProfitCents": 8000
+            },
+            "grossProfitCents": 8000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 8000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 0,
+            "reloadBaseCommissionCents": 0,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 0,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 0,
+          "cards": {
+            "salesCents": 280000,
+            "returnsCents": 200000,
+            "revenueCents": 80000,
+            "costAutomaticCents": 72000,
+            "costExtraCents": 0,
+            "costOfSalesCents": 72000,
+            "grossProfitCents": 8000
+          },
+          "grossProfitCents": 8000,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 0
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": 8000,
+          "memo": {
+            "providerTopupsCents": 0,
+            "walletTopupsCents": 0
+          }
+        }
+      },
+      {
+        "segment": "airtel_reloads",
+        "label": "Airtel Reloads",
+        "kind": "reloads",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 200000,
+              "reloadBaseCommissionCents": 12000,
+              "reloadExtraCents": 2500,
+              "reloadCommissionCents": 14500,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 14500,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 14500,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 14500,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 350000,
+              "reloadBaseCommissionCents": 21000,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 21000,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 21000,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 21000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 21000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 550000,
+            "reloadBaseCommissionCents": 33000,
+            "reloadExtraCents": 2500,
+            "reloadCommissionCents": 35500,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 35500,
+          "cards": {
+            "salesCents": 0,
+            "returnsCents": 0,
+            "revenueCents": 0,
+            "costAutomaticCents": 0,
+            "costExtraCents": 0,
+            "costOfSalesCents": 0,
+            "grossProfitCents": 0
+          },
+          "grossProfitCents": 35500,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 0
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": 35500,
+          "memo": {
+            "providerTopupsCents": 0,
+            "walletTopupsCents": 0
+          }
+        }
+      },
+      {
+        "segment": "hutch_cards",
+        "label": "Hutch Cards",
+        "kind": "cards",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 0,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 0,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 0,
+              "reloadBaseCommissionCents": 0,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 0,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 0,
+            "cards": {
+              "salesCents": 50000,
+              "returnsCents": 0,
+              "revenueCents": 50000,
+              "costAutomaticCents": 45000,
+              "costExtraCents": 0,
+              "costOfSalesCents": 45000,
+              "grossProfitCents": 5000
+            },
+            "grossProfitCents": 5000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 5000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 0,
+            "reloadBaseCommissionCents": 0,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 0,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 0,
+          "cards": {
+            "salesCents": 50000,
+            "returnsCents": 0,
+            "revenueCents": 50000,
+            "costAutomaticCents": 45000,
+            "costExtraCents": 0,
+            "costOfSalesCents": 45000,
+            "grossProfitCents": 5000
+          },
+          "grossProfitCents": 5000,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 0
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": 5000,
+          "memo": {
+            "providerTopupsCents": 0,
+            "walletTopupsCents": 0
+          }
+        }
+      },
+      {
+        "segment": "hutch_reloads",
+        "label": "Hutch Reloads",
+        "kind": "reloads",
+        "rows": [
+          {
+            "period": {
+              "from": "2025-08-01",
+              "to": "2025-08-31",
+              "label": "2025-08"
+            },
+            "commissions": {
+              "reloadSalesCents": 500000,
+              "reloadBaseCommissionCents": 30000,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 30000,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 30000,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 30000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 30000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          },
+          {
+            "period": {
+              "from": "2025-09-01",
+              "to": "2025-09-30",
+              "label": "2025-09"
+            },
+            "commissions": {
+              "reloadSalesCents": 550000,
+              "reloadBaseCommissionCents": 33000,
+              "reloadExtraCents": 0,
+              "reloadCommissionCents": 33000,
+              "ezcashBillCents": 0,
+              "ezcashCommissionCents": 0
+            },
+            "commissionRevenueCents": 33000,
+            "cards": {
+              "salesCents": 0,
+              "returnsCents": 0,
+              "revenueCents": 0,
+              "costAutomaticCents": 0,
+              "costExtraCents": 0,
+              "costOfSalesCents": 0,
+              "grossProfitCents": 0
+            },
+            "grossProfitCents": 33000,
+            "expenses": {
+              "totalCents": 0,
+              "byCategory": {
+                "water": 0,
+                "rent": 0,
+                "internet": 0,
+                "transport": 0,
+                "repairs": 0,
+                "cleaning_supplies": 0,
+                "packaging": 0,
+                "stationery": 0,
+                "other": 0
+              }
+            },
+            "adjustments": {
+              "lossesCents": 0,
+              "damagedReturnLossesCents": 0,
+              "stocktakeLossesCents": 0,
+              "stocktakeGainsCents": 0,
+              "residualSweepsCents": 0,
+              "purchaseRefundGainCents": 0,
+              "salesReturnVoidGainCents": 0,
+              "netCents": 0
+            },
+            "cashOverShortCents": 0,
+            "netProfitCents": 33000,
+            "memo": {
+              "providerTopupsCents": 0,
+              "walletTopupsCents": 0
+            }
+          }
+        ],
+        "totals": {
+          "commissions": {
+            "reloadSalesCents": 1050000,
+            "reloadBaseCommissionCents": 63000,
+            "reloadExtraCents": 0,
+            "reloadCommissionCents": 63000,
+            "ezcashBillCents": 0,
+            "ezcashCommissionCents": 0
+          },
+          "commissionRevenueCents": 63000,
+          "cards": {
+            "salesCents": 0,
+            "returnsCents": 0,
+            "revenueCents": 0,
+            "costAutomaticCents": 0,
+            "costExtraCents": 0,
+            "costOfSalesCents": 0,
+            "grossProfitCents": 0
+          },
+          "grossProfitCents": 63000,
+          "expenses": {
+            "totalCents": 0,
+            "byCategory": {
+              "water": 0,
+              "rent": 0,
+              "internet": 0,
+              "transport": 0,
+              "repairs": 0,
+              "cleaning_supplies": 0,
+              "packaging": 0,
+              "stationery": 0,
+              "other": 0
+            }
+          },
+          "adjustments": {
+            "lossesCents": 0,
+            "damagedReturnLossesCents": 0,
+            "stocktakeLossesCents": 0,
+            "stocktakeGainsCents": 0,
+            "residualSweepsCents": 0,
+            "purchaseRefundGainCents": 0,
+            "salesReturnVoidGainCents": 0,
+            "netCents": 0
+          },
+          "cashOverShortCents": 0,
+          "netProfitCents": 63000,
+          "memo": {
+            "providerTopupsCents": 0,
+            "walletTopupsCents": 0
+          }
+        }
+      }
+    ],
+    "segmentTable": {
+      "title": "Telecom P&L by segment",
+      "columns": [
+        {
+          "key": "line",
+          "label": "Line",
+          "kind": "text"
+        },
+        {
+          "key": "dialog_cards",
+          "label": "Dialog Cards",
+          "kind": "money"
+        },
+        {
+          "key": "dialog_reloads",
+          "label": "Dialog Reloads",
+          "kind": "money"
+        },
+        {
+          "key": "mobitel_cards",
+          "label": "Mobitel Cards",
+          "kind": "money"
+        },
+        {
+          "key": "mobitel_reloads",
+          "label": "Mobitel Reloads",
+          "kind": "money"
+        },
+        {
+          "key": "airtel_cards",
+          "label": "Airtel Cards",
+          "kind": "money"
+        },
+        {
+          "key": "airtel_reloads",
+          "label": "Airtel Reloads",
+          "kind": "money"
+        },
+        {
+          "key": "hutch_cards",
+          "label": "Hutch Cards",
+          "kind": "money"
+        },
+        {
+          "key": "hutch_reloads",
+          "label": "Hutch Reloads",
+          "kind": "money"
+        },
+        {
+          "key": "total",
+          "label": "Telecom total",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "line": "Reload commission",
+          "dialog_cards": 0,
+          "dialog_reloads": 228000,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 45000,
+          "airtel_cards": 0,
+          "airtel_reloads": 33000,
+          "hutch_cards": 0,
+          "hutch_reloads": 63000,
+          "total": 369000
+        },
+        {
+          "line": "Reload rounding extra",
+          "dialog_cards": 0,
+          "dialog_reloads": 0,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 2500,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 2500
+        },
+        {
+          "line": "EZCash commission",
+          "dialog_cards": 0,
+          "dialog_reloads": 37877,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 37877
+        },
+        {
+          "line": "Scratch-card sales (net)",
+          "dialog_cards": 600000,
+          "dialog_reloads": 0,
+          "mobitel_cards": 180000,
+          "mobitel_reloads": 0,
+          "airtel_cards": 80000,
+          "airtel_reloads": 0,
+          "hutch_cards": 50000,
+          "hutch_reloads": 0,
+          "total": 910000
+        },
+        {
+          "line": "Card cost (auto + extra)",
+          "dialog_cards": 550000,
+          "dialog_reloads": 0,
+          "mobitel_cards": 162000,
+          "mobitel_reloads": 0,
+          "airtel_cards": 72000,
+          "airtel_reloads": 0,
+          "hutch_cards": 45000,
+          "hutch_reloads": 0,
+          "total": 829000
+        },
+        {
+          "line": "Card gross profit",
+          "dialog_cards": 50000,
+          "dialog_reloads": 0,
+          "mobitel_cards": 18000,
+          "mobitel_reloads": 0,
+          "airtel_cards": 8000,
+          "airtel_reloads": 0,
+          "hutch_cards": 5000,
+          "hutch_reloads": 0,
+          "total": 81000
+        },
+        {
+          "line": "Operating expenses",
+          "dialog_cards": 0,
+          "dialog_reloads": 580000,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 580000
+        },
+        {
+          "line": "Stock adjustments (net)",
+          "dialog_cards": 18000,
+          "dialog_reloads": 0,
+          "mobitel_cards": 36000,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 54000
+        },
+        {
+          "line": "Purchase refund above stock value removed (R4)",
+          "dialog_cards": 0,
+          "dialog_reloads": 0,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 0
+        },
+        {
+          "line": "Void-return stock value gain (R-VR)",
+          "dialog_cards": 0,
+          "dialog_reloads": 0,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 0
+        },
+        {
+          "line": "Cash over / short",
+          "dialog_cards": 0,
+          "dialog_reloads": -10000,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": -10000
+        },
+        {
+          "line": "Net profit",
+          "dialog_cards": 32000,
+          "dialog_reloads": -324123,
+          "mobitel_cards": -18000,
+          "mobitel_reloads": 45000,
+          "airtel_cards": 8000,
+          "airtel_reloads": 35500,
+          "hutch_cards": 5000,
+          "hutch_reloads": 63000,
+          "total": -153623
+        },
+        {
+          "line": "Memo: reload collections",
+          "dialog_cards": 0,
+          "dialog_reloads": 3800000,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 999999,
+          "airtel_cards": 0,
+          "airtel_reloads": 550000,
+          "hutch_cards": 0,
+          "hutch_reloads": 1050000,
+          "total": 6399999
+        },
+        {
+          "line": "Memo: EZCash bills collected",
+          "dialog_cards": 0,
+          "dialog_reloads": 4734567,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 0,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 4734567
+        },
+        {
+          "line": "Memo: provider + wallet top-ups",
+          "dialog_cards": 0,
+          "dialog_reloads": 1450000,
+          "mobitel_cards": 0,
+          "mobitel_reloads": 500000,
+          "airtel_cards": 0,
+          "airtel_reloads": 0,
+          "hutch_cards": 0,
+          "hutch_reloads": 0,
+          "total": 1950000
+        }
+      ],
+      "notes": [
+        "Each column is one Telecom segment (provider and Reloads / Cards); the last column is the whole Telecom book and equals the sum of the segment columns for every line.",
+        "Reloads segments: commission + rounding extra - expenses +/- cash over/short. Cards segments: card sales - cost (automatic + extra) - stock adjustments - expenses +/- cash over/short."
+      ]
+    },
+    "segmentsMatchTotal": true
+  },
+  "pnlIcecream": {
+    "segment": "icecream",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "salesCents": 2700000,
+        "materialsChargeCents": 920000,
+        "electricityChargeCents": 530000,
+        "otherExpensesCents": 30000,
+        "cashOverShortCents": 0,
+        "recognizedProfitCents": 1220000,
+        "recognition": {
+          "dailyProfitShareCents": 860000,
+          "profitEligibleReleasesCents": 540000,
+          "reallocationsCents": -150000,
+          "otherExpensesCents": -30000,
+          "cashOverShortCents": 0
+        },
+        "memo": {
+          "actualMaterialsPaidCents": 550000,
+          "actualElectricityPaidCents": 750000,
+          "otherCostsFromCostElecFundsCents": 40000
+        },
+        "excessCostNotChargedCents": 0,
+        "profitAfterExcessCostCents": 1220000,
+        "balancesAsOfPeriodEnd": {
+          "unspentByLine": {
+            "materialsCents": 330000,
+            "electricityCents": -220000
+          },
+          "unspentCents": 110000,
+          "outstandingExcessCostCents": 0
+        }
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "salesCents": 200000,
+        "materialsChargeCents": 200000,
+        "electricityChargeCents": 20000,
+        "otherExpensesCents": 0,
+        "cashOverShortCents": -10000,
+        "recognizedProfitCents": -30000,
+        "recognition": {
+          "dailyProfitShareCents": 80000,
+          "profitEligibleReleasesCents": 0,
+          "reallocationsCents": -100000,
+          "otherExpensesCents": 0,
+          "cashOverShortCents": -10000
+        },
+        "memo": {
+          "actualMaterialsPaidCents": 0,
+          "actualElectricityPaidCents": 500000,
+          "otherCostsFromCostElecFundsCents": 0
+        },
+        "excessCostNotChargedCents": 170000,
+        "profitAfterExcessCostCents": -200000,
+        "balancesAsOfPeriodEnd": {
+          "unspentByLine": {
+            "materialsCents": 530000,
+            "electricityCents": -700000
+          },
+          "unspentCents": -170000,
+          "outstandingExcessCostCents": 170000
+        }
+      }
+    ],
+    "totals": {
+      "salesCents": 2900000,
+      "materialsChargeCents": 1120000,
+      "electricityChargeCents": 550000,
+      "otherExpensesCents": 30000,
+      "cashOverShortCents": -10000,
+      "recognizedProfitCents": 1190000,
+      "recognition": {
+        "dailyProfitShareCents": 940000,
+        "profitEligibleReleasesCents": 540000,
+        "reallocationsCents": -250000,
+        "otherExpensesCents": -30000,
+        "cashOverShortCents": -10000
+      },
+      "memo": {
+        "actualMaterialsPaidCents": 550000,
+        "actualElectricityPaidCents": 1250000,
+        "otherCostsFromCostElecFundsCents": 40000
+      },
+      "excessCostNotChargedCents": 170000,
+      "profitAfterExcessCostCents": 1020000,
+      "balancesAsOfPeriodEnd": {
+        "unspentByLine": {
+          "materialsCents": 530000,
+          "electricityCents": -700000
+        },
+        "unspentCents": -170000,
+        "outstandingExcessCostCents": 170000
+      }
+    },
+    "table": {
+      "title": "Ice Cream profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "sales",
+          "label": "Sales",
+          "kind": "money"
+        },
+        {
+          "key": "materials",
+          "label": "Materials (allocated)",
+          "kind": "money"
+        },
+        {
+          "key": "electricity",
+          "label": "Electricity (allocated)",
+          "kind": "money"
+        },
+        {
+          "key": "other",
+          "label": "Other ice-cream expenses",
+          "kind": "money"
+        },
+        {
+          "key": "overShort",
+          "label": "Cash over / short",
+          "kind": "money"
+        },
+        {
+          "key": "recognized",
+          "label": "Recognized profit",
+          "kind": "money"
+        },
+        {
+          "key": "excess",
+          "label": "Excess cost not yet charged",
+          "kind": "money"
+        },
+        {
+          "key": "afterExcess",
+          "label": "Profit after excess cost",
+          "kind": "money"
+        },
+        {
+          "key": "actualMaterials",
+          "label": "Memo: materials paid",
+          "kind": "money"
+        },
+        {
+          "key": "actualElectricity",
+          "label": "Memo: electricity bills paid",
+          "kind": "money"
+        },
+        {
+          "key": "otherFromCostElec",
+          "label": "Memo: other costs from Cost/Electricity funds",
+          "kind": "money"
+        },
+        {
+          "key": "unspent",
+          "label": "Unspent allocation at period end",
+          "kind": "money"
+        },
+        {
+          "key": "outstanding",
+          "label": "Outstanding excess cost at period end",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "sales": 2700000,
+          "materials": 920000,
+          "electricity": 530000,
+          "other": 30000,
+          "overShort": 0,
+          "recognized": 1220000,
+          "excess": 0,
+          "afterExcess": 1220000,
+          "actualMaterials": 550000,
+          "actualElectricity": 750000,
+          "otherFromCostElec": 40000,
+          "unspent": 110000,
+          "outstanding": 0
+        },
+        {
+          "period": "2025-09",
+          "sales": 200000,
+          "materials": 200000,
+          "electricity": 20000,
+          "other": 0,
+          "overShort": -10000,
+          "recognized": -30000,
+          "excess": 170000,
+          "afterExcess": -200000,
+          "actualMaterials": 0,
+          "actualElectricity": 500000,
+          "otherFromCostElec": 0,
+          "unspent": -170000,
+          "outstanding": 170000
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "sales": 2900000,
+        "materials": 1120000,
+        "electricity": 550000,
+        "other": 30000,
+        "overShort": -10000,
+        "recognized": 1190000,
+        "excess": 170000,
+        "afterExcess": 1020000,
+        "actualMaterials": 550000,
+        "actualElectricity": 1250000,
+        "otherFromCostElec": 40000,
+        "unspent": -170000,
+        "outstanding": 170000
+      },
+      "notes": [
+        "Recognized profit is the official Ice Cream profit: sales - materials allocated - electricity allocated - other costs paid from the Profit Fund +/- cash over/short.",
+        "Materials and electricity are the daily ALLOCATIONS (movements dated in the period). Paying a supplier or the electricity bill settles them and is never a second expense.",
+        "Excess cost not yet charged is the change in uncovered excess during the period; a negative figure means earlier excess is now covered. Official profit is never reduced automatically.",
+        "Unspent allocation and outstanding excess cost are balances at the period end and are not added up across rows (the total row shows the balance at the end date)."
+      ]
+    },
+    "warnings": [
+      {
+        "code": "EXCESS_COST_OUTSTANDING",
+        "book": "icecream",
+        "outstandingExcessCostCents": 170000,
+        "asOf": "2025-09-30",
+        "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-30: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+      }
+    ]
+  },
+  "pnlCombined": {
+    "segment": "combined",
+    "from": "2025-08-01",
+    "to": "2025-09-30",
+    "granularity": "month",
+    "rows": [
+      {
+        "period": {
+          "from": "2025-08-01",
+          "to": "2025-08-31",
+          "label": "2025-08"
+        },
+        "segments": {
+          "shop": {
+            "recognizedProfitCents": -143755
+          },
+          "telecom": {
+            "recognizedProfitCents": -18623
+          },
+          "icecream": {
+            "recognizedProfitCents": 1220000
+          }
+        },
+        "recognizedProfitCents": 1057622,
+        "electricityChargedCents": 530000,
+        "electricityBillsPaidCents": 750000,
+        "icecreamExcessCostNotChargedCents": 0,
+        "combinedProfitAfterExcessCostCents": 1057622,
+        "outstandingExcessCostCents": 0
+      },
+      {
+        "period": {
+          "from": "2025-09-01",
+          "to": "2025-09-30",
+          "label": "2025-09"
+        },
+        "segments": {
+          "shop": {
+            "recognizedProfitCents": 200599
+          },
+          "telecom": {
+            "recognizedProfitCents": -135000
+          },
+          "icecream": {
+            "recognizedProfitCents": -30000
+          }
+        },
+        "recognizedProfitCents": 35599,
+        "electricityChargedCents": 20000,
+        "electricityBillsPaidCents": 500000,
+        "icecreamExcessCostNotChargedCents": 170000,
+        "combinedProfitAfterExcessCostCents": -134401,
+        "outstandingExcessCostCents": 170000
+      }
+    ],
+    "totals": {
+      "segments": {
+        "shop": {
+          "recognizedProfitCents": 56844
+        },
+        "telecom": {
+          "recognizedProfitCents": -153623
+        },
+        "icecream": {
+          "recognizedProfitCents": 1190000
+        }
+      },
+      "recognizedProfitCents": 1093221,
+      "electricityChargedCents": 550000,
+      "electricityBillsPaidCents": 1250000,
+      "icecreamExcessCostNotChargedCents": 170000,
+      "combinedProfitAfterExcessCostCents": 923221,
+      "outstandingExcessCostCents": 170000
+    },
+    "table": {
+      "title": "Combined profit and loss",
+      "columns": [
+        {
+          "key": "period",
+          "label": "Period",
+          "kind": "text"
+        },
+        {
+          "key": "shop",
+          "label": "Shop profit",
+          "kind": "money"
+        },
+        {
+          "key": "telecom",
+          "label": "Telecom profit",
+          "kind": "money"
+        },
+        {
+          "key": "icecream",
+          "label": "Ice Cream recognized profit",
+          "kind": "money"
+        },
+        {
+          "key": "combined",
+          "label": "Combined recognized profit (official)",
+          "kind": "money"
+        },
+        {
+          "key": "excess",
+          "label": "Ice Cream excess cost not yet charged",
+          "kind": "money"
+        },
+        {
+          "key": "afterExcess",
+          "label": "Combined profit after excess cost",
+          "kind": "money"
+        },
+        {
+          "key": "electricityCharged",
+          "label": "Info: electricity charged (not added)",
+          "kind": "money"
+        },
+        {
+          "key": "electricityPaid",
+          "label": "Info: electricity bills paid (memo)",
+          "kind": "money"
+        },
+        {
+          "key": "outstanding",
+          "label": "Outstanding excess cost at period end",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "period": "2025-08",
+          "shop": -143755,
+          "telecom": -18623,
+          "icecream": 1220000,
+          "combined": 1057622,
+          "excess": 0,
+          "afterExcess": 1057622,
+          "electricityCharged": 530000,
+          "electricityPaid": 750000,
+          "outstanding": 0
+        },
+        {
+          "period": "2025-09",
+          "shop": 200599,
+          "telecom": -135000,
+          "icecream": -30000,
+          "combined": 35599,
+          "excess": 170000,
+          "afterExcess": -134401,
+          "electricityCharged": 20000,
+          "electricityPaid": 500000,
+          "outstanding": 170000
+        }
+      ],
+      "totals": {
+        "period": "Total",
+        "shop": 56844,
+        "telecom": -153623,
+        "icecream": 1190000,
+        "combined": 1093221,
+        "excess": 170000,
+        "afterExcess": 923221,
+        "electricityCharged": 550000,
+        "electricityPaid": 1250000,
+        "outstanding": 170000
+      },
+      "notes": [
+        "Combined profit = Shop profit + Telecom profit + Ice Cream recognized profit. The three segments never overlap.",
+        "The electricity lines are information only: the whole shop electricity bill is carried by the Ice Cream book and is never added to or deducted from any profit here (E5).",
+        "Excess cost not yet charged is the change in uncovered excess during the period; a negative figure means earlier excess is now covered. Official profit is never reduced automatically.",
+        "Unspent allocation and outstanding excess cost are balances at the period end and are not added up across rows (the total row shows the balance at the end date)."
+      ]
+    },
+    "warnings": [
+      {
+        "code": "EXCESS_COST_OUTSTANDING",
+        "book": "icecream",
+        "outstandingExcessCostCents": 170000,
+        "asOf": "2025-09-30",
+        "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-30: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+      }
+    ]
+  },
+  "valuation": {
+    "asOf": "2026-11-18",
+    "rows": [
+      {
+        "productId": 4,
+        "code": null,
+        "name": "Cable",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 5,
+        "valueCents": 50050,
+        "avgUnitCostCents": 10010
+      },
+      {
+        "productId": 2,
+        "code": null,
+        "name": "Charger",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 7,
+        "valueCents": 490000,
+        "avgUnitCostCents": 70000
+      },
+      {
+        "productId": 3,
+        "code": null,
+        "name": "Earbuds",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 8,
+        "valueCents": 475000,
+        "avgUnitCostCents": 59375
+      },
+      {
+        "productId": 8,
+        "code": null,
+        "name": "Memory card",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 13,
+        "valueCents": 1300000,
+        "avgUnitCostCents": 100000
+      },
+      {
+        "productId": 1,
+        "code": null,
+        "name": "Phone cover",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 14,
+        "valueCents": 453985,
+        "avgUnitCostCents": 32428
+      },
+      {
+        "productId": 6,
+        "code": null,
+        "name": "Power bank",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 8,
+        "valueCents": 1600000,
+        "avgUnitCostCents": 200000
+      },
+      {
+        "productId": 7,
+        "code": null,
+        "name": "Screen guard",
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "active": true,
+        "qty": 31,
+        "valueCents": 620000,
+        "avgUnitCostCents": 20000
+      },
+      {
+        "productId": 9,
+        "code": null,
+        "name": "Airtel 100",
+        "categoryId": 13,
+        "categoryName": "Airtel Cards",
+        "book": "telecom",
+        "active": true,
+        "qty": 92,
+        "valueCents": 828000,
+        "avgUnitCostCents": 9000
+      },
+      {
+        "productId": 10,
+        "code": null,
+        "name": "Hutch 50",
+        "categoryId": 14,
+        "categoryName": "Hutch Cards",
+        "book": "telecom",
+        "active": true,
+        "qty": 90,
+        "valueCents": 405000,
+        "avgUnitCostCents": 4500
+      },
+      {
+        "productId": 11,
+        "code": null,
+        "name": "Mobitel 200",
+        "categoryId": 15,
+        "categoryName": "Mobitel Cards",
+        "book": "telecom",
+        "active": true,
+        "qty": 39,
+        "valueCents": 702000,
+        "avgUnitCostCents": 18000
+      },
+      {
+        "productId": 5,
+        "code": null,
+        "name": "Scratch card 100",
+        "categoryId": 12,
+        "categoryName": "Scratch Cards",
+        "book": "telecom",
+        "active": true,
+        "qty": 38,
+        "valueCents": 342000,
+        "avgUnitCostCents": 9000
+      }
+    ],
+    "byBook": [
+      {
+        "book": "shop",
+        "qty": 86,
+        "valueCents": 4989035,
+        "products": 7
+      },
+      {
+        "book": "telecom",
+        "qty": 259,
+        "valueCents": 2277000,
+        "products": 4
+      }
+    ],
+    "byCategory": [
+      {
+        "categoryId": 4,
+        "categoryName": "Electronics",
+        "book": "shop",
+        "qty": 86,
+        "valueCents": 4989035,
+        "products": 7
+      },
+      {
+        "categoryId": 13,
+        "categoryName": "Airtel Cards",
+        "book": "telecom",
+        "qty": 92,
+        "valueCents": 828000,
+        "products": 1
+      },
+      {
+        "categoryId": 14,
+        "categoryName": "Hutch Cards",
+        "book": "telecom",
+        "qty": 90,
+        "valueCents": 405000,
+        "products": 1
+      },
+      {
+        "categoryId": 15,
+        "categoryName": "Mobitel Cards",
+        "book": "telecom",
+        "qty": 39,
+        "valueCents": 702000,
+        "products": 1
+      },
+      {
+        "categoryId": 12,
+        "categoryName": "Scratch Cards",
+        "book": "telecom",
+        "qty": 38,
+        "valueCents": 342000,
+        "products": 1
+      }
+    ],
+    "totals": {
+      "qty": 345,
+      "valueCents": 7266035,
+      "products": 11
+    },
+    "reconciliation": {
+      "asOfIsLive": true,
+      "cacheQty": 345,
+      "cacheValueCents": 7266035,
+      "matchesCache": true
+    },
+    "table": {
+      "title": "Inventory valuation",
+      "columns": [
+        {
+          "key": "code",
+          "label": "Code",
+          "kind": "text"
+        },
+        {
+          "key": "name",
+          "label": "Product",
+          "kind": "text"
+        },
+        {
+          "key": "category",
+          "label": "Category",
+          "kind": "text"
+        },
+        {
+          "key": "book",
+          "label": "Book",
+          "kind": "text"
+        },
+        {
+          "key": "qty",
+          "label": "Quantity",
+          "kind": "int"
+        },
+        {
+          "key": "avg",
+          "label": "Average cost",
+          "kind": "money"
+        },
+        {
+          "key": "value",
+          "label": "Stock value",
+          "kind": "money"
+        }
+      ],
+      "rows": [
+        {
+          "code": null,
+          "name": "Cable",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 5,
+          "avg": 10010,
+          "value": 50050
+        },
+        {
+          "code": null,
+          "name": "Charger",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 7,
+          "avg": 70000,
+          "value": 490000
+        },
+        {
+          "code": null,
+          "name": "Earbuds",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 8,
+          "avg": 59375,
+          "value": 475000
+        },
+        {
+          "code": null,
+          "name": "Memory card",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 13,
+          "avg": 100000,
+          "value": 1300000
+        },
+        {
+          "code": null,
+          "name": "Phone cover",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 14,
+          "avg": 32428,
+          "value": 453985
+        },
+        {
+          "code": null,
+          "name": "Power bank",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 8,
+          "avg": 200000,
+          "value": 1600000
+        },
+        {
+          "code": null,
+          "name": "Screen guard",
+          "category": "Electronics",
+          "book": "shop",
+          "qty": 31,
+          "avg": 20000,
+          "value": 620000
+        },
+        {
+          "code": null,
+          "name": "Airtel 100",
+          "category": "Airtel Cards",
+          "book": "telecom",
+          "qty": 92,
+          "avg": 9000,
+          "value": 828000
+        },
+        {
+          "code": null,
+          "name": "Hutch 50",
+          "category": "Hutch Cards",
+          "book": "telecom",
+          "qty": 90,
+          "avg": 4500,
+          "value": 405000
+        },
+        {
+          "code": null,
+          "name": "Mobitel 200",
+          "category": "Mobitel Cards",
+          "book": "telecom",
+          "qty": 39,
+          "avg": 18000,
+          "value": 702000
+        },
+        {
+          "code": null,
+          "name": "Scratch card 100",
+          "category": "Scratch Cards",
+          "book": "telecom",
+          "qty": 38,
+          "avg": 9000,
+          "value": 342000
+        }
+      ],
+      "totals": {
+        "code": null,
+        "name": "Total",
+        "category": null,
+        "book": null,
+        "qty": 345,
+        "avg": null,
+        "value": 7266035
+      },
+      "notes": [
+        "Stock as of 2026-11-18, from the stock movements by business date. Average cost is value / quantity (display only)."
+      ]
+    },
+    "warnings": []
+  },
+  "dashboard": {
+    "asOf": "2025-09-15",
+    "today": {
+      "salesCents": 0,
+      "profitCents": 0,
+      "bySegment": {
+        "shop": {
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        "telecom": {
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        "icecream": {
+          "salesCents": 0,
+          "profitCents": 0
+        }
+      }
+    },
+    "month": {
+      "salesCents": 4042000,
+      "profitCents": 35599,
+      "bySegment": {
+        "shop": {
+          "salesCents": 3322000,
+          "profitCents": 200599
+        },
+        "telecom": {
+          "salesCents": 520000,
+          "profitCents": -135000
+        },
+        "icecream": {
+          "salesCents": 200000,
+          "profitCents": -30000
+        }
+      }
+    },
+    "cash": {
+      "books": [
+        {
+          "book": "shop",
+          "balanceCents": 208950
+        },
+        {
+          "book": "telecom",
+          "balanceCents": 8434566
+        },
+        {
+          "book": "icecream",
+          "balanceCents": 1440000,
+          "fundsMatchBook": true,
+          "funds": {
+            "cost": 890000,
+            "electricity": -500000,
+            "profit": 1050000
+          }
+        }
+      ],
+      "totalCents": 10083516
+    },
+    "stock": {
+      "valueCents": 7266035,
+      "lowStockCount": 0,
+      "lowStock": [],
+      "negativeOrWarning": []
+    },
+    "icecream": {
+      "recognizedProfitMonthCents": -30000,
+      "funds": {
+        "cost": 890000,
+        "electricity": -500000,
+        "profit": 1050000
+      },
+      "fundsTotalCents": 1440000,
+      "fundsMatchBook": true,
+      "excessCostNotChargedTodayCents": 0,
+      "excessCostNotChargedMonthCents": 170000,
+      "profitAfterExcessCostMonthCents": -200000,
+      "outstandingExcessCostCents": 170000,
+      "warnings": [
+        {
+          "code": "NEGATIVE_FUND_BALANCE",
+          "book": "icecream",
+          "fund": "electricity",
+          "balanceCents": -500000,
+          "message": "The Ice Cream Electricity fund is now below zero (-Rs. 5,000.00)."
+        },
+        {
+          "code": "EXCESS_COST_OUTSTANDING",
+          "book": "icecream",
+          "outstandingExcessCostCents": 170000,
+          "asOf": "2025-09-15",
+          "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-15: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+        }
+      ]
+    },
+    "closings": {
+      "lastClosedByBook": {
+        "shop": "2025-09-14",
+        "telecom": "2025-09-14",
+        "icecream": null
+      },
+      "openDaysBehind": [
+        {
+          "book": "shop",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13"
+          ]
+        },
+        {
+          "book": "telecom",
+          "segment": "dialog_cards",
+          "label": "Dialog Cards",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "telecom",
+          "segment": "dialog_reloads",
+          "label": "Dialog Reloads",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "telecom",
+          "segment": "mobitel_cards",
+          "label": "Mobitel Cards",
+          "dates": [
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "telecom",
+          "segment": "mobitel_reloads",
+          "label": "Mobitel Reloads",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "telecom",
+          "segment": "airtel_cards",
+          "label": "Airtel Cards",
+          "dates": [
+            "2025-09-13"
+          ],
+          "lastClosedDate": "2025-09-14"
+        },
+        {
+          "book": "telecom",
+          "segment": "airtel_reloads",
+          "label": "Airtel Reloads",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "telecom",
+          "segment": "hutch_cards",
+          "label": "Hutch Cards",
+          "dates": [
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "telecom",
+          "segment": "hutch_reloads",
+          "label": "Hutch Reloads",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14"
+          ],
+          "lastClosedDate": null
+        },
+        {
+          "book": "icecream",
+          "dates": [
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14"
+          ]
+        }
+      ]
+    },
+    "backup": {
+      "latestAt": null,
+      "ageHours": null,
+      "status": "none",
+      "external": {
+        "status": "not_configured",
+        "lastSuccessAt": null,
+        "daysSinceSuccess": null,
+        "warning": "No external backup folder is set, so backups exist only on this computer. Choose a USB drive or another local drive in Settings > Backups."
+      }
+    },
+    "series": {
+      "daily": [
+        {
+          "date": "2025-08-17",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-18",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-19",
+          "salesCents": 300000,
+          "profitCents": 90000
+        },
+        {
+          "date": "2025-08-20",
+          "salesCents": 580000,
+          "profitCents": 265435
+        },
+        {
+          "date": "2025-08-21",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-22",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-23",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-24",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-25",
+          "salesCents": 800000,
+          "profitCents": 330000
+        },
+        {
+          "date": "2025-08-26",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-27",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-28",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-29",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-30",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-08-31",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-01",
+          "salesCents": 288000,
+          "profitCents": -2000
+        },
+        {
+          "date": "2025-09-02",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-03",
+          "salesCents": 300000,
+          "profitCents": 90000
+        },
+        {
+          "date": "2025-09-04",
+          "salesCents": 120000,
+          "profitCents": 94717
+        },
+        {
+          "date": "2025-09-05",
+          "salesCents": 155400,
+          "profitCents": -889600
+        },
+        {
+          "date": "2025-09-06",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-07",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-08",
+          "salesCents": 0,
+          "profitCents": -122418
+        },
+        {
+          "date": "2025-09-09",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-10",
+          "salesCents": 0,
+          "profitCents": -28000
+        },
+        {
+          "date": "2025-09-11",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-12",
+          "salesCents": 0,
+          "profitCents": 0
+        },
+        {
+          "date": "2025-09-13",
+          "salesCents": 1893600,
+          "profitCents": 840550
+        },
+        {
+          "date": "2025-09-14",
+          "salesCents": 1285000,
+          "profitCents": 52350
+        },
+        {
+          "date": "2025-09-15",
+          "salesCents": 0,
+          "profitCents": 0
+        }
+      ],
+      "monthly": [
+        {
+          "month": "2024-10",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2024-11",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2024-12",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-01",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-02",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-03",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-04",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-05",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-06",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-07",
+          "shopCents": 0,
+          "telecomCents": 0,
+          "icecreamCents": 0,
+          "combinedCents": 0
+        },
+        {
+          "month": "2025-08",
+          "shopCents": -143755,
+          "telecomCents": -18623,
+          "icecreamCents": 1220000,
+          "combinedCents": 1057622
+        },
+        {
+          "month": "2025-09",
+          "shopCents": 200599,
+          "telecomCents": -135000,
+          "icecreamCents": -30000,
+          "combinedCents": 35599
+        }
+      ],
+      "topProducts": [
+        {
+          "name": "Screen guard",
+          "revenueCents": 900000,
+          "grossProfitCents": 600000
+        },
+        {
+          "name": "Memory card",
+          "revenueCents": 1070000,
+          "grossProfitCents": 468000
+        },
+        {
+          "name": "Power bank",
+          "revenueCents": 700000,
+          "grossProfitCents": 300000
+        },
+        {
+          "name": "Phone cover",
+          "revenueCents": 240000,
+          "grossProfitCents": 142717
+        },
+        {
+          "name": "Charger",
+          "revenueCents": 120000,
+          "grossProfitCents": 52000
+        }
+      ]
+    },
+    "warnings": [
+      {
+        "code": "NEGATIVE_FUND_BALANCE",
+        "book": "icecream",
+        "fund": "electricity",
+        "balanceCents": -500000,
+        "message": "The Ice Cream Electricity fund is now below zero (-Rs. 5,000.00)."
+      },
+      {
+        "code": "EXCESS_COST_OUTSTANDING",
+        "book": "icecream",
+        "outstandingExcessCostCents": 170000,
+        "asOf": "2025-09-15",
+        "message": "Rs. 1,700.00 excess cost outstanding as of 2025-09-15: more was actually spent than was set aside in the daily allocations. Official profit is not reduced automatically; after this excess cost it would be Rs. 10,200.00. Move money from Profit back to Cost or Electricity to charge it."
+      }
+    ],
+    "definitions": {
+      "sales": "Sales are the revenue lines of the profit and loss reports, net of returns (a return counts on the day it was made).",
+      "salesShop": "Shop sales = goods revenue + print/service revenue.",
+      "salesTelecom": "Telecom sales = scratch-card revenue + reload commission + EZCash commission. Reload and EZCash collections and top-ups are cash only, never sales.",
+      "salesIcecream": "Ice Cream sales = the daily sales entered for the Ice Cream book.",
+      "salesCombined": "Combined sales = Shop + Telecom + Ice Cream sales.",
+      "profit": "Profit = the segment net profit of the reports (gross profit and commissions - expenses - stock adjustments +/- cash over/short). Ice Cream profit is the RECOGNIZED profit. Combined profit = Shop + Telecom + Ice Cream recognized profit.",
+      "today": "Today = the dashboard date only.",
+      "month": "This month = the 1st of the dashboard date's month up to and including the dashboard date.",
+      "cash": "Cash balances are the sum of every ledger entry dated on or before the dashboard date. Ice Cream fund balances are shown separately and are not profit.",
+      "stock": "Stock value is the value of stock on hand at the dashboard date (from the stock movements). The low-stock list is the live list of products at or below their minimum.",
+      "excessCost": "Excess cost = money actually spent beyond what was set aside in the daily allocations. Official profit is not reduced automatically; the \"profit after excess cost\" line shows what it would be.",
+      "closings": "Days not yet closed = the 7 days before the dashboard date, from the book's first entry onward, that have no active daily closing.",
+      "backup": "Backup age is measured from the real current time. Status is \"stale\" after 48 hours and \"none\" when there is no backup. \"external\" is the status of the copy on the external backup folder (USB drive): \"stale\" means no successful copy for 7 days or more.",
+      "seriesDaily": "Daily series = the last 30 days ending on the dashboard date (days without records are zero). Profit is the combined recognized profit.",
+      "seriesMonthly": "Monthly series = the last 12 calendar months ending with the dashboard date's month (the last month runs only up to the dashboard date).",
+      "topProducts": "Top products = the 5 stock products (Shop goods and scratch cards) with the highest gross profit this month, net of returns."
+    }
+  },
+  "saleItems": {
+    "n": 34,
+    "qty": 225,
+    "returnedQty": 37,
+    "revenueCents": 9754999,
+    "cogsCents": 5222407,
+    "extraCostCents": 16000,
+    "unitPriceCents": 2943333
+  },
+  "saleItemsByBook": [
+    {
+      "book": "shop",
+      "segment": "",
+      "status": "posted",
+      "n": 21,
+      "qty": 70,
+      "returnedQty": 15,
+      "revenueCents": 6534999,
+      "cogsCents": 3082407,
+      "extraCostCents": 6000
+    },
+    {
+      "book": "shop",
+      "segment": "",
+      "status": "void",
+      "n": 4,
+      "qty": 16,
+      "returnedQty": 0,
+      "revenueCents": 1920000,
+      "cogsCents": 970000,
+      "extraCostCents": 0
+    },
+    {
+      "book": "telecom",
+      "segment": "airtel_cards",
+      "status": "posted",
+      "n": 2,
+      "qty": 28,
+      "returnedQty": 20,
+      "revenueCents": 280000,
+      "cogsCents": 252000,
+      "extraCostCents": 0
+    },
+    {
+      "book": "telecom",
+      "segment": "dialog_cards",
+      "status": "posted",
+      "n": 3,
+      "qty": 60,
+      "returnedQty": 0,
+      "revenueCents": 600000,
+      "cogsCents": 540000,
+      "extraCostCents": 10000
+    },
+    {
+      "book": "telecom",
+      "segment": "hutch_cards",
+      "status": "posted",
+      "n": 1,
+      "qty": 10,
+      "returnedQty": 0,
+      "revenueCents": 50000,
+      "cogsCents": 45000,
+      "extraCostCents": 0
+    },
+    {
+      "book": "telecom",
+      "segment": "hutch_cards",
+      "status": "void",
+      "n": 1,
+      "qty": 30,
+      "returnedQty": 0,
+      "revenueCents": 150000,
+      "cogsCents": 135000,
+      "extraCostCents": 0
+    },
+    {
+      "book": "telecom",
+      "segment": "mobitel_cards",
+      "status": "posted",
+      "n": 2,
+      "qty": 11,
+      "returnedQty": 2,
+      "revenueCents": 220000,
+      "cogsCents": 198000,
+      "extraCostCents": 0
+    }
+  ],
+  "printSales": {
+    "n": 9,
+    "qty": 334,
+    "revenueCents": 634000,
+    "cogsCents": 257600,
+    "unitPriceCents": 22000,
+    "unitCostCents": 6850
+  },
+  "printSalesByStatus": [
+    {
+      "status": "posted",
+      "n": 7,
+      "qty": 291,
+      "revenueCents": 522000,
+      "cogsCents": 219650
+    },
+    {
+      "status": "void",
+      "n": 2,
+      "qty": 43,
+      "revenueCents": 112000,
+      "cogsCents": 37950
+    }
+  ],
+  "rowCounts": {
+    "audit_logs": 187,
+    "backup_settings": 0,
+    "capital_entries": 6,
+    "cash_counts": 6,
+    "cash_entries": 161,
+    "cash_transfers": 7,
+    "categories": 15,
+    "corrections": 2,
+    "daily_closings": 4,
+    "expenses": 14,
+    "external_backup_log": 0,
+    "external_backup_state": 0,
+    "ezcash_sales": 4,
+    "icecream_days": 7,
+    "icecream_fund_entries": 46,
+    "icecream_fund_moves": 5,
+    "icecream_payments": 7,
+    "icecream_sales": 2,
+    "import_issues": 0,
+    "import_runs": 0,
+    "opening_stock_batches": 1,
+    "owner_drawings": 6,
+    "print_sales": 9,
+    "print_service_types": 7,
+    "printing_supplies": 3,
+    "products": 11,
+    "purchase_items": 14,
+    "purchase_return_items": 1,
+    "purchase_returns": 1,
+    "purchases": 11,
+    "reload_providers": 4,
+    "reload_sales": 10,
+    "sale_items": 34,
+    "sales": 27,
+    "sales_return_items": 12,
+    "sales_returns": 11,
+    "schema_migrations": 26,
+    "settings": 0,
+    "stock_losses": 8,
+    "stock_movements": 79,
+    "stocktake_items": 5,
+    "stocktakes": 4,
+    "suppliers": 0,
+    "telecom_topups": 5
+  }
+}
