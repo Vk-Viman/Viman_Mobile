@@ -11,7 +11,8 @@ import { post } from './catalog.ts';
 import { drawNew, lossNew, stComplete, stDraft } from './phase4.ts';
 import { cl, returnOk, rl, sellOk, voidSaleNew } from './phase5.ts';
 import { ez, ezVoid, providerIds, rel, relVoid, topProvider, topWallet } from './phase6.ts';
-import { expNew, expVoid, openNew, countNew } from './phase8.ts';
+import { closeNew, expNew, expVoid, openNew, countNew } from './phase8.ts';
+import { dayOk } from './phase10.ts';
 import { capNew, drawCash, tr } from './phase9.ts';
 import { seg } from './seg.ts';
 
@@ -100,8 +101,14 @@ export async function buildSegWorld(s: ApiBase): Promise<SegWorld> {
   must('transfer void', await post(s.app, `/cash-transfers/${trV}/void`, { reason: 'typo' }));
   r.transferVoided = trV;
 
-  // one closed day for one segment
+  // Shop and Ice Cream rows (no segment): expense, count, ice cream day
+  r.shopExpense = must('shop expense', await expNew(s, { ...D('09-12'), book: 'shop', category: 'rent', amountCents: 20_000 })).item.id;
+  r.shopCount = must('shop count', await countNew(s, 'shop', 1, { ...D('09-12'), note: 'counted by the owner' })).item.id;
+  await dayOk(s, { ...D('09-12'), salesCents: 100_000, costAllocCents: 60_000, electricityAllocCents: 10_000 });
+
+  // closed days: one Telecom segment, and the Shop (both without any effect on the other scopes)
   await seg.closeOk(s, 'hutch_reloads', '2025-09-13');
+  must('shop closing', await closeNew(s, 'shop', '2025-09-13'));
   return { products: { dd, mm, aa, shopP }, sales, records: r };
 }
 
