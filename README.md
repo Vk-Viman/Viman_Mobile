@@ -83,11 +83,12 @@ Tick these off in order, once:
 - [ ] **Settings → General**: check the shop name, address, phone and email.
 - [ ] **Settings → Commission rates**: reload commission (default 6.00%) and EZCash commission (default 0.80%).
 - [ ] **Products → Categories**: add any extra categories you need (12 are built in).
-- [ ] **Products**: add your products (and **Suppliers** if you want them on purchases). Scratch cards are products in the *Scratch Cards* category.
+- [ ] **Products → Categories → link each Telecom category to its provider**: open each Telecom category for scratch cards (for example *Scratch Cards* or a new *Mobitel Cards*) and choose its provider (Dialog, Mobitel, Airtel or Hutch). Do this **before** adding card products: a card product cannot be created in a Telecom category that has no provider, and the provider cannot be changed once the category has products.
+- [ ] **Products**: add your products (and **Suppliers** if you want them on purchases). Scratch cards are products in a Telecom category that is linked to a provider.
 - [ ] **Opening Stock**: enter the stock you already own, by hand or from the Excel template. Use it once.
-- [ ] **Cash Books**: for each book press **Set opening balance** with the cash that is in the drawer for that book. For Ice Cream you also choose which fund (Cost, Electricity, Profit) the money belongs to.
+- [ ] **Cash Books**: for Shop and Ice Cream press **Set opening balance** with the cash that is in the drawer for that book (for Ice Cream also choose the fund: Cost, Electricity, Profit). For **Telecom** choose each segment (for example *Dialog Reloads*, *Mobitel Cards*) and set an opening balance for each one that holds cash. One opening balance per book or segment.
 - [ ] **Settings → Backups**: press **Backup now**, then set the external USB folder and press **Copy backup now** ([section 6](#6-data-safety-backups-and-restore)).
-- [ ] From then on use the other screens every day and **Close day** on Cash Books each evening.
+- [ ] From then on use the other screens every day and **Close day** on Cash Books each evening (for Telecom, close each segment that had activity).
 
 ---
 
@@ -109,7 +110,7 @@ The home screen. Two cards show *Today* and *This month*: sales and profit for S
 
 ### 4.2 Sales (tabs: POS, History)
 
-**Record a sale.** POS tab → search a product by name or code (a barcode scanner that types the code and presses Enter also works) → it is added to the cart → change quantity or price if needed → **Save sale**. A cart holding both Shop goods and Telecom scratch cards is saved as two sales, one for each book. You cannot sell more than is in stock. A price below the minimum price or below cost gives a warning but still saves.
+**Record a sale.** POS tab → search a product by name or code (a barcode scanner that types the code and presses Enter also works) → it is added to the cart → change quantity or price if needed → **Save sale**. A cart holding both Shop goods and Telecom scratch cards is saved as two sales, one for each book. A cart with cards of several providers (for example Dialog and Mobitel) is saved as **one sale per provider**, so each provider's money goes to its own Telecom segment; the History tab shows each of them separately. Payment is always cash. You cannot sell more than is in stock. A price below the minimum price or below cost gives a warning but still saves.
 
 **Record a sale with an edited cost.** The "Cost per unit" fills in by itself from stock (weighted average). You may **raise** it, never lower it.
 Example: 5 chargers at Rs 100.00 each = Rs 500.00. Automatic cost is Rs 37.40 per unit; you enter Rs 38.00. Cost charged = 5 × 38.00 = Rs 190.00 (automatic Rs 187.00 plus extra Rs 3.00), so profit is Rs 310.00. Stock still leaves at Rs 187.00; the extra Rs 3.00 changes no stock and no cash, it only lowers profit.
@@ -131,7 +132,9 @@ Services (printing, photocopying) cannot be sold in the POS; use **Services**. R
 
 **Add a product.** Products → **New product** → choose **Shop or Telecom** first, then a category of that book (or create a new one on the spot), then name, optional code, selling price, minimum price and reorder level. New products are always counted *stock* items. Stock quantity cannot be typed in: it comes from purchases, opening stock and stocktakes.
 
-**Categories.** **New category**: choose Shop or Telecom and a name (the same name may exist in both books). You can rename a category or deactivate it; categories are never deleted. The 12 built-in categories cannot be renamed or moved between books.
+**Telecom categories and providers.** Every Telecom category is linked to **one provider** (Dialog, Mobitel, Airtel or Hutch): choose it when you create the category or edit it (the *Provider* column shows it, "Not set" if missing). A scratch-card product takes the provider of its category, and that decides which Telecom segment it belongs to (for example *Dialog Cards*). You cannot add a card product to a Telecom category without a provider, and once a category has products its provider cannot be changed (create a new category instead). Products entered before segments existed, in a category without a provider, are shown as "No provider (legacy)": they stay in your records but cannot be sold or purchased any more.
+
+**Categories.** **New category**: choose Shop or Telecom (for Telecom also the provider) and a name (the same name may exist in both books). You can rename a category or deactivate it; categories are never deleted. The 12 built-in categories cannot be renamed or moved between books.
 
 **Deactivate a product** that still has stock: you are asked to confirm; its units stay valued but it cannot be sold or purchased until you reactivate it.
 
@@ -141,7 +144,7 @@ Services (printing, photocopying) cannot be sold in the POS; use **Services**. R
 **Record a purchase (with a new product).** **New purchase** → date, supplier, bill number → for each line choose the product (or **New product** right from the line), the number of packs, the pack size and the **total price of the line** → **Record purchase**.
 Example: 2 packs × 5 pieces for a line total of Rs 4,000.00 gives 10 units, Rs 400.00 each, added to stock at exactly Rs 4,000.00.
 
-The whole bill is paid in cash from the Shop or Telecom cash book. A bill cannot mix Shop and Telecom products: make two bills. **Return items** sends goods back to the supplier and records the refund. **Void** cancels a whole purchase (type `VOID`) if none of it was returned and its stock is still on hand. (There is no way to void a purchase return; see [section 10](#10-roadmap-not-built-yet-and-ideas).)
+The whole bill is paid in cash from the Shop or Telecom cash book. A bill cannot mix Shop and Telecom products: make two bills. A Telecom bill holds the cards of **one provider only** (the money leaves that provider's Cards segment): if you bought Dialog and Mobitel cards from the same supplier, enter two bills. **Return items** sends goods back to the supplier and records the refund. **Void** cancels a whole purchase (type `VOID`) if none of it was returned and its stock is still on hand. (There is no way to void a purchase return; see [section 10](#10-roadmap-not-built-yet-and-ideas).)
 
 ### 4.5 Stock (tabs: Stock on hand, Stocktake, Stock losses, Personal use)
 - **Stock on hand**: quantity, value and average cost for today or an earlier date, with a check that the figures agree with the stock history.
@@ -171,27 +174,30 @@ Each of these can be voided.
 - **Top-ups** (**Record top-up**): money paid out to a provider for reload credit, or into the EZCash wallet. Not a cost.
 - The Telecom cash book is **not** meant to match Telecom profit, because reload credit and wallet balances are not tracked (owner decision).
 - Scratch cards are ordinary products sold in Sales.
+- **Segments.** Telecom is kept in eight parts: for each provider (Dialog, Mobitel, Airtel, Hutch) one **Cards** part and one **Reloads** part. A reload and a provider top-up go to that provider's *Reloads*; EZCash bills and wallet top-ups go to *Dialog Reloads*; scratch-card sales and purchases go to the provider's *Cards*. You do not pick the segment on these screens; the lists show it in a *Segment* column. The Telecom summary on this screen also shows a line per segment, and the Telecom total is the sum of the eight.
 
 ### 4.9 Expenses
-**Add expense** for Shop or Telecom running costs: Water, Rent, Internet, Transport, Repairs, Cleaning supplies, Packaging, Stationery, Other. There is **no Electricity category**: the whole shop's electricity bill is paid from the Ice Cream book (see 4.12). Ice Cream costs are not entered here.
+**Add expense** for Shop or Telecom running costs: Water, Rent, Internet, Transport, Repairs, Cleaning supplies, Packaging, Stationery, Other. For a Telecom expense you also choose the **Telecom segment** it belongs to (for example *Airtel Reloads*): the cost is paid from, and reduces the profit of, that segment only. There is **no Electricity category**: the whole shop's electricity bill is paid from the Ice Cream book (see 4.12). Ice Cream costs are not entered here.
 
 ### 4.10 Cash Books
 One tab each for Shop, Telecom and Ice Cream, with a period picker. Each shows the opening balance, money in, money out, closing balance and a ledger with a running balance (Ice Cream also shows its three funds).
 
-- **Set opening balance**: once per book (once per fund for Ice Cream). To correct it, void and enter again.
-- **Count cash**: type what is in the drawer; any difference is posted as cash over/short and needs a note.
+**Telecom segments.** Under the Telecom tab a row of tiles lets you choose a segment: *Dialog Cards*, *Dialog Reloads*, *Mobitel Cards* and so on, each with its own balance, ledger, cash count and closed days, plus **All Telecom**, which is the total of the eight and is for reading only (nothing can be recorded there). If you have data from before segments existed, a tile *Telecom before segments* holds it: its balance stays correct, but nothing new can be recorded in it (you can still cancel old records and reopen its days).
+
+- **Set opening balance**: once per book (once per fund for Ice Cream, once per segment for Telecom). To correct it, void and enter again.
+- **Count cash**: type what is in the drawer (for Telecom: of the selected segment); any difference is posted as cash over/short and needs a note.
   Example: book says Rs 18,500.00, drawer holds Rs 18,450.00: a Rs 50.00 shortage is posted as a cost.
-- **Close day** (locks that date for that book) and **Reopen day** (needs a reason; recorded in the Audit log).
+- **Close day** (locks that date for that book, or for that Telecom segment only) and **Reopen day** (needs a reason; recorded in the Audit log). Closing Dialog Reloads does not close Mobitel Cards: close each segment that had activity that day.
 - Closing a day without counting is allowed. A book that goes below zero shows a warning but is never blocked.
 
 **Close the day with a count.** Each evening: Cash Books → the book's tab → **Count cash** with the drawer total → note if there is a difference → **Close day**.
 
-**The closed-day rules.** Anything dated *on* a closed day, including cancelling an old record, is refused until you reopen the day. Anything dated *earlier than the latest closed day* of that book is also refused ("a later day is already closed"): reopen the later day first, or use a date after it.
+**The closed-day rules.** Anything dated *on* a closed day, including cancelling an old record, is refused until you reopen the day. Anything dated *earlier than the latest closed day* of that book (for Telecom: of that segment) is also refused ("a later day is already closed"): reopen the later day first, or use a date after it.
 
 ### 4.11 Drawings (tabs: Drawings, Capital, Transfers)
-- **Drawings** (**Record cash drawing**): cash the owner takes from a book (Ice Cream: from a chosen fund). Goods taken for personal use are entered under Stock → Personal use.
-- **Capital** (**Add capital**): money the owner puts into a book. Not income.
-- **Transfers** (**Transfer cash**): move cash between books; both sides are recorded together.
+- **Drawings** (**Record cash drawing**): cash the owner takes from a book (Ice Cream: from a chosen fund; Telecom: from a chosen segment). Goods taken for personal use are entered under Stock → Personal use.
+- **Capital** (**Add capital**): money the owner puts into a book (Telecom: into a chosen segment). Not income.
+- **Transfers** (**Transfer cash**): move cash between books; both sides are recorded together. A Telecom side names its segment, and you may also move cash from one Telecom segment to another (the Telecom total does not change).
 None of these change profit.
 
 ### 4.12 Ice Cream
@@ -216,8 +222,8 @@ Example: sales Rs 10,000.00, set aside Rs 6,000.00 for cost and Rs 1,000.00 for 
 **Funds tab.** The three fund balances, the cash book total (they must agree), the **recognized profit** (the official figure), and a warning with "Excess cost not yet charged" and "Profit after excess cost" when more was spent than was set aside. Fund balances are cash allocations, never income. Full rules: `BUSINESS_RULES.md` §10.
 
 ### 4.13 Reports (tabs: Profit & loss, Cash books, Ice Cream, Stock, Activity, Backdated)
-- *Profit & loss*: Shop, Telecom, Ice Cream or Combined.
-- *Cash books*, *Ice Cream* (funds and profit), *Stock* (valuation, movements, losses, product profit, low stock), *Activity* (sales, purchases, drawings, printing variance), *Backdated* (records entered with an earlier date).
+- *Profit & loss*: Shop, Telecom, Ice Cream or Combined. The Telecom report shows one column per segment and the Telecom total (the sum of the segments), and you can filter it to a single segment. Combined profit still uses one Telecom figure.
+- *Cash books* (Telecom: opening, in, out and closing per segment), *Ice Cream* (funds and profit), *Stock* (valuation, movements, losses, product profit, low stock), *Activity* (sales, purchases, drawings, printing variance), *Backdated* (records entered with an earlier date).
 - Pick a period and daily or monthly rows; **Download Excel** on each report. Every row uses only the records dated inside its own period.
 
 **Review Backdated monthly** and close the days you have finished with.
@@ -233,7 +239,7 @@ You can enter a missed transaction with an earlier date (never a future date). O
 ## 5. How the money is tracked
 
 ### Three separate cash books
-One physical drawer, three *logical* books: Shop, Telecom, Ice Cream. Every product, expense, loss, drawing and cash entry belongs to exactly one book, and Combined profit = Shop + Telecom + Ice Cream. A book's balance is simply opening balance + money in − money out, added up from its ledger.
+One physical drawer, three *logical* books: Shop, Telecom, Ice Cream. Every product, expense, loss, drawing and cash entry belongs to exactly one book, and Combined profit = Shop + Telecom + Ice Cream. The Telecom book is itself kept in eight **segments** (Dialog, Mobitel, Airtel, Hutch, each with Cards and Reloads); every Telecom entry belongs to exactly one segment, each segment has its own balance, drawer count, closed days and profit, and the Telecom book is their sum. A book's balance is simply opening balance + money in − money out, added up from its ledger.
 
 ### What is profit, and what is not
 | Counts in profit | Does NOT count in profit |
@@ -366,7 +372,7 @@ Anything entered after that backup must be re-entered.
 | **"Node.js 24 or newer is required"** | Node.js is missing or too old | Install Node.js 24 LTS from https://nodejs.org, then start again |
 | **The build failed** | Screens could not be built | Open a terminal in this folder, run `npm run build`, read the error. If the first-time install failed, check the internet |
 | **"The shop database is damaged"** | Possible after a power cut or disk fault; the system refuses to start | Follow [After a power cut or a damaged database](#after-a-power-cut-or-a-damaged-database) |
-| **Restore rejected** (`RESTORE_INVALID`, `RESTORE_INTEGRITY_FAILED`, `RESTORE_INVALID_FILE`) | The file is not a valid Viman database, is damaged, is from a newer version, or its stock, cash or Ice Cream fund figures do not agree with its own history | Your current data is not changed and the reasons are listed on screen and in the Audit log. Pick a different backup |
+| **Restore rejected** (`RESTORE_INVALID`, `RESTORE_INTEGRITY_FAILED`, `RESTORE_INVALID_FILE`) | The file is not a valid Viman database, is damaged, is from a newer version, or its stock, cash, Ice Cream fund or Telecom segment figures do not agree with its own history | Your current data is not changed and the reasons are listed on screen and in the Audit log. Pick a different backup |
 | **Backup status: Drive not found / Last copy failed / Overdue** | The USB folder cannot be reached, the copy failed (full or read-only drive), or nothing was confirmed on the drive for 7 days | Plug the drive in (check its letter), press **Copy backup now**; the status returns to Synchronized |
 | `DAY_CLOSED` ("That day is closed...") | The date you chose is a closed day for that cash book | Cash Books → **Reopen day** (a reason is required), make the entry, close the day again |
 | `BACKDATE_BEFORE_CLOSED_DAY` | A later day is already closed for that book; an earlier-dated entry would change a closed day | Reopen the later closed day first, or use a date after it |
@@ -374,6 +380,9 @@ Anything entered after that backup must be re-entered.
 | `ELECTRICITY_NOT_ALLOWED` | You tried an Electricity expense in Shop or Telecom | Electricity is paid from the Ice Cream book: Ice Cream → Payments → Electricity bill |
 | `RETURN_NOT_NEWEST` | You tried to void a return, but a newer return exists on the same item | Void the newest return first, then this one |
 | `RETURN_STOCK_NOT_AVAILABLE` | The returned items are no longer all in stock (probably resold), so the return cannot be undone | Nothing was changed. If it must be undone, first bring the stock back (for example a purchase) or leave the return as is |
+| `PRODUCT_NEEDS_PROVIDER` | You are adding a scratch-card product in a Telecom category that is not linked to a provider | Products → Categories: open the category and choose its provider (Dialog, Mobitel, Airtel or Hutch), then add the product again |
+| `MIXED_SEGMENTS` | A purchase or stocktake has cards of more than one provider | Split it by provider: one purchase (or one stocktake) for each provider |
+| `SEGMENT_REQUIRED` | A Telecom entry (expense, capital, drawing, opening balance, count, closing, transfer) was saved without choosing the Telecom segment | Choose the segment (for example *Dialog Reloads*) and save again. Shop and Ice Cream entries have no segment |
 | `DUPLICATE_NAME` | A product with that name already exists **in the same category**, or a category or service type with that name already exists (letter case is ignored). Categories are unique within a book; the same product name (for example "100/-") may exist in different categories | Use the existing one, or choose a different name. An inactive one must be reactivated first |
 
 Also useful:
