@@ -57,6 +57,7 @@ Contents: [Conventions](#conventions) · [Error codes](#error-codes) · [System]
 | 400 | `USE_ICECREAM_PAYMENTS` | `POST /expenses` with `book: "icecream"` |
 | 400 | `FUND_REQUIRED`, `FUND_NOT_ALLOWED` | opening balance, capital, cash drawing, transfer, cash count, daily closing |
 | 400 | `SAME_BOOK` | transfer with equal books (`fields.toBook`) |
+| 400 | `SAME_SEGMENT` | transfer between the same Telecom segment (`fields.toSegment`) |
 | 400 | `SEGMENT_REQUIRED`, `SEGMENT_NOT_ALLOWED`, `SEGMENT_MISMATCH`, `TELECOM_SEGMENT_REQUIRED` | Telecom segments (13D): a Telecom entry without `segment` / a Shop or Ice Cream entry with one / a segment that does not match its record (provider, product, sale, purchase) / an internal call with a bare `telecom`. See "Telecom segments" at the end |
 | 400 | `MIXED_SEGMENTS` | purchase or stocktake with cards of more than one provider ("split the bill by provider") |
 | 400 | `PRODUCT_NEEDS_PROVIDER`, `CATEGORY_PROVIDER_NOT_ALLOWED` | new Telecom stock product in a category without a provider / a provider on a Shop category |
