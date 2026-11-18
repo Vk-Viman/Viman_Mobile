@@ -181,7 +181,7 @@ describe('inserts are guarded too', () => {
     const before = fingerprint();
     const posted = rows(s.ctx, "SELECT c.id, c.amount_cents a, c.book, c.type, c.business_date d, c.ref_id r FROM cash_entries c JOIN sales_returns x ON x.id = c.ref_id WHERE c.ref_table = 'sales_returns' AND x.status = 'posted' AND c.amount_cents < 0 LIMIT 1")[0]!;
     const base = `INSERT INTO cash_entries (book, business_date, type, amount_cents, ref_table, ref_id, reverses_entry_id) VALUES ('${posted.book}', '${posted.d}', '${posted.type}', ${-Number(posted.a)}, 'sales_returns', ${posted.r}, ${posted.id})`;
-    expect(probe(s.ctx, base), 'reversal of a posted return').toMatch(/RETURN_REVERSAL_INVALID/);
+    expect(probe(s.ctx, base), 'reversal of a posted return').toMatch(/RETURN_REVERSAL_INVALID|DAY_CLOSED/); // 026 re-created the closed-day triggers: on a closed day they now fire first (the write is refused either way)
     expect(fingerprint()).toBe(before);
   });
   it('after all the attacks the reconciliations still hold exactly as before', async () => {
