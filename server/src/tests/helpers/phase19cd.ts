@@ -448,23 +448,39 @@ export function rng(seed: number): () => number {
   };
 }
 
-/** The model's view of closings: per book, the set of dates currently closed. */
-export type ClosedModel = Record<Book, Set<string>>;
-export const emptyModel = (): ClosedModel => ({ shop: new Set(), telecom: new Set(), icecream: new Set() });
+/** 13D: a cash SCOPE of the closed-day rules: Shop, Ice Cream, or ONE Telecom segment (`seg`). */
+export interface Scope { book: Book; seg?: string }
+export const scopeKey = (sc: Scope): string => (sc.seg ? `${sc.book}:${sc.seg}` : sc.book);
+/** The scope a Telecom segment names (`tel('dialog_cards')`). */
+export const tel = (seg: string): Scope => ({ book: 'telecom', seg });
+/** Request-body fragment that names the scope's segment (nothing for Shop / Ice Cream). */
+export const segBody = (sc: Scope): Record<string, unknown> => (sc.seg ? { segment: sc.seg } : {});
+const scopeOrder = (sc: Scope): number => ALL_BOOKS.indexOf(sc.book) * 100 + (sc.seg ? SEGMENTS.indexOf(sc.seg as never) : -1);
+
+/** The model's view of closings: per scope (see scopeKey), the set of dates currently closed. */
+export type ClosedModel = Map<string, Set<string>>;
+export const emptyModel = (): ClosedModel => new Map();
+export const closedDatesOf = (model: ClosedModel, sc: Scope): Set<string> => {
+  const k = scopeKey(sc);
+  if (!model.has(k)) model.set(k, new Set());
+  return model.get(k)!;
+};
 
 /**
- * What the closed-day rules (BUSINESS_RULES 8, written independently of services/day-closing.ts) say about a write dated `date` touching
- * `books`: 'DAY_CLOSED' wins over 'BACKDATE_BEFORE_CLOSED_DAY'; within a kind the first book in shop, telecom, icecream order is named.
+ * What the closed-day rules (BUSINESS_RULES 8 + 13D, written independently of services/day-closing.ts) say about a write dated `date` touching
+ * `scopes`: 'DAY_CLOSED' wins over 'BACKDATE_BEFORE_CLOSED_DAY'; within a kind the first scope in shop, telecom (segment display order), icecream
+ * order is named. A day closed in one scope says nothing about another.
  */
-export function predict(model: ClosedModel, books: Iterable<Book>, date: string):
-  { code: 'DAY_CLOSED'; book: Book } | { code: 'BACKDATE_BEFORE_CLOSED_DAY'; book: Book; closedDate: string } | null {
-  const touched = new Set(books);
-  let back: { code: 'BACKDATE_BEFORE_CLOSED_DAY'; book: Book; closedDate: string } | null = null;
-  for (const b of ALL_BOOKS) {
-    if (!touched.has(b)) continue;
-    if (model[b].has(date)) return { code: 'DAY_CLOSED', book: b };
-    const later = [...model[b]].filter((d) => d > date).sort();
-    if (later.length > 0 && back === null) back = { code: 'BACKDATE_BEFORE_CLOSED_DAY', book: b, closedDate: later[later.length - 1]! };
+export function predict(model: ClosedModel, scopes: Iterable<Scope>, date: string):
+  { code: 'DAY_CLOSED'; scope: Scope } | { code: 'BACKDATE_BEFORE_CLOSED_DAY'; scope: Scope; closedDate: string } | null {
+  const touched = new Map<string, Scope>();
+  for (const sc of scopes) touched.set(scopeKey(sc), sc);
+  let back: { code: 'BACKDATE_BEFORE_CLOSED_DAY'; scope: Scope; closedDate: string } | null = null;
+  for (const sc of [...touched.values()].sort((x, y) => scopeOrder(x) - scopeOrder(y))) {
+    const closed = model.get(scopeKey(sc)) ?? new Set<string>();
+    if (closed.has(date)) return { code: 'DAY_CLOSED', scope: sc };
+    const later = [...closed].filter((d) => d > date).sort();
+    if (later.length > 0 && back === null) back = { code: 'BACKDATE_BEFORE_CLOSED_DAY', scope: sc, closedDate: later[later.length - 1]! };
   }
   return back;
 }
