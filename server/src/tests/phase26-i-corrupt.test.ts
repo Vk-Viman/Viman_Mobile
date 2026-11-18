@@ -119,17 +119,18 @@ describe('a Telecom row without a segment, a Shop row with one', () => {
 });
 
 describe('a segment of the wrong kind for its table', () => {
-  it('a reload, EZCash or top-up record in a Cards segment; a sale, purchase, loss or stocktake in a Reloads segment; an unknown name', () => {
-    refused(damaged((db) => db.exec("UPDATE reload_sales SET segment = 'dialog_cards' WHERE id = (SELECT MIN(id) FROM reload_sales)")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE ezcash_sales SET segment = 'mobitel_cards' WHERE id = (SELECT MIN(id) FROM ezcash_sales)")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE telecom_topups SET segment = 'hutch_cards' WHERE id = (SELECT MIN(id) FROM telecom_topups)")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE sales SET segment = 'dialog_reloads' WHERE id = (SELECT MIN(id) FROM sales WHERE book = 'telecom')")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE purchases SET segment = 'mobitel_reloads' WHERE id = (SELECT MIN(id) FROM purchases WHERE book = 'telecom')")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE stock_losses SET segment = 'airtel_reloads' WHERE id = (SELECT MIN(id) FROM stock_losses WHERE book = 'telecom')")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE stocktakes SET segment = 'hutch_reloads' WHERE id = (SELECT MIN(id) FROM stocktakes WHERE book = 'telecom')")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE cash_entries SET segment = 'vodafone_cards' WHERE id = (SELECT MIN(id) FROM cash_entries WHERE book = 'telecom')")), WRONG_KIND);
-    refused(damaged((db) => db.exec("UPDATE expenses SET segment = 'telecom' WHERE id = (SELECT MIN(id) FROM expenses WHERE book = 'telecom')")), WRONG_KIND);
-  });
+  const cases: [string, string][] = [
+    ['a reload record in a Cards segment', "UPDATE reload_sales SET segment = 'dialog_cards' WHERE id = (SELECT MIN(id) FROM reload_sales)"],
+    ['an EZCash record in a Cards segment', "UPDATE ezcash_sales SET segment = 'mobitel_cards' WHERE id = (SELECT MIN(id) FROM ezcash_sales)"],
+    ['a top-up in a Cards segment', "UPDATE telecom_topups SET segment = 'hutch_cards' WHERE id = (SELECT MIN(id) FROM telecom_topups)"],
+    ['a sale in a Reloads segment', "UPDATE sales SET segment = 'dialog_reloads' WHERE id = (SELECT MIN(id) FROM sales WHERE book = 'telecom')"],
+    ['a purchase in a Reloads segment', "UPDATE purchases SET segment = 'mobitel_reloads' WHERE id = (SELECT MIN(id) FROM purchases WHERE book = 'telecom')"],
+    ['a stock loss in a Reloads segment', "UPDATE stock_losses SET segment = 'airtel_reloads' WHERE id = (SELECT MIN(id) FROM stock_losses WHERE book = 'telecom')"],
+    ['a stocktake in a Reloads segment', "UPDATE stocktakes SET segment = 'hutch_reloads' WHERE id = (SELECT MIN(id) FROM stocktakes WHERE book = 'telecom')"],
+    ['a cash entry in an unknown segment', "UPDATE cash_entries SET segment = 'vodafone_cards' WHERE id = (SELECT MIN(id) FROM cash_entries WHERE book = 'telecom')"],
+    ['an expense in a made-up segment named like the book', "UPDATE expenses SET segment = 'telecom' WHERE id = (SELECT MIN(id) FROM expenses WHERE book = 'telecom')"],
+  ];
+  it.each(cases)('%s is refused', (_n, sql) => { refused(damaged((db) => db.exec(sql)), WRONG_KIND); });
 });
 
 describe('a reversal keeps the segment of its original', () => {
