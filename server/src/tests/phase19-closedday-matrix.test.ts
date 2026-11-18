@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { err } from './helpers/phase4.ts';
 import {
-  C, E, L, M, ALL_BOOKS, allOps, backdateBody, closeBooks, dayClosedBody, fullSnapshot, must, ok, recloseAll, reopenAll, setupFx,
+  C, E, L, M, ALL_BOOKS, allOps, opSegment, backdateBody, closeBooks, dayClosedBody, fullSnapshot, must, ok, recloseAll, reopenAll, setupFx,
 } from './helpers/phase19cd.ts';
 import type { Book, Fx, Op } from './helpers/phase19cd.ts';
 
@@ -34,6 +34,7 @@ describe.each(ops)('closed-day matrix - $key', (op) => {
   it.each(op.books)('closed book = %s: BACKDATE before the latest closed day, DAY_CLOSED on closed days, later dates fine, reopen / re-close', async (closedBook) => {
     const fx = await setupFx(env, op);
     const s = fx.s;
+    const sg = opSegment(op, closedBook); // 13D: a Telecom refusal names the segment of the write
     // records that exist BEFORE anything is closed
     const recE = must(await op.create(fx, E()));
     const recC = op.single ? undefined : must(await op.create(fx, C()));
@@ -47,14 +48,14 @@ describe.each(ops)('closed-day matrix - $key', (op) => {
     // 1. dated E: earlier than the latest closed day C
     const r1 = await op.create(fx, E());
     expect(r1.status, JSON.stringify(r1.body)).toBe(409);
-    expect(err(r1)).toEqual(backdateBody(closedBook, C(), E()));
+    expect(err(r1)).toEqual(backdateBody(closedBook, C(), E(), sg));
     expect(snap(s)).toEqual(before);
 
     // 2. exactly on a closed day: DAY_CLOSED (both closed days)
     for (const d of [M(), C()]) {
       const r = await op.create(fx, d);
       expect(r.status, JSON.stringify(r.body)).toBe(409);
-      expect(err(r)).toEqual(dayClosedBody(closedBook, d));
+      expect(err(r)).toEqual(dayClosedBody(closedBook, d, sg));
     }
     expect(snap(s)).toEqual(before);
 
@@ -62,11 +63,11 @@ describe.each(ops)('closed-day matrix - $key', (op) => {
     if (op.void) {
       const vE = await voidIt(op, fx, recE, E(), closedBook);
       expect(vE.status, JSON.stringify(vE.body)).toBe(409);
-      expect(err(vE)).toEqual(backdateBody(closedBook, C(), E()));
+      expect(err(vE)).toEqual(backdateBody(closedBook, C(), E(), sg));
       if (recC) {
         const vC = await voidIt(op, fx, recC, C(), closedBook);
         expect(vC.status, JSON.stringify(vC.body)).toBe(409);
-        expect(err(vC)).toEqual(dayClosedBody(closedBook, C()));
+        expect(err(vC)).toEqual(dayClosedBody(closedBook, C(), sg));
       }
       expect(snap(s)).toEqual(before);
     }
@@ -92,12 +93,12 @@ describe.each(ops)('closed-day matrix - $key', (op) => {
     const before2 = snap(s);
     const b = await op.create(fx, E());
     expect(b.status, JSON.stringify(b.body)).toBe(409);
-    expect(err(b)).toEqual(backdateBody(closedBook, C(), E()));
-    if (!op.single) expect(err(await op.create(fx, C()))).toEqual(dayClosedBody(closedBook, C()));
+    expect(err(b)).toEqual(backdateBody(closedBook, C(), E(), sg));
+    if (!op.single) expect(err(await op.create(fx, C()))).toEqual(dayClosedBody(closedBook, C(), sg));
     if (op.void) {
       const v = await voidIt(op, fx, newE, E(), closedBook);
-      expect(err(v)).toEqual(backdateBody(closedBook, C(), E()));
-      if (newC) expect(err(await voidIt(op, fx, newC, C(), closedBook))).toEqual(dayClosedBody(closedBook, C()));
+      expect(err(v)).toEqual(backdateBody(closedBook, C(), E(), sg));
+      if (newC) expect(err(await voidIt(op, fx, newC, C(), closedBook))).toEqual(dayClosedBody(closedBook, C(), sg));
     }
     expect(snap(s)).toEqual(before2);
   });
@@ -119,7 +120,7 @@ describe.each(ops)('closed-day matrix - $key', (op) => {
       if (recM) must(await op.void(fx, recM, M(), op.books[0]!));
     }
     // the closed days really are closed (other books still refuse their own writes - sanity)
-    const closed = await s.app.inject({ method: 'GET', url: `/api/v1/daily-closings/status?book=${others[0]}&businessDate=${C()}` });
+    const closed = await s.app.inject({ method: 'GET', url: `/api/v1/daily-closings/status?book=${others[0]}${others[0] === 'telecom' ? '&segment=dialog_reloads' : ''}&businessDate=${C()}` });
     expect(closed.json().isClosed).toBe(true);
     expect(ok(recE)).toBe(true);
   });

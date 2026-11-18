@@ -22,13 +22,19 @@ import { importFile, xlsx } from './helpers/phase13.ts';
 import { psNew, psVoid, supNew, supVoid } from './helpers/phase7.ts';
 import { capVoid, closeNew, closeOk, countNew, countVoid, expNew, expVoid, openNew, reopenNew, snap8 } from './helpers/phase8.ts';
 import type { Book } from './helpers/phase8.ts';
+import { segmentLabel } from './helpers/segments.ts';
+import type { SegmentCode } from './helpers/segments.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
 
 const LABEL: Record<Book, string> = { shop: 'Shop', telecom: 'Telecom', icecream: 'Ice Cream' };
-const closedMsg = (book: Book) => `That day is closed for the ${LABEL[book]} cash book. Reopen it first (it will be recorded in the audit log).`;
+// 13D: a Telecom day is closed per segment, so the message names it: "Telecom - Dialog Cards"
+const closedMsg = (book: Book, segment?: SegmentCode) =>
+  `That day is closed for the ${LABEL[book]}${segment ? ` - ${segmentLabel(segment)}` : ''} cash book. Reopen it first (it will be recorded in the audit log).`;
+/** `error.segment` is present exactly for Telecom scopes. */
+const segExtra = (segment?: SegmentCode): Record<string, unknown> => (segment ? { segment } : {});
 const shop0 = (s: ApiBase, o: Record<string, unknown> = {}) => mkProduct(s, { minPriceCents: 0, ...o });
 const tel0 = (s: ApiBase, o: Record<string, unknown> = {}) => mkTelecom(s, { minPriceCents: 0, ...o });
 
@@ -46,6 +52,8 @@ interface Scenario {
   name: string;
   /** The cash book that gets closed (the one the write touches). */
   book: Book;
+  /** Telecom only: the segment that gets closed (the one the write touches; card flows = dialog_cards, reloads / EZCash / top-ups / expenses = dialog_reloads). */
+  segment?: SegmentCode;
   /** One-off set-up on open days (stock, providers ...). */
   prep?: (s: ApiBase) => Promise<any>;
   /** A NEW record dated `date`; the response must be 201 while the day is open. */
@@ -68,7 +76,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => post(s.app, `/purchases/${c.body.item.id}/void`, { reason: 'test void' }),
   },
   {
-    name: 'purchase (telecom)', book: 'telecom',
+    name: 'purchase (telecom)', book: 'telecom', segment: 'dialog_cards',
     prep: async (s) => tel0(s),
     create: (s, p, date) => post(s.app, '/purchases', { businessDate: date, items: [{ productId: p.id, packs: 1, packSize: 2, lineTotalCents: 2000 }], clientRef: ref() }),
     void: (s, _p, c) => post(s.app, `/purchases/${c.body.item.id}/void`, { reason: 'test void' }),
@@ -80,7 +88,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => voidSaleNew(s, c.body.sales[0].id),
   },
   {
-    name: 'sale (telecom card)', book: 'telecom',
+    name: 'sale (telecom card)', book: 'telecom', segment: 'dialog_cards',
     prep: async (s) => stocked(s, tel0, 100, 100000, { sellPriceCents: 3000 }),
     create: (s, p, date) => sellNew(s, [cl(p.id, 1, 3000)], { businessDate: date }),
     void: (s, _p, c) => voidSaleNew(s, c.body.sales[0].id),
@@ -92,7 +100,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => lossVoid(s, c.body.item.id),
   },
   {
-    name: 'stock loss (telecom product)', book: 'telecom',
+    name: 'stock loss (telecom product)', book: 'telecom', segment: 'dialog_cards',
     prep: async (s) => stocked(s, tel0, 100, 100000),
     create: (s, p, date) => lossNew(s, p.id, 1, { businessDate: date }),
     void: (s, _p, c) => lossVoid(s, c.body.item.id),
@@ -122,24 +130,24 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => post(s.app, `/opening-stock/${c.body.item.id}/void`, { reason: 'test void' }),
   },
   {
-    name: 'opening stock (telecom product)', book: 'telecom',
+    name: 'opening stock (telecom product)', book: 'telecom', segment: 'dialog_cards',
     prep: async (s) => tel0(s),
     create: (s, p, date) => post(s.app, '/opening-stock', { businessDate: date, items: [{ productId: p.id, qty: 1, unitCostCents: 1000 }], clientRef: ref() }),
     void: (s, _p, c) => post(s.app, `/opening-stock/${c.body.item.id}/void`, { reason: 'test void' }),
   },
   {
-    name: 'reload', book: 'telecom',
+    name: 'reload', book: 'telecom', segment: 'dialog_reloads',
     prep: async (s) => providerIds(s),
     create: (s, ids, date) => rel(s, ids.Dialog!, 10000, { businessDate: date }),
     void: (s, _i, c) => relVoid(s, c.body.item.id),
   },
   {
-    name: 'EZCash', book: 'telecom',
+    name: 'EZCash', book: 'telecom', segment: 'dialog_reloads',
     create: (s, _c, date) => ez(s, 10000, { businessDate: date }),
     void: (s, _c, c) => ezVoid(s, c.body.item.id),
   },
   {
-    name: 'wallet top-up', book: 'telecom',
+    name: 'wallet top-up', book: 'telecom', segment: 'dialog_reloads',
     create: (s, _c, date) => topWallet(s, 5000, { businessDate: date }),
     void: (s, _c, c) => topVoid(s, c.body.item.id),
   },
@@ -159,7 +167,7 @@ const scenarios: Scenario[] = [
     void: (s, _c, c) => expVoid(s, c.body.item.id),
   },
   {
-    name: 'expense (telecom)', book: 'telecom',
+    name: 'expense (telecom)', book: 'telecom', segment: 'dialog_reloads',
     create: (s, _c, date) => expNew(s, { businessDate: date, book: 'telecom', category: 'internet' }),
     void: (s, _c, c) => expVoid(s, c.body.item.id),
   },
@@ -195,28 +203,29 @@ describe.each(scenarios)('DAY_CLOSED - $name', (sc) => {
     const first = ok201(await sc.create(s, ctx, date));
 
     // 2. close the day for the book this write touches
-    await closeOk(s, sc.book, date);
+    const segOver = sc.segment ? { segment: sc.segment } : {};
+    await closeOk(s, sc.book, date, segOver);
 
-    // 3. create refused: 409 DAY_CLOSED with the owner wording and the book/date fields; nothing changed
+    // 3. create refused: 409 DAY_CLOSED with the owner wording and the book/segment/date fields; nothing changed
     const before = world(s, sc.omit);
     const refused = await sc.create(s, ctx, date);
     expect(refused.status, JSON.stringify(refused.body)).toBe(409);
-    expect(err(refused)).toMatchObject({ code: 'DAY_CLOSED', message: closedMsg(sc.book), book: sc.book, businessDate: date });
+    expect(err(refused)).toMatchObject({ code: 'DAY_CLOSED', message: closedMsg(sc.book, sc.segment), book: sc.book, businessDate: date, ...segExtra(sc.segment) });
     expect(world(s, sc.omit)).toEqual(before);
 
     // 4. void of a record dated that day refused as well (the reversal would copy the closed date)
     if (sc.void) {
       const v = await sc.void(s, ctx, first);
       expect(v.status, JSON.stringify(v.body)).toBe(409);
-      expect(err(v)).toMatchObject({ code: 'DAY_CLOSED', message: closedMsg(sc.book), book: sc.book, businessDate: date });
+      expect(err(v)).toMatchObject({ code: 'DAY_CLOSED', message: closedMsg(sc.book, sc.segment), book: sc.book, businessDate: date, ...segExtra(sc.segment) });
       expect(world(s, sc.omit)).toEqual(before);
     }
 
-    // 5. a different day of the same book is unaffected
+    // 5. a different day of the same scope is unaffected
     if (!sc.once) ok201(await sc.create(s, ctx, daysAgo(1)));
 
     // 6. reopen -> the same writes work again
-    const closing = (await get(s.app, `/daily-closings?book=${sc.book}&from=${date}&to=${date}`)).body.items[0];
+    const closing = (await get(s.app, `/daily-closings?book=${sc.book}${sc.segment ? `&segment=${sc.segment}` : ''}&from=${date}&to=${date}`)).body.items[0];
     expect((await reopenNew(s, closing.id, 'correcting a mistake')).status).toBe(200);
     if (sc.void) {
       const v = await sc.void(s, ctx, first);
@@ -225,8 +234,8 @@ describe.each(scenarios)('DAY_CLOSED - $name', (sc) => {
     const again = ok201(await sc.create(s, ctx, date));
 
     // 7. close again -> blocked again (the re-close updated the same closing row)
-    expect((await closeNew(s, sc.book, date)).status).toBe(201);
-    expect(num(s, 'SELECT COUNT(*) FROM daily_closings WHERE book = ? AND business_date = ?', sc.book, date)).toBe(1);
+    expect((await closeNew(s, sc.book, date, segOver)).status).toBe(201);
+    expect(num(s, 'SELECT COUNT(*) FROM daily_closings WHERE book = ? AND segment IS ? AND business_date = ?', sc.book, sc.segment ?? null, date)).toBe(1);
     const blockedAgain = await sc.create(s, ctx, date);
     expect(blockedAgain.status).toBe(409);
     expect(err(blockedAgain).code).toBe('DAY_CLOSED');
@@ -304,8 +313,12 @@ describe('DAY_CLOSED - returns are judged on the RETURN\'s date', () => {
     const sale = (await sellOk(s, [cl(card.id, 2, 2000)], { businessDate: daysAgo(4) })).sales[0];
     await closeOk(s, 'shop', daysAgo(1)); // shop closed: irrelevant
     expect((await returnNew(s, sale.id, [rl(sale.items[0].id, 1, true)], { businessDate: daysAgo(1) })).status).toBe(201);
-    await closeOk(s, 'telecom', daysAgo(1));
-    expect(err(await returnNew(s, sale.id, [rl(sale.items[0].id, 1, true)], { businessDate: daysAgo(1) }))).toMatchObject({ code: 'DAY_CLOSED', book: 'telecom' });
+    // 13D: the return is judged in the sale's own segment (Dialog Cards): closing another Telecom segment is irrelevant, closing it blocks
+    await closeOk(s, 'telecom', daysAgo(1), { segment: 'mobitel_cards' });
+    expect((await returnNew(s, sale.id, [rl(sale.items[0].id, 1, true)], { businessDate: daysAgo(1) })).status).toBe(201);
+    await closeOk(s, 'telecom', daysAgo(1), { segment: 'dialog_cards' });
+    expect(err(await returnNew(s, sale.id, [rl(sale.items[0].id, 1, true)], { businessDate: daysAgo(1) })))
+      .toMatchObject({ code: 'DAY_CLOSED', book: 'telecom', segment: 'dialog_cards' });
   });
 });
 
@@ -330,11 +343,11 @@ describe('DAY_CLOSED - books touched and ordering before other business rules', 
     const b = await stocked(s, tel0, 10, 10000);
     const date = D();
     const cart = [cl(a.id, 1, 3000), cl(b.id, 1, 3000)];
-    await closeOk(s, 'telecom', date);
+    await closeOk(s, 'telecom', date, { segment: 'dialog_cards' }); // the telecom line is a Dialog card
     const before = world(s);
     const r1 = await sellNew(s, cart, { businessDate: date });
     expect(r1.status).toBe(409);
-    expect(err(r1)).toMatchObject({ code: 'DAY_CLOSED', book: 'telecom', businessDate: date });
+    expect(err(r1)).toMatchObject({ code: 'DAY_CLOSED', book: 'telecom', segment: 'dialog_cards', businessDate: date });
     expect(world(s)).toEqual(before); // not even the shop half was saved
     // a shop-only cart on that date is fine
     expect((await sellNew(s, [cl(a.id, 1, 3000)], { businessDate: date })).status).toBe(201);
@@ -385,9 +398,9 @@ describe('DAY_CLOSED - books touched and ordering before other business rules', 
     await closeOk(s, 'shop', date);
     const d1 = await stDraft(s, [{ productId: c.id, countedQty: 9 }], { businessDate: date, book: 'telecom' });
     expect((await stComplete(s, d1.id)).status).toBe(200);
-    await closeOk(s, 'telecom', date);
+    await closeOk(s, 'telecom', date, { segment: 'dialog_cards' }); // a Telecom stocktake belongs to ONE provider's Cards segment
     const d2 = await stDraft(s, [{ productId: c.id, countedQty: 8 }], { businessDate: date, book: 'telecom' });
-    expect(err(await stComplete(s, d2.id))).toMatchObject({ code: 'DAY_CLOSED', book: 'telecom' });
+    expect(err(await stComplete(s, d2.id))).toMatchObject({ code: 'DAY_CLOSED', book: 'telecom', segment: 'dialog_cards' });
   });
 
   it('opening-stock Excel import is refused on a closed day of the product\'s book (nothing saved)', async () => {
@@ -414,9 +427,10 @@ describe('DAY_CLOSED - books touched and ordering before other business rules', 
 
 // =============================================================================================
 describe('DAY_CLOSED - database backstop (trigger on cash_entries)', () => {
+  // 13D: a Telecom cash entry names its segment (dialog_reloads here; a segment-specific closed-day matrix is in phase26-core-closing)
   const insertCash = (s: ApiBase, book: string, date: string, extra = '') =>
     s.ctx.database.conn.prepare(
-      `INSERT INTO cash_entries (book, business_date, type, amount_cents${extra ? ', fund' : ''}) VALUES (?, ?, ?, ?${extra ? ', ?' : ''})`,
+      `INSERT INTO cash_entries (book, business_date, type, amount_cents${extra ? ', fund' : ''}${book === 'telecom' ? ', segment' : ''}) VALUES (?, ?, ?, ?${extra ? ', ?' : ''}${book === 'telecom' ? ", 'dialog_reloads'" : ''})`,
     ).run(...[book, date, book === 'icecream' ? 'icecream_other_cost' : 'expense', -100, ...(extra ? [extra] : [])] as Array<string | number>);
   const msg = (fn: () => unknown): string => { try { fn(); } catch (e) { return (e as Error).message; } return 'no error'; };
 

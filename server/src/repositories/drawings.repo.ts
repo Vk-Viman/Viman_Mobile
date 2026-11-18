@@ -6,6 +6,7 @@
  * migration 005 forbid every other edit. `client_ref` is unique so a double submit cannot create two rows.
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../services/segments.ts';
 import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
 
 export type DrawingBook = 'shop' | 'telecom' | 'icecream';
@@ -15,25 +16,25 @@ export type DrawingFund = 'cost' | 'electricity' | 'profit';
 
 /** One drawing; `productName`/`qty` are set only for goods drawings, `fund` only for the ice-cream book. */
 export interface DrawingRow {
-  id: number; businessDate: string; postedAt: string; book: DrawingBook; fund: DrawingFund | null; kind: DrawingKind;
+  id: number; businessDate: string; postedAt: string; book: DrawingBook; segment: StoredSegment | null; fund: DrawingFund | null; kind: DrawingKind;
   amountCents: number; productId: number | null; productName: string | null; qty: number | null; note: string;
   status: DrawingStatus; clientRef: string; voidedAt: string | null; voidReason: string | null;
 }
 
 type N = number | bigint;
 interface Raw {
-  id: N; business_date: string; posted_at: string; book: DrawingBook; fund: DrawingFund | null; kind: DrawingKind;
+  id: N; business_date: string; posted_at: string; book: DrawingBook; segment: StoredSegment | null; fund: DrawingFund | null; kind: DrawingKind;
   amount_cents: N; product_id: N | null; product_name: string | null; qty: N | null; note: string;
   status: DrawingStatus; client_ref: string; voided_at: string | null; void_reason: string | null;
 }
 
-const SELECT = `SELECT d.id, d.business_date, d.posted_at, d.book, d.fund, d.kind, d.amount_cents, d.product_id,
+const SELECT = `SELECT d.id, d.business_date, d.posted_at, d.book, d.segment, d.fund, d.kind, d.amount_cents, d.product_id,
   p.name AS product_name, d.qty, d.note, d.status, d.client_ref, d.voided_at, d.void_reason
   FROM owner_drawings d LEFT JOIN products p ON p.id = d.product_id`;
 
 function map(r: Raw): DrawingRow {
   return {
-    id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book, fund: r.fund, kind: r.kind,
+    id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, book: r.book, segment: r.segment, fund: r.fund, kind: r.kind,
     amountCents: Number(r.amount_cents), productId: numberOrNull(r.product_id),
     productName: r.product_name, qty: numberOrNull(r.qty), note: r.note, status: r.status,
     clientRef: r.client_ref, voidedAt: r.voided_at, voidReason: r.void_reason,
@@ -42,13 +43,13 @@ function map(r: Raw): DrawingRow {
 
 /** Inserts a drawing (status 'posted', posting time from the DB clock) and returns its id. */
 export function insertDrawing(conn: DatabaseSync, d: {
-  businessDate: string; book: DrawingBook; fund?: DrawingFund | null; kind: DrawingKind; amountCents: number;
+  businessDate: string; book: DrawingBook; segment?: StoredSegment | null; fund?: DrawingFund | null; kind: DrawingKind; amountCents: number;
   productId?: number | null; qty?: number | null; note: string; clientRef: string;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO owner_drawings (business_date, book, fund, kind, amount_cents, product_id, qty, note, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(d.businessDate, d.book, d.fund ?? null, d.kind, d.amountCents, d.productId ?? null, d.qty ?? null, d.note, d.clientRef);
+    `INSERT INTO owner_drawings (business_date, book, segment, fund, kind, amount_cents, product_id, qty, note, client_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(d.businessDate, d.book, d.segment ?? null, d.fund ?? null, d.kind, d.amountCents, d.productId ?? null, d.qty ?? null, d.note, d.clientRef);
   return Number(res.lastInsertRowid);
 }
 
@@ -69,7 +70,7 @@ export function getDrawingByClientRef(conn: DatabaseSync, ref: string): DrawingR
  * (goods = stock cost removed, cash = money out of a book; voided rows are listed but not summed). `from`/`to` are inclusive business dates.
  */
 export function listDrawings(conn: DatabaseSync, q: {
-  kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; productId?: number; status?: DrawingStatus;
+  kind?: DrawingKind; from?: string; to?: string; book?: DrawingBook; segment?: StoredSegment; productId?: number; status?: DrawingStatus;
   limit: number; offset: number;
 }): { items: DrawingRow[]; total: number; totalAmountCents: number; goodsCents: number; cashCents: number } {
   const where: string[] = [];
@@ -78,6 +79,7 @@ export function listDrawings(conn: DatabaseSync, q: {
   if (q.from !== undefined) { where.push('d.business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('d.business_date <= ?'); params.push(q.to); }
   if (q.book !== undefined) { where.push('d.book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('d.segment = ?'); params.push(q.segment); }
   if (q.productId !== undefined) { where.push('d.product_id = ?'); params.push(q.productId); }
   if (q.status !== undefined) { where.push('d.status = ?'); params.push(q.status); }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';

@@ -1,10 +1,13 @@
 // Phase 19 audit, part E: RANDOMIZED closed-day model check (BUSINESS_RULES section 8 + R9).
+// 13D: the model's unit is the SCOPE (Shop, Ice Cream, or one Telecom segment: Dialog Cards, Dialog Reloads, Mobitel Reloads are drawn); closed days,
+// ledgers, counts, openings and closings are per scope, a refusal body names the scope (book + segment), and a write that touches two scopes
+// (transfer, a Shop + card cart) is judged in each.
 // Per seed: 400 random operations over all three books - creates of every financial record type, voids, sale / purchase returns and
 // return voids, cash counts with adjustments, daily closings (with / without count, with / without variance), reopens - at random
 // (backdated) dates. An independent in-test model of the closed-day rules (helpers/phase19cd.ts predict: written from BUSINESS_RULES
 // section 8, not from services/day-closing.ts) predicts for every operation: accepted, or the exact error code (and book / closed date).
 // After EVERY operation:
-//   P1  the ledger balance of each book as of each currently closed day equals the snapshot recorded at closing (counted, else expected);
+//   P1  the ledger balance of each scope as of each currently closed day equals the snapshot recorded at closing (counted, else expected);
 //   P2  the model's set of closed days equals the database's;
 //   P3  a refused write left the database unchanged (row counts of every table + void counters + stock cache; a full hash every 20th refusal).
 
@@ -23,14 +26,24 @@ import { capNew, drawCash, tr, trVoid } from './helpers/phase9.ts';
 import { dayNew, dayReplace, dayVoid, moveNew, moveVoid, payNew, payVoid } from './helpers/phase10.ts';
 import { voidReturnNew } from './helpers/phase17.ts';
 import {
-  ALL_BOOKS, backdateBody, balAsOf, closedSnapshotViolations, dayClosedBody, emptyModel, fixture, fullSnapshot, predict, rng,
+  backdateBody, balAsOf, closedDatesOf, closedSnapshotViolations, dayClosedBody, emptyModel, fixture, fullSnapshot, predict, rng, scopeKey, segBody, tel,
 } from './helpers/phase19cd.ts';
-import type { Book, ClosedModel, Fx } from './helpers/phase19cd.ts';
+import type { Book, ClosedModel, Fx, Scope } from './helpers/phase19cd.ts';
+
+const SHOP: Scope = { book: 'shop' };
+const ICE: Scope = { book: 'icecream' };
+const DC = tel('dialog_cards');
+const DR = tel('dialog_reloads');
+const MR = tel('mobitel_reloads');
+/** The Telecom scopes the entry-chosen writes draw from; card flows use DC, reloads use the provider's Reloads segment. */
+const TELS: Scope[] = [DC, DR, MR];
+const SC_ALL: Scope[] = [SHOP, ...TELS, ICE];
+const SC_ENTRY: Scope[] = [SHOP, ...TELS];
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
 
-interface Rec { kind: string; id: number; books: Book[]; date: string; status: 'posted' | 'void'; saleId?: number; key?: string }
+interface Rec { kind: string; id: number; scopes: Scope[]; date: string; status: 'posted' | 'void'; saleId?: number; key?: string }
 
 /** Cheap fingerprint: row count of every table + count of void/completed rows + the stock cache. Any insert or status flip changes it. */
 function light(s: ApiBase): string {
@@ -52,7 +65,9 @@ function light(s: ApiBase): string {
 /** The model's closed set as the database sees it. */
 function dbClosed(s: ApiBase): ClosedModel {
   const m = emptyModel();
-  for (const r of sql(s, 'SELECT book, business_date FROM daily_closings WHERE reopened_at IS NULL OR closed_at > reopened_at')) m[r.book as Book].add(r.business_date as string);
+  for (const r of sql(s, 'SELECT book, segment, business_date FROM daily_closings WHERE reopened_at IS NULL OR closed_at > reopened_at')) {
+    closedDatesOf(m, { book: r.book as Book, seg: (r.segment as string | null) ?? undefined }).add(r.business_date as string);
+  }
   return m;
 }
 
@@ -77,7 +92,7 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
     const saleHadReturns = new Set<number>();
     const purchaseHadReturns = new Set<number>();
     const purchaseUnits = new Map<number, number>();
-    const stats = { ok: 0, refused: 0, byCode: {} as Record<string, number>, ops: {} as Record<string, number> };
+    const stats = { ok: 0, refused: 0, crossSegment: 0, byCode: {} as Record<string, number>, ops: {} as Record<string, number> };
     const seedDates = Array.from({ length: 15 }, (_, i) => daysAgo(14 - i)); // today-14 ... today
     let refusals = 0;
 
@@ -85,17 +100,17 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
     for (let i = 0; i < 6; i++) {
       for (const [prod, book] of [[fx.shopP, 'shop'], [fx.telP, 'telecom']] as const) {
         const sr = await sellNew(s, [cl(prod.id, 4, 3000)], { businessDate: daysAgo(20) });
-        recs.push({ kind: 'sale', id: sr.body.sales[0].id, books: [book], date: daysAgo(20), status: 'posted', key: 'item', saleId: sr.body.sales[0].items[0].id });
+        recs.push({ kind: 'sale', id: sr.body.sales[0].id, scopes: [book === 'shop' ? SHOP : DC], date: daysAgo(20), status: 'posted', key: 'item', saleId: sr.body.sales[0].items[0].id });
         saleUnits.set(sr.body.sales[0].id, 4);
         const pu = await post(s.app, '/purchases', { businessDate: daysAgo(20), items: [{ productId: prod.id, packs: 1, packSize: 10, lineTotalCents: 10000 }], clientRef: ref() });
-        recs.push({ kind: 'purchase', id: pu.body.item.id, books: [book], date: daysAgo(20), status: 'posted', key: String(pu.body.item.items[0].id) });
+        recs.push({ kind: 'purchase', id: pu.body.item.id, scopes: [book === 'shop' ? SHOP : DC], date: daysAgo(20), status: 'posted', key: String(pu.body.item.items[0].id) });
         purchaseUnits.set(pu.body.item.id, 10);
       }
     }
 
     const latestClosed = (): string | null => {
       let m: string | null = null;
-      for (const b of ALL_BOOKS) for (const d of model[b]) if (m === null || d > m) m = d;
+      for (const set of model.values()) for (const d of set) if (m === null || d > m) m = d;
       return m;
     };
     const randomDate = (): string => {
@@ -106,12 +121,15 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
       }
       return pick(seedDates);
     };
-    const fundOf = (b: Book): Record<string, unknown> => (b === 'icecream' ? { fund: pick(['cost', 'electricity', 'profit'] as const) } : {});
+    const fundOf = (sc: Scope): Record<string, unknown> => (sc.book === 'icecream' ? { fund: pick(['cost', 'electricity', 'profit'] as const) } : {});
     const bookOf2 = (): 'shop' | 'telecom' => pick(['shop', 'telecom'] as const);
+    /** The scope of a product write: Shop, or Dialog Cards for the Telecom (Dialog card) product. */
+    const prodScope = (b: 'shop' | 'telecom'): Scope => (b === 'shop' ? SHOP : DC);
+    const provPick = (): { name: 'Dialog' | 'Mobitel'; scope: Scope } => (int(3) === 0 ? { name: 'Mobitel', scope: MR } : { name: 'Dialog', scope: DR });
 
-    /** One planned operation: its books and date for the model, an optional preparation (not judged), and the call. */
+    /** One planned operation: its scopes and date for the model, an optional preparation (not judged), and the call. */
     interface Plan {
-      name: string; books: Book[]; date: string; call: () => Promise<Res>; prep?: () => Promise<void>;
+      name: string; scopes: Scope[]; date: string; call: () => Promise<Res>; prep?: () => Promise<void>;
       /** Extra business rule that applies only when the closed-day rules accept (returns the expected error code or null). */
       then?: () => string | null;
       onOk?: (r: Res) => void; okStatus?: number; lookupMissing?: boolean;
@@ -121,69 +139,71 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
       const d = randomDate();
       const choice = int(24);
       switch (choice) {
-        case 0: { const b = pick(ALL_BOOKS); return { name: 'cash drawing', books: [b], date: d, call: () => drawCash(s, { businessDate: d, book: b, ...fundOf(b) }), onOk: (r) => recs.push({ kind: 'cashdraw', id: r.body.item.id, books: [b], date: d, status: 'posted' }) }; }
-        case 1: { const b = pick(ALL_BOOKS); return { name: 'capital', books: [b], date: d, call: () => capNew(s, { businessDate: d, book: b, ...fundOf(b) }), onOk: (r) => recs.push({ kind: 'capital', id: r.body.item.id, books: [b], date: d, status: 'posted' }) }; }
-        case 2: { const b = bookOf2(); return { name: 'expense', books: [b], date: d, call: () => expNew(s, { businessDate: d, book: b, category: 'internet' }), onOk: (r) => recs.push({ kind: 'expense', id: r.body.item.id, books: [b], date: d, status: 'posted' }) }; }
-        case 3: { const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; return { name: 'purchase', books: [b], date: d, call: () => post(s.app, '/purchases', { businessDate: d, items: [{ productId: p.id, packs: 1, packSize: 2, lineTotalCents: 2000 }], clientRef: ref() }), onOk: (r) => recs.push({ kind: 'purchase', id: r.body.item.id, books: [b], date: d, status: 'posted', key: String(r.body.item.items[0].id) }) }; }
+        case 0: { const sc = pick(SC_ALL); return { name: 'cash drawing', scopes: [sc], date: d, call: () => drawCash(s, { businessDate: d, book: sc.book, ...fundOf(sc), ...segBody(sc) }), onOk: (r) => recs.push({ kind: 'cashdraw', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
+        case 1: { const sc = pick(SC_ALL); return { name: 'capital', scopes: [sc], date: d, call: () => capNew(s, { businessDate: d, book: sc.book, ...fundOf(sc), ...segBody(sc) }), onOk: (r) => recs.push({ kind: 'capital', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
+        case 2: { const sc = pick(SC_ENTRY); return { name: 'expense', scopes: [sc], date: d, call: () => expNew(s, { businessDate: d, book: sc.book, category: 'internet', ...segBody(sc) }), onOk: (r) => recs.push({ kind: 'expense', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
+        case 3: { const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; const sc = prodScope(b); return { name: 'purchase', scopes: [sc], date: d, call: () => post(s.app, '/purchases', { businessDate: d, items: [{ productId: p.id, packs: 1, packSize: 2, lineTotalCents: 2000 }], clientRef: ref() }), onOk: (r) => recs.push({ kind: 'purchase', id: r.body.item.id, scopes: [sc], date: d, status: 'posted', key: String(r.body.item.items[0].id) }) }; }
         case 4: { const mix = int(3); const items = mix === 0 ? [cl(fx.shopP.id, 1, 3000)] : mix === 1 ? [cl(fx.telP.id, 1, 3000)] : [cl(fx.shopP.id, 1, 3000), cl(fx.telP.id, 1, 3000)];
-          const books: Book[] = mix === 0 ? ['shop'] : mix === 1 ? ['telecom'] : ['shop', 'telecom'];
-          return { name: 'sale', books, date: d, call: () => sellNew(s, items, { businessDate: d }), onOk: (r) => { for (const sale of r.body.sales) recs.push({ kind: 'sale', id: sale.id, books: [sale.book], date: d, status: 'posted', key: 'item', saleId: sale.items[0].id }), saleUnits.set(sale.id, 1); } }; }
-        case 5: return { name: 'reload', books: ['telecom'], date: d, call: () => rel(s, fx.prov.Dialog!, 10000, { businessDate: d }), onOk: (r) => recs.push({ kind: 'reload', id: r.body.item.id, books: ['telecom'], date: d, status: 'posted' }) };
-        case 6: return { name: 'ezcash', books: ['telecom'], date: d, call: () => ez(s, 10000, { businessDate: d }), onOk: (r) => recs.push({ kind: 'ezcash', id: r.body.item.id, books: ['telecom'], date: d, status: 'posted' }) };
-        case 7: { const w = int(2) === 0; return { name: 'top-up', books: ['telecom'], date: d, call: () => (w ? topWallet(s, 3000, { businessDate: d }) : topProvider(s, fx.prov.Dialog!, 3000, { businessDate: d })), onOk: (r) => recs.push({ kind: 'topup', id: r.body.item.id, books: ['telecom'], date: d, status: 'posted' }) }; }
-        case 8: return { name: 'print sale', books: ['shop'], date: d, call: () => psNew(s, { businessDate: d }), onOk: (r) => recs.push({ kind: 'print', id: r.body.item.id, books: ['shop'], date: d, status: 'posted' }) };
-        case 9: return { name: 'printing supplies', books: ['shop'], date: d, call: () => supNew(s, { businessDate: d }), onOk: (r) => recs.push({ kind: 'supply', id: r.body.item.id, books: ['shop'], date: d, status: 'posted' }) };
+          const scopes: Scope[] = mix === 0 ? [SHOP] : mix === 1 ? [DC] : [SHOP, DC];
+          return { name: 'sale', scopes, date: d, call: () => sellNew(s, items, { businessDate: d }), onOk: (r) => { for (const sale of r.body.sales) recs.push({ kind: 'sale', id: sale.id, scopes: [prodScope(sale.book)], date: d, status: 'posted', key: 'item', saleId: sale.items[0].id }), saleUnits.set(sale.id, 1); } }; }
+        case 5: { const pv = provPick(); return { name: 'reload', scopes: [pv.scope], date: d, call: () => rel(s, fx.prov[pv.name]!, 10000, { businessDate: d }), onOk: (r) => recs.push({ kind: 'reload', id: r.body.item.id, scopes: [pv.scope], date: d, status: 'posted' }) }; }
+        case 6: return { name: 'ezcash', scopes: [DR], date: d, call: () => ez(s, 10000, { businessDate: d }), onOk: (r) => recs.push({ kind: 'ezcash', id: r.body.item.id, scopes: [DR], date: d, status: 'posted' }) };
+        case 7: { const w = int(2) === 0; const pv = provPick(); const sc = w ? DR : pv.scope;
+          return { name: 'top-up', scopes: [sc], date: d, call: () => (w ? topWallet(s, 3000, { businessDate: d }) : topProvider(s, fx.prov[pv.name]!, 3000, { businessDate: d })), onOk: (r) => recs.push({ kind: 'topup', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
+        case 8: return { name: 'print sale', scopes: [SHOP], date: d, call: () => psNew(s, { businessDate: d }), onOk: (r) => recs.push({ kind: 'print', id: r.body.item.id, scopes: [SHOP], date: d, status: 'posted' }) };
+        case 9: return { name: 'printing supplies', scopes: [SHOP], date: d, call: () => supNew(s, { businessDate: d }), onOk: (r) => recs.push({ kind: 'supply', id: r.body.item.id, scopes: [SHOP], date: d, status: 'posted' }) };
         case 10: {
-          const from = pick(ALL_BOOKS); const to = pick(ALL_BOOKS.filter((b) => b !== from));
-          return { name: 'transfer', books: [from, to], date: d,
-            call: () => tr(s, from, to, 500, { businessDate: d, ...(from === 'icecream' ? { fromFund: pick(['cost', 'electricity', 'profit'] as const) } : {}), ...(to === 'icecream' ? { toFund: pick(['cost', 'electricity', 'profit'] as const) } : {}) }),
-            onOk: (r) => recs.push({ kind: 'transfer', id: r.body.item.id, books: [from, to], date: d, status: 'posted' }) };
+          const from = pick(SC_ALL); const to = pick(SC_ALL.filter((x) => scopeKey(x) !== scopeKey(from))); // Telecom-to-Telecom (two segments) included
+          return { name: 'transfer', scopes: [from, to], date: d,
+            call: () => tr(s, from.book, to.book, 500, { businessDate: d, ...(from.book === 'icecream' ? { fromFund: pick(['cost', 'electricity', 'profit'] as const) } : {}), ...(to.book === 'icecream' ? { toFund: pick(['cost', 'electricity', 'profit'] as const) } : {}),
+              ...(from.seg ? { fromSegment: from.seg } : {}), ...(to.seg ? { toSegment: to.seg } : {}) }),
+            onOk: (r) => recs.push({ kind: 'transfer', id: r.body.item.id, scopes: [from, to], date: d, status: 'posted' }) };
         }
-        case 11: return { name: 'ice cream day', books: ['icecream'], date: d, call: () => dayNew(s, { businessDate: d }), then: () => (iceDays.has(d) ? 'DAY_EXISTS' : null), onOk: () => { iceDays.set(d, 1); recs.push({ kind: 'iceday', id: 0, books: ['icecream'], date: d, status: 'posted' }); } };
-        case 12: return { name: 'ice cream payment', books: ['icecream'], date: d, call: () => payNew(s, pick(['materials', 'electricity_bill'] as const), 400, { businessDate: d }), onOk: (r) => recs.push({ kind: 'icepay', id: r.body.payment.id, books: ['icecream'], date: d, status: 'posted' }) };
-        case 13: return { name: 'ice cream fund move', books: ['icecream'], date: d, call: () => moveNew(s, 'cost', 'electricity', 30, { businessDate: d }), onOk: (r) => recs.push({ kind: 'icemove', id: r.body.move.id, books: ['icecream'], date: d, status: 'posted' }) };
-        case 14: { const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; return { name: 'stock loss', books: [b], date: d, call: () => lossNew(s, p.id, 1, { businessDate: d }), onOk: (r) => recs.push({ kind: 'loss', id: r.body.item.id, books: [b], date: d, status: 'posted' }) }; }
-        case 15: { const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; return { name: 'goods drawing', books: [b], date: d, call: () => drawNew(s, p.id, 1, { businessDate: d }), onOk: (r) => recs.push({ kind: 'goods', id: r.body.item.id, books: [b], date: d, status: 'posted' }) }; }
+        case 11: return { name: 'ice cream day', scopes: [ICE], date: d, call: () => dayNew(s, { businessDate: d }), then: () => (iceDays.has(d) ? 'DAY_EXISTS' : null), onOk: () => { iceDays.set(d, 1); recs.push({ kind: 'iceday', id: 0, scopes: [ICE], date: d, status: 'posted' }); } };
+        case 12: return { name: 'ice cream payment', scopes: [ICE], date: d, call: () => payNew(s, pick(['materials', 'electricity_bill'] as const), 400, { businessDate: d }), onOk: (r) => recs.push({ kind: 'icepay', id: r.body.payment.id, scopes: [ICE], date: d, status: 'posted' }) };
+        case 13: return { name: 'ice cream fund move', scopes: [ICE], date: d, call: () => moveNew(s, 'cost', 'electricity', 30, { businessDate: d }), onOk: (r) => recs.push({ kind: 'icemove', id: r.body.move.id, scopes: [ICE], date: d, status: 'posted' }) };
+        case 14: { const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; const sc = prodScope(b); return { name: 'stock loss', scopes: [sc], date: d, call: () => lossNew(s, p.id, 1, { businessDate: d }), onOk: (r) => recs.push({ kind: 'loss', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
+        case 15: { const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; const sc = prodScope(b); return { name: 'goods drawing', scopes: [sc], date: d, call: () => drawNew(s, p.id, 1, { businessDate: d }), onOk: (r) => recs.push({ kind: 'goods', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
         case 16: {
-          const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; let draftId = 0;
-          return { name: 'stocktake complete', books: [b], date: d,
+          const b = bookOf2(); const p = b === 'shop' ? fx.shopP : fx.telP; const sc = prodScope(b); let draftId = 0;
+          return { name: 'stocktake complete', scopes: [sc], date: d,
             prep: async () => { const live = Number(sql(s, 'SELECT qty_on_hand AS q FROM products WHERE id = ?', p.id)[0]!.q); draftId = (await stDraft(s, [{ productId: p.id, countedQty: live - 1 }], { businessDate: d, book: b })).id; },
             call: async () => { const r = await stComplete(s, draftId); return r.status === 200 ? { status: 201, body: { item: r.body.item } } : r; },
-            onOk: (r) => recs.push({ kind: 'stocktake', id: r.body.item.id, books: [b], date: d, status: 'posted' }) };
+            onOk: (r) => recs.push({ kind: 'stocktake', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) };
         }
         case 17: {
           const mix = int(3);
           const lines = mix === 0 ? [fx.osShop] : mix === 1 ? [fx.osTel] : [fx.osShop, fx.osTel];
-          const books: Book[] = mix === 0 ? ['shop'] : mix === 1 ? ['telecom'] : ['shop', 'telecom'];
-          return { name: 'opening stock', books, date: d, call: () => post(s.app, '/opening-stock', { businessDate: d, items: lines.map((p: any) => ({ productId: p.id, qty: 1, unitCostCents: 500 })), clientRef: ref() }), onOk: (r) => recs.push({ kind: 'ostock', id: r.body.item.id, books, date: d, status: 'posted' }) };
+          const scopes: Scope[] = mix === 0 ? [SHOP] : mix === 1 ? [DC] : [SHOP, DC];
+          return { name: 'opening stock', scopes, date: d, call: () => post(s.app, '/opening-stock', { businessDate: d, items: lines.map((p: any) => ({ productId: p.id, qty: 1, unitCostCents: 500 })), clientRef: ref() }), onOk: (r) => recs.push({ kind: 'ostock', id: r.body.item.id, scopes, date: d, status: 'posted' }) };
         }
-        case 18: { const b = pick(ALL_BOOKS); const f = fundOf(b);
-          return { name: 'cash count', books: [b], date: d,
-            call: () => { const bal = balAsOf(s, b, d); return countNew(s, b, bal >= 0 ? bal + 1000 : 0, { businessDate: d, note: 'random count', ...f }); },
-            then: () => null, onOk: (r) => recs.push({ kind: 'count', id: r.body.item.id, books: [b], date: d, status: 'posted' }) }; }
-        case 19: { const b = pick(ALL_BOOKS); const f = b === 'icecream' ? { fund: 'profit' } : {};
-          return { name: 'opening balance', books: [b], date: d, call: () => openNew(s, b, { businessDate: d, ...f }),
-            then: () => (openings.has(`${b}|${(f as any).fund ?? ''}`) ? 'OPENING_BALANCE_EXISTS' : null),
-            onOk: (r) => { openings.add(`${b}|${(f as any).fund ?? ''}`); recs.push({ kind: 'opening', id: r.body.item.id, books: [b], date: d, status: 'posted', key: `${b}|${(f as any).fund ?? ''}` }); } };
+        case 18: { const sc = pick(SC_ALL); const f = fundOf(sc);
+          return { name: 'cash count', scopes: [sc], date: d,
+            call: () => { const bal = balAsOf(s, sc.book, d, sc.seg ?? null); return countNew(s, sc.book, bal >= 0 ? bal + 1000 : 0, { businessDate: d, note: 'random count', ...f, ...segBody(sc) }); },
+            then: () => null, onOk: (r) => recs.push({ kind: 'count', id: r.body.item.id, scopes: [sc], date: d, status: 'posted' }) }; }
+        case 19: { const sc = pick(SC_ALL); const f = sc.book === 'icecream' ? { fund: 'profit' } : {}; const ok = `${scopeKey(sc)}|${(f as any).fund ?? ''}`; // one opening balance per scope (and fund)
+          return { name: 'opening balance', scopes: [sc], date: d, call: () => openNew(s, sc.book, { businessDate: d, ...f, ...segBody(sc) }),
+            then: () => (openings.has(ok) ? 'OPENING_BALANCE_EXISTS' : null),
+            onOk: (r) => { openings.add(ok); recs.push({ kind: 'opening', id: r.body.item.id, scopes: [sc], date: d, status: 'posted', key: ok }); } };
         }
-        case 20: { // sale return
+        case 20: { // sale return (judged in the sale's scope)
           const cands = posted('sale').filter((r) => r.key === 'item' && (saleUnits.get(r.id) ?? 0) > 0 && r.date <= d);
           if (cands.length === 0) return null;
           const sale = pick(cands);
-          return { name: 'sale return', books: sale.books, date: d, call: () => returnNew(s, sale.id, [rl(sale.saleId!, 1, rand() < 0.7)], { businessDate: d }),
-            onOk: (r) => { const list = saleReturns.get(sale.id) ?? []; list.push({ id: r.body.item.id, date: d, status: 'posted' }); saleReturns.set(sale.id, list); saleUnits.set(sale.id, (saleUnits.get(sale.id) ?? 0) - 1); saleHadReturns.add(sale.id); recs.push({ kind: 'return', id: r.body.item.id, books: sale.books, date: d, status: 'posted', saleId: sale.id }); } };
+          return { name: 'sale return', scopes: sale.scopes, date: d, call: () => returnNew(s, sale.id, [rl(sale.saleId!, 1, rand() < 0.7)], { businessDate: d }),
+            onOk: (r) => { const list = saleReturns.get(sale.id) ?? []; list.push({ id: r.body.item.id, date: d, status: 'posted' }); saleReturns.set(sale.id, list); saleUnits.set(sale.id, (saleUnits.get(sale.id) ?? 0) - 1); saleHadReturns.add(sale.id); recs.push({ kind: 'return', id: r.body.item.id, scopes: sale.scopes, date: d, status: 'posted', saleId: sale.id }); } };
         }
-        case 21: { // purchase return
+        case 21: { // purchase return (judged in the purchase's scope)
           const cands = posted('purchase').filter((r) => (purchaseUnits.get(r.id) ?? 0) > 0 && r.date <= d);
           if (cands.length === 0) return null;
           const pu = pick(cands);
-          return { name: 'purchase return', books: pu.books, date: d, call: () => post(s.app, `/purchases/${pu.id}/returns`, { businessDate: d, items: [{ purchaseItemId: Number(pu.key), units: 1 }], clientRef: ref() }),
+          return { name: 'purchase return', scopes: pu.scopes, date: d, call: () => post(s.app, `/purchases/${pu.id}/returns`, { businessDate: d, items: [{ purchaseItemId: Number(pu.key), units: 1 }], clientRef: ref() }),
             onOk: () => { purchaseUnits.set(pu.id, (purchaseUnits.get(pu.id) ?? 0) - 1); purchaseHadReturns.add(pu.id); } };
         }
         case 22: { // ice cream day replace
           const dates = [...iceDays.keys()]; if (dates.length === 0) return null;
           const rd = pick(dates);
-          return { name: 'ice cream day replace', books: ['icecream'], date: rd, call: () => dayReplace(s, rd), okStatus: 201 };
+          return { name: 'ice cream day replace', scopes: [ICE], date: rd, call: () => dayReplace(s, rd), okStatus: 201 };
         }
         default: return null;
       }
@@ -195,7 +215,7 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
       const roll = int(10);
       if (roll === 0 && ice.length > 0) {
         const r = pick(ice);
-        return { name: 'ice day void', books: ['icecream'], date: r.date, call: () => dayVoid(s, r.date), onOk: () => { r.status = 'void'; iceDays.delete(r.date); } };
+        return { name: 'ice day void', scopes: [ICE], date: r.date, call: () => dayVoid(s, r.date), onOk: () => { r.status = 'void'; iceDays.delete(r.date); } };
       }
       const cands = open.filter((r) => {
         if (r.kind === 'sale') return !saleHadReturns.has(r.id) && r.date <= today();
@@ -206,7 +226,7 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
       if (cands.length === 0) return null;
       const r = pick(cands);
       const done = () => { r.status = 'void'; };
-      const mk = (call: () => Promise<Res>, extra: Partial<Plan> = {}): Plan => ({ name: `void ${r.kind}`, books: r.books, date: r.date, call, onOk: () => { done(); extra.onOk?.({ status: 200, body: {} }); } });
+      const mk = (call: () => Promise<Res>, extra: Partial<Plan> = {}): Plan => ({ name: `void ${r.kind}`, scopes: r.scopes, date: r.date, call, onOk: () => { done(); extra.onOk?.({ status: 200, body: {} }); } });
       switch (r.kind) {
         case 'cashdraw': case 'goods': return mk(() => drawVoid(s, r.id));
         case 'capital': return mk(() => capVoid(s, r.id));
@@ -234,49 +254,54 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
       }
     };
 
+    /** Accepted writes into a Telecom scope on a date that is closed (or earlier than a closed day) in ANOTHER Telecom scope: the isolation under test. */
+    const crossIsolation = (scopes: Scope[], date: string): boolean => scopes.some((sc) => sc.book === 'telecom'
+      && TELS.some((o) => scopeKey(o) !== scopeKey(sc) && [...closedDatesOf(model, o)].some((x) => x >= date)));
+
     for (let step = 0; step < OPS; step++) {
       const roll = rand();
       const label = `seed ${seed} step ${step}`;
       // ---- closings and reopens
       if (roll < 0.06) {
-        const b = pick(ALL_BOOKS);
-        const fr = [...model[b]].sort().pop();
+        const sc = pick(SC_ALL);
+        const closedSet = closedDatesOf(model, sc);
+        const fr = [...closedSet].sort().pop();
         const d = fr !== undefined && rand() < 0.5
           ? new Date(Date.parse(`${fr}T00:00:00Z`) + (1 + int(3)) * 86400000).toISOString().slice(0, 10)
           : pick(seedDates);
         const date = d > today() ? today() : d;
         const variant = pick(['none', 'none', 'match', 'variance'] as const);
-        const bal = balAsOf(s, b, date);
+        const bal = balAsOf(s, sc.book, date, sc.seg ?? null);
         const extra: Record<string, unknown> = variant === 'none' ? {}
-          : variant === 'match' ? { countedCents: bal, ...(b === 'icecream' ? {} : {}) }
-            : { countedCents: bal >= 0 ? bal + 300 : 0, note: 'random variance', ...(b === 'icecream' ? { fund: 'profit' } : {}) };
+          : variant === 'match' ? { countedCents: bal }
+            : { countedCents: bal >= 0 ? bal + 300 : 0, note: 'random variance', ...(sc.book === 'icecream' ? { fund: 'profit' } : {}) };
         if (variant !== 'none' && bal < 0 && variant === 'match') continue; // a matching count needs counted >= 0
         const before = light(s);
-        const r = await closeNew(s, b, date, extra);
+        const r = await closeNew(s, sc.book, date, { ...extra, ...segBody(sc) });
         stats.ops.close = (stats.ops.close ?? 0) + 1;
-        const closedAlready = model[b].has(date);
-        const later = [...model[b]].some((x) => x > date);
+        const closedAlready = closedSet.has(date);
+        const later = [...closedSet].some((x) => x > date);
         if (closedAlready) {
-          expect(r.status, `${label} close ${b} ${date}`).toBe(409);
+          expect(r.status, `${label} close ${scopeKey(sc)} ${date}`).toBe(409);
           expect(err(r).code, label).toBe('DAY_ALREADY_CLOSED');
         } else if (variant === 'variance' && later && bal !== (extra.countedCents as number)) {
           expect(r.status, `${label} ${JSON.stringify(r.body)}`).toBe(409);
-          expect(err(r)).toEqual(backdateBody(b, [...model[b]].filter((x) => x > date).sort().pop()!, date));
+          expect(err(r)).toEqual(backdateBody(sc.book, [...closedSet].filter((x) => x > date).sort().pop()!, date, sc.seg));
         } else {
-          expect(r.status, `${label} close ${b} ${date} ${variant}: ${JSON.stringify(r.body)}`).toBe(201);
-          model[b].add(date);
-          closings[`${b}|${date}`] = { id: r.body.item.id };
+          expect(r.status, `${label} close ${scopeKey(sc)} ${date} ${variant}: ${JSON.stringify(r.body)}`).toBe(201);
+          closedSet.add(date);
+          closings[`${scopeKey(sc)}|${date}`] = { id: r.body.item.id };
           stats.ok++;
         }
         if (r.status !== 201) { stats.refused++; expect(light(s), `${label} refused close wrote something`).toBe(before); }
       } else if (roll < 0.13) {
-        const open: Array<[Book, string]> = [];
-        for (const b of ALL_BOOKS) for (const d of model[b]) open.push([b, d]);
+        const open: Array<[Scope, string]> = [];
+        for (const sc of SC_ALL) for (const d of closedDatesOf(model, sc)) open.push([sc, d]);
         if (open.length === 0) continue;
-        const [b, d] = pick(open);
-        const r = await reopenNew(s, closings[`${b}|${d}`]!.id, 'random reopen');
-        expect(r.status, `${label} reopen ${b} ${d}: ${JSON.stringify(r.body)}`).toBe(200);
-        model[b].delete(d);
+        const [sc, d] = pick(open);
+        const r = await reopenNew(s, closings[`${scopeKey(sc)}|${d}`]!.id, 'random reopen');
+        expect(r.status, `${label} reopen ${scopeKey(sc)} ${d}: ${JSON.stringify(r.body)}`).toBe(200);
+        closedDatesOf(model, sc).delete(d);
         stats.ops.reopen = (stats.ops.reopen ?? 0) + 1;
       } else {
         const plan = roll < 0.80 ? planCreate() : planVoid();
@@ -285,12 +310,13 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
         const before = light(s);
         const r = await plan.call();
         stats.ops[plan.name] = (stats.ops[plan.name] ?? 0) + 1;
-        const verdict = plan.name.startsWith('ice cream day replace') || plan.name === 'ice day void'
-          ? predict(model, plan.books, plan.date) : predict(model, plan.books, plan.date);
-        const msg = `${label} ${plan.name} books=${plan.books.join('+')} date=${plan.date} -> ${r.status} ${JSON.stringify(r.body).slice(0, 300)}`;
+        const verdict = predict(model, plan.scopes, plan.date);
+        const msg = `${label} ${plan.name} scopes=${plan.scopes.map(scopeKey).join('+')} date=${plan.date} -> ${r.status} ${JSON.stringify(r.body).slice(0, 300)}`;
         if (verdict) {
           expect(r.status, msg).toBe(409);
-          const expected = verdict.code === 'DAY_CLOSED' ? dayClosedBody(verdict.book, plan.date) : backdateBody(verdict.book, verdict.closedDate, plan.date);
+          const expected = verdict.code === 'DAY_CLOSED'
+            ? dayClosedBody(verdict.scope.book, plan.date, verdict.scope.seg)
+            : backdateBody(verdict.scope.book, verdict.closedDate, plan.date, verdict.scope.seg);
           expect(err(r), msg).toEqual(expected);
           stats.byCode[verdict.code] = (stats.byCode[verdict.code] ?? 0) + 1;
         } else {
@@ -303,6 +329,7 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
             stats.byCode.VOID_BREAKS_RELEASE = (stats.byCode.VOID_BREAKS_RELEASE ?? 0) + 1;
           } else {
             expect([200, 201], msg).toContain(r.status);
+            if (crossIsolation(plan.scopes, plan.date)) stats.crossSegment++;
             plan.onOk?.(r);
           }
         }
@@ -318,7 +345,9 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
       // ---- invariants after every operation
       expect(closedSnapshotViolations(s), `${label}: a closed day's balance drifted`).toEqual([]);
       const db = dbClosed(s);
-      for (const b of ALL_BOOKS) expect([...db[b]].sort(), `${label} closed set of ${b}`).toEqual([...model[b]].sort());
+      for (const sc of SC_ALL) expect([...closedDatesOf(db, sc)].sort(), `${label} closed set of ${scopeKey(sc)}`).toEqual([...closedDatesOf(model, sc)].sort());
+      // no other segment ever got a closing (the run only draws the three)
+      expect([...db.keys()].filter((k) => !SC_ALL.some((x) => scopeKey(x) === k) && db.get(k)!.size > 0), `${label} unexpected scopes closed`).toEqual([]);
     }
     console.log(`seed ${seed}: ${JSON.stringify(stats)}`);
     // the run must be meaningful: plenty of accepted writes and of both refusal kinds
@@ -326,6 +355,7 @@ describe.each(SEEDS)('randomized closed-day model, seed %i', (seed) => {
     expect(stats.byCode.DAY_CLOSED ?? 0).toBeGreaterThan(3);
     expect(stats.byCode.BACKDATE_BEFORE_CLOSED_DAY ?? 0).toBeGreaterThan(10);
     expect(Object.keys(stats.ops).length).toBeGreaterThan(12);
+    expect(stats.crossSegment, 'accepted Telecom writes next to a day closed in another Telecom segment').toBeGreaterThan(5);
     expect(closedSnapshotViolations(s)).toEqual([]);
   }, 240000);
 });

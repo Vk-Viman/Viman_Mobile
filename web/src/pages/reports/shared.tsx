@@ -50,8 +50,8 @@ export function periodQuery(p: ReportPeriod, extra: Record<string, string> = {})
 const inputClass = 'rounded-lg border border-slate-300 px-3 py-2 text-sm';
 
 /** Date range + day/month switch + Excel download for `path` (relative to /api/v1, e.g. "/reports/pnl/shop"). */
-export function ReportToolbar({ period, set, downloadPath, showGranularity = true }: {
-  period: ReportPeriod; set: ReturnType<typeof useReportPeriod>['set']; downloadPath?: string; showGranularity?: boolean;
+export function ReportToolbar({ period, set, downloadPath, downloadExtra = {}, showGranularity = true }: {
+  period: ReportPeriod; set: ReturnType<typeof useReportPeriod>['set']; downloadPath?: string; downloadExtra?: Record<string, string>; showGranularity?: boolean;
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-end gap-3">
@@ -71,7 +71,7 @@ export function ReportToolbar({ period, set, downloadPath, showGranularity = tru
       )}
       {downloadPath && period.ready && (
         <a className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-           href={`/api/v1${downloadPath}${periodQuery(period, { format: 'xlsx' })}`} download>
+           href={`/api/v1${downloadPath}${periodQuery(period, { ...downloadExtra, format: 'xlsx' })}`} download>
           <Download size={16} aria-hidden="true" /> Download Excel
         </a>
       )}

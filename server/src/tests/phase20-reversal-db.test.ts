@@ -107,9 +107,10 @@ function reverseRaw(table: string, id: number): void {
   }
   for (const o of c.prepare(`SELECT * FROM cash_entries o WHERE ref_table = ? AND ref_id = ? AND reverses_entry_id IS NULL AND amount_cents <> 0
       AND NOT EXISTS (SELECT 1 FROM cash_entries r WHERE r.reverses_entry_id = o.id) ORDER BY id DESC`).all(table, id) as any[]) {
-    c.prepare(`INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, transfer_id, reverses_entry_id, note)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw reversal')`)
-      .run(o.book, o.business_date, o.type, -o.amount_cents, o.fund, table, id, o.transfer_id, o.id);
+    // a Telecom reversal carries the segment of its original (13D)
+    c.prepare(`INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, segment, ref_table, ref_id, transfer_id, reverses_entry_id, note)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw reversal')`)
+      .run(o.book, o.business_date, o.type, -o.amount_cents, o.fund, o.segment, table, id, o.transfer_id, o.id);
   }
   for (const o of c.prepare(`SELECT * FROM icecream_fund_entries o WHERE ref_table = ? AND ref_id = ? AND reverses_entry_id IS NULL
       AND NOT EXISTS (SELECT 1 FROM icecream_fund_entries r WHERE r.reverses_entry_id = o.id) ORDER BY id DESC`).all(table, id) as any[]) {
@@ -174,7 +175,7 @@ describe('M2: a raw posted -> void flip needs the reversal rows first, on every 
           .toMatch(/RECORD_VOID/);
       } else {
         expect(msg(() => conn.exec(`INSERT INTO cash_entries (book, business_date, type, amount_cents, ref_table, ref_id) VALUES ('shop', '${D}', 'capital', -1, '${t}', ${id})`)), `${key}: new cash row`)
-          .toMatch(/RECORD_VOID|UNIQUE|DAY_CLOSED/);
+          .toMatch(/RECORD_VOID|UNIQUE|DAY_CLOSED|SEGMENT_MISMATCH/); // a Shop row on a Telecom record: the segment rule (026) fires before the void rule; both refuse the write
       }
       expect(msg(() => reverseRaw(t, id))).toBeNull(); // nothing left to reverse: no-op
     });
@@ -193,8 +194,8 @@ describe('M2: a raw posted -> void flip needs the reversal rows first, on every 
       const legs = conn.prepare("SELECT * FROM cash_entries WHERE ref_table = 'cash_transfers' AND ref_id = ? AND reverses_entry_id IS NULL ORDER BY id").all(recId('cash_transfers')) as any[];
       expect(legs.length).toBe(2);
       const o = legs[0];
-      conn.prepare(`INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, transfer_id, reverses_entry_id) VALUES (?, ?, ?, ?, ?, 'cash_transfers', ?, ?, ?)`)
-        .run(o.book, o.business_date, o.type, -o.amount_cents, o.fund, recId('cash_transfers'), o.transfer_id, o.id);
+      conn.prepare(`INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, segment, ref_table, ref_id, transfer_id, reverses_entry_id) VALUES (?, ?, ?, ?, ?, ?, 'cash_transfers', ?, ?, ?)`)
+        .run(o.book, o.business_date, o.type, -o.amount_cents, o.fund, o.segment, recId('cash_transfers'), o.transfer_id, o.id);
       expect(msg(() => conn.exec(flipSql('cash_transfers', recId('cash_transfers'))))).toMatch(/VOID_WITHOUT_REVERSAL/);
     });
     inSavepoint(() => {
@@ -225,9 +226,9 @@ describe('M2: a raw posted -> void flip needs the reversal rows first, on every 
 describe('reversal rows must mirror their original and exist once (all types)', () => {
   const cashOrig = (): any => conn.prepare("SELECT * FROM cash_entries WHERE ref_table = 'expenses' AND ref_id = ? AND reverses_entry_id IS NULL").get(recId('expenses'));
   const rev = (o: any, over: Record<string, unknown> = {}): string => {
-    const v = { book: o.book, date: o.business_date, type: o.type, amt: -o.amount_cents, fund: o.fund, ref: "'expenses'", rid: recId('expenses'), link: o.id, ...over };
-    return `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, reverses_entry_id)
-      VALUES ('${v.book}', '${v.date}', '${v.type}', ${v.amt}, ${v.fund === null ? 'NULL' : `'${v.fund}'`}, ${v.ref}, ${v.rid}, ${v.link})`;
+    const v = { book: o.book, date: o.business_date, type: o.type, amt: -o.amount_cents, fund: o.fund, segment: o.segment, ref: "'expenses'", rid: recId('expenses'), link: o.id, ...over };
+    return `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, segment, ref_table, ref_id, reverses_entry_id)
+      VALUES ('${v.book}', '${v.date}', '${v.type}', ${v.amt}, ${v.fund === null ? 'NULL' : `'${v.fund}'`}, ${v.segment === null ? 'NULL' : `'${v.segment}'`}, ${v.ref}, ${v.rid}, ${v.link})`;
   };
 
   it('cash: wrong amount, book, fund or date, reversing a reversal or a missing entry are refused; the exact mirror is accepted once', () => {
@@ -328,7 +329,7 @@ describe('L2: INSERT OR REPLACE cannot overwrite an append-only row; the migrati
     // a REPLACE that would delete an older REVERSAL through the unique link is refused the same way
     inSavepoint(() => {
       const o = conn.prepare("SELECT * FROM cash_entries WHERE ref_table = 'expenses' AND ref_id = ? AND reverses_entry_id IS NULL").get(recId('expenses')) as any;
-      const ins = (verb: string) => `${verb} INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, reverses_entry_id) VALUES ('${o.book}', '${o.business_date}', '${o.type}', ${-o.amount_cents}, NULL, 'expenses', ${recId('expenses')}, ${o.id})`;
+      const ins = (verb: string) => `${verb} INTO cash_entries (book, business_date, type, amount_cents, fund, segment, ref_table, ref_id, reverses_entry_id) VALUES ('${o.book}', '${o.business_date}', '${o.type}', ${-o.amount_cents}, NULL, ${o.segment === null ? 'NULL' : `'${o.segment}'`}, 'expenses', ${recId('expenses')}, ${o.id})`;
       conn.exec(ins('INSERT'));
       const first = n1(s.ctx, 'SELECT MAX(id) FROM cash_entries');
       expect(msg(() => conn.exec(ins('INSERT OR REPLACE')))).toMatch(/UNIQUE/);

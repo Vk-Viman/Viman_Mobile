@@ -14,6 +14,7 @@ import { Button } from '../../components/Button';
 import { ErrorState } from '../../components/ErrorState';
 import { Modal } from '../../components/Modal';
 import { Money } from '../../components/Money';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { Spinner } from '../../components/Spinner';
 import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSale } from '../../api/sales';
@@ -54,6 +55,7 @@ export function SaleDetailDialog({ id, onClose }: { id: number; onClose: () => v
               <Row k="Business date" v={<>{s.businessDate} {s.backdated && <Badge tone="amber">Backdated</Badge>}</>} />
               <Row k="Posted (Colombo time)" v={formatDateTime(s.postedAt)} />
               <Row k="Book" v={<BookBadge book={s.book} />} />
+              <Row k="Segment" v={s.segment ? SEGMENT_LABEL[s.segment] : '—'} />
               <Row k="Status" v={<><PostedStatusBadge status={s.status} />{badgesFor(id)}</>} />
               <Row k="Total" v={<Money cents={s.totalCents} className="font-semibold" />} />
               <Row k="Cost" v={<Money cents={s.chargedCostCents} />} />

@@ -7,6 +7,7 @@
  * one place only.
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../services/segments.ts';
 import type { CapitalKind } from './capital.repo.ts';
 import type { CashBook } from './cash-entries.repo.ts';
 import type { RecordStatus } from './expenses.repo.ts';
@@ -18,12 +19,14 @@ type N = number | bigint;
  * and the total of the POSTED amounts (voided entries are listed but not summed). `from`/`to` are inclusive business dates.
  */
 export function listCapitalEntries(conn: DatabaseSync, q: {
-  kind?: CapitalKind; book?: CashBook; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
+  kind?: CapitalKind; book?: CashBook; segment?: StoredSegment; from?: string; to?: string; status?: RecordStatus;
+  limit: number; offset: number;
 }): { ids: number[]; total: number; amountCents: number } {
   const where: string[] = [];
   const params: SQLInputValue[] = [];
   if (q.kind !== undefined) { where.push('kind = ?'); params.push(q.kind); }
   if (q.book !== undefined) { where.push('book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('segment = ?'); params.push(q.segment); }
   if (q.from !== undefined) { where.push('business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('business_date <= ?'); params.push(q.to); }
   if (q.status !== undefined) { where.push('status = ?'); params.push(q.status); }

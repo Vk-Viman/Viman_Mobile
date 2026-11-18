@@ -206,7 +206,7 @@ describe('Excel download: the same figures as the JSON', () => {
     expect(cellBy(ice.getWorksheet('Ice Cream funds')!, '2025-03', 'Cost closing')).toBe(6300);
     expect(cellBy(ice.getWorksheet('Ice Cream funds')!, '2025-03', 'Electricity closing')).toBe(-330);
     const tr = (await repXlsx(s, 'transfers', q('2025-03-01', '2025-04-30', 'month'))).wb!;
-    expect(tr.worksheets.map((w) => w.name)).toEqual(['Transfers by direction', 'Transfers']);
+    expect(tr.worksheets.map((w) => w.name)).toEqual(['Transfers by direction', 'Transfers by Telecom segment', 'Transfers']);
     expect(cellBy(tr.getWorksheet('Transfers by direction')!, 'Total', 'Total moved')).toBe(900);
     const f = (await repXlsx(s, 'icecream-funds', q('2025-03-01', '2025-04-30', 'month'))).wb!;
     expect(f.worksheets.map((w) => w.name)).toEqual(['Ice Cream fund statement', 'Recognized profit & excess cost']);

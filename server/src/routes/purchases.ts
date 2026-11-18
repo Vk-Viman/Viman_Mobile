@@ -18,6 +18,8 @@ import {
   checkQueryDates, clientRef, dateField, dateQuery, bookQuery, idParamsSchema, intQuery, parseId, parsePaging,
   voidBody,
 } from './catalog-query.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { registerCorrectionEndpoints } from '../services/correction-cash.ts';
 import { purchaseCorrection } from '../services/correction-stock.ts';
 import { correctionBodySchema } from './corrections.ts';
@@ -35,6 +37,7 @@ const listQuery = {
     from: dateQuery,
     to: dateQuery,
     book: bookQuery,
+    segment: STORED_SEGMENT_SCHEMA,
     supplierId: intQuery,
     status: { type: 'string', enum: ['posted', 'void'] },
     q: { type: 'string', maxLength: 200 },
@@ -107,7 +110,7 @@ export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): v
 
   app.get('/purchases', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      from?: string; to?: string; book?: 'shop' | 'telecom'; supplierId?: string; status?: 'posted' | 'void';
+      from?: string; to?: string; book?: 'shop' | 'telecom'; segment?: StoredSegment; supplierId?: string; status?: 'posted' | 'void';
       q?: string; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
@@ -116,6 +119,7 @@ export function registerPurchaseRoutes(app: FastifyInstance, ctx: AppContext): v
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.supplierId !== undefined) q.supplierId = Number(raw.supplierId);
     if (raw.status !== undefined) q.status = raw.status;
     const text = raw.q?.trim();

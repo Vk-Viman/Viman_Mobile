@@ -4,8 +4,8 @@
  * Layer: service (route -> SERVICE -> repository -> database). It only wires the EXISTING `voidSale` and the EXISTING `createSales`
  * into the shared `correction.ts` helper; no accounting rule, guard, formula or error code lives here and nothing is recomputed:
  *  - the replacement is the normal POS body (`businessDate` optional, default = the ORIGINAL sale's date, G5);
- *  - a sale can only be corrected into a sale of the SAME book: a body whose lines would make more than one sale, or a sale of the
- *    other book, is refused 400 VALIDATION_ERROR (and nothing is saved);
+ *  - a sale can only be corrected into a sale of the SAME scope (book + segment, 13D: Shop, or one provider's Cards): a body whose
+ *    lines would make more than one sale, or a sale of another scope, is refused 400 VALIDATION_ERROR (and nothing is saved);
  *  - a replacement `clientRef` that already belongs to an existing sale is refused 409 CLIENT_REF_CONFLICT (never linked);
  *  - the `comparison` object only READS the frozen figures of the original and of the replacement (weighted-average cost can differ
  *    when stock was bought or sold in between; the replacement uses the live average, C5).
@@ -19,7 +19,8 @@ import { getSale as getSaleRow } from '../repositories/sales.repo.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { applyCorrection, checkCorrectable, previewCorrection } from './correction.ts';
 import type { CorrectionLink, CorrectionSteps, Eligibility } from './correction.ts';
-import { loadSale, unitCostOf } from './sales-common.ts';
+import { loadSale, saleScope, saleScopeName, unitCostOf } from './sales-common.ts';
+import { scopeKey, segmentOfProduct } from './segments.ts';
 import type { Sale } from './sales-common.ts';
 import { createSales, voidSale } from './sales.service.ts';
 import type { SaleCartLine, SaleWarning } from './sales.service.ts';
@@ -106,7 +107,7 @@ function buildSteps(ctx: AppContext, id: number, body: SaleCorrectionBody, cap: 
     createReplacement: () => {
       const original = cap.before as Sale;
       const rep = body.replacement;
-      assertSameBook(ctx.database.conn, rep.items, original);
+      assertSameScope(ctx.database.conn, rep.items, original);
       const create = {
         businessDate: rep.businessDate ?? original.businessDate, items: rep.items, clientRef: rep.clientRef,
         ...(rep.notes === undefined ? {} : { notes: rep.notes }),
@@ -114,7 +115,7 @@ function buildSteps(ctx: AppContext, id: number, body: SaleCorrectionBody, cap: 
       const created = createSales(ctx, create);
       // A repeated clientRef of an EXISTING sale answers with that sale and creates nothing: never link a correction to it.
       if (!created.created) throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This reference was already used for a different record.');
-      if (created.sales.length !== 1 || created.sales[0]?.book !== original.book) throw wrongBook(original.book);
+      if (created.sales.length !== 1 || scopeKeyOf(created.sales[0] as Sale) !== scopeKeyOf(original)) throw wrongScope(original);
       cap.created = created;
       return created;
     },
@@ -122,19 +123,40 @@ function buildSteps(ctx: AppContext, id: number, body: SaleCorrectionBody, cap: 
   };
 }
 
-function wrongBook(book: string): AppError {
-  return validationError({ items: `A correction must contain only ${book === 'shop' ? 'Shop' : 'Telecom'} products, like the original sale.` });
+function scopeKeyOf(sale: Sale): string { return scopeKey(saleScope(sale)); }
+
+/** The owner-facing text of the scope rule: "Shop products" or "Dialog Cards products". */
+function scopeRuleText(original: Sale): string {
+  return `${saleScopeName(original)} products`;
 }
 
-/** Refuses a cart that has a product of another book than the original sale (unknown products are left to the create's own check). */
-function assertSameBook(conn: DatabaseSync, items: SaleCartLine[], original: Sale): void {
+function wrongScope(original: Sale): AppError {
+  return validationError({ items: `A correction must contain only ${scopeRuleText(original)}, like the original sale.` });
+}
+
+/** The scope key a cart product would be sold in (Shop, or its provider's cards segment); null when unknown. */
+function productScopeKey(conn: DatabaseSync, productId: number): string | null {
+  const p = getProduct(conn, productId);
+  if (!p) return null;
+  return p.book === 'telecom' ? scopeKey({ book: 'telecom', segment: segmentOfProduct(conn, p.id) }) : 'shop';
+}
+
+/**
+ * Refuses a cart that has a product of another SCOPE than the original sale (another book, or another provider's cards).
+ * Unknown products are left to the create's own check.
+ */
+function assertSameScope(conn: DatabaseSync, items: SaleCartLine[], original: Sale): void {
   const fields: Record<string, string> = {};
+  const want = scopeKeyOf(original);
   items.forEach((l, i) => {
-    const p = getProduct(conn, l.productId);
-    if (p && p.book !== original.book) fields[`items.${i}.productId`] = `${p.name} is not a ${original.book === 'shop' ? 'Shop' : 'Telecom'} product.`;
+    const key = productScopeKey(conn, l.productId);
+    if (key !== null && key !== want) {
+      const p = getProduct(conn, l.productId);
+      fields[`items.${i}.productId`] = `${p?.name ?? 'This product'} is not a ${saleScopeName(original)} product.`;
+    }
   });
   if (Object.keys(fields).length > 0) {
-    throw validationError({ items: `A correction must contain only ${original.book === 'shop' ? 'Shop' : 'Telecom'} products, like the original sale.`, ...fields });
+    throw validationError({ items: `A correction must contain only ${scopeRuleText(original)}, like the original sale.`, ...fields });
   }
 }
 

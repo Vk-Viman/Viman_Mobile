@@ -15,6 +15,8 @@ import { apiBase, daysAgo, ref } from './helpers/inventory.ts';
 import { sqlPrintSale, sqlSupply } from './helpers/phase7.ts';
 import { sqlReturn, sqlSale } from './helpers/phase5.ts';
 import { closeNew, reopenNew } from './helpers/phase8.ts';
+import { SEGMENTS } from './helpers/segments.ts';
+import { seg } from './helpers/seg.ts';
 import { ALL_BOOKS, C, E, L, M, OLD, allOps, closeBooks, fixture, must } from './helpers/phase19cd.ts';
 import type { Book, Fx } from './helpers/phase19cd.ts';
 import { assertDayOpen } from '../services/day-closing.ts';
@@ -71,7 +73,7 @@ const conn = (w: World) => w.fx.s.ctx.database.conn;
 type Prot = true | false | 'exact';
 const INSERTS: Array<[string, Ins, Prot]> = [
   ['cash_entries (shop)', (w, d) => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents) VALUES ('shop', ?, 'capital', 100)", d), true],
-  ['cash_entries (telecom)', (w, d) => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents) VALUES ('telecom', ?, 'capital', 100)", d), true],
+  ['cash_entries (telecom)', (w, d) => run(w, "INSERT INTO cash_entries (book, segment, business_date, type, amount_cents) VALUES ('telecom', 'dialog_reloads', ?, 'capital', 100)", d), true],
   ['cash_entries (icecream)', (w, d) => run(w, "INSERT INTO cash_entries (book, business_date, type, amount_cents, fund) VALUES ('icecream', ?, 'capital', 100, 'cost')", d), true],
   ['icecream_days', (w, d) => run(w, 'INSERT INTO icecream_days (business_date, sales_cents, cost_alloc_cents, electricity_alloc_cents, profit_share_cents, client_ref) VALUES (?, 0, 0, 0, 0, ?)', d, ref()), true],
   ['icecream_payments', (w, d) => run(w, "INSERT INTO icecream_payments (business_date, kind, fund, amount_cents, description, client_ref) VALUES (?, 'materials', 'cost', 100, 'x', ?)", d, ref()), true],
@@ -89,12 +91,12 @@ const INSERTS: Array<[string, Ins, Prot]> = [
   ['expenses', (w, d) => run(w, "INSERT INTO expenses (business_date, book, category, amount_cents, description, client_ref) VALUES (?, 'shop', 'rent', 100, 'x', ?)", d, ref()), true],
   ['capital_entries', (w, d) => run(w, "INSERT INTO capital_entries (business_date, book, kind, amount_cents, client_ref) VALUES (?, 'shop', 'capital', 100, ?)", d, ref()), true],
   ['cash_counts', (w, d) => run(w, "INSERT INTO cash_counts (book, business_date, expected_cents, counted_cents, difference_cents, client_ref) VALUES ('shop', ?, 0, 0, 0, ?)", d, ref()), 'exact'],
-  ['reload_sales', (w, d) => run(w, 'INSERT INTO reload_sales (business_date, provider_id, sales_cents, commission_bp, commission_cents, client_ref) VALUES (?, ?, 1000, 600, 60, ?)', d, w.fx.prov.Dialog, ref()), true],
-  ['ezcash_sales', (w, d) => run(w, 'INSERT INTO ezcash_sales (business_date, provider_id, bill_total_cents, commission_bp, commission_cents, client_ref) VALUES (?, ?, 1000, 80, 8, ?)', d, w.fx.prov.Dialog, ref()), true],
-  ['telecom_topups', (w, d) => run(w, "INSERT INTO telecom_topups (business_date, kind, amount_cents, client_ref) VALUES (?, 'wallet_topup', 100, ?)", d, ref()), true],
+  ['reload_sales', (w, d) => run(w, "INSERT INTO reload_sales (segment, business_date, provider_id, sales_cents, commission_bp, commission_cents, client_ref) VALUES ('dialog_reloads', ?, ?, 1000, 600, 60, ?)", d, w.fx.prov.Dialog, ref()), true],
+  ['ezcash_sales', (w, d) => run(w, "INSERT INTO ezcash_sales (segment, business_date, provider_id, bill_total_cents, commission_bp, commission_cents, client_ref) VALUES ('dialog_reloads', ?, ?, 1000, 80, 8, ?)", d, w.fx.prov.Dialog, ref()), true],
+  ['telecom_topups', (w, d) => run(w, "INSERT INTO telecom_topups (segment, business_date, kind, amount_cents, client_ref) VALUES ('dialog_reloads', ?, 'wallet_topup', 100, ?)", d, ref()), true],
   ['print_sales', (w, d) => sqlPrintSale(conn(w), { date: d }), true],
   ['printing_supplies', (w, d) => sqlSupply(conn(w), { date: d }), true],
-  ['cash_transfers', (w, d) => run(w, "INSERT INTO cash_transfers (business_date, from_book, to_book, amount_cents, client_ref) VALUES (?, 'shop', 'telecom', 100, ?)", d, ref()), true],
+  ['cash_transfers', (w, d) => run(w, "INSERT INTO cash_transfers (business_date, from_book, to_book, to_segment, amount_cents, client_ref) VALUES (?, 'shop', 'telecom', 'dialog_reloads', 100, ?)", d, ref()), true],
   ['import_runs', (w, d) => run(w, "INSERT INTO import_runs (kind, file_name, file_sha256, business_date, mode, status, rows_total, rows_ok, rows_failed) VALUES ('opening_stock', 'f.xlsx', ?, ?, 'preview', 'previewed', 0, 0, 0)", 'a'.repeat(64), d), false],
 ];
 
@@ -134,8 +136,15 @@ describe('database protection: raw void flip (status posted -> void) of a record
       + (SELECT COUNT(*) FROM stock_movements WHERE ref_table = '${t}' AND ref_id = ?)
       + (SELECT COUNT(*) FROM icecream_fund_entries WHERE ref_table = '${t}' AND ref_id = ?) AS n`).get(id, id, id) as any).n);
     if (ledger(w.recs[t]!.E) > 0 && ledger(w.recs[t]!.C) > 0) {
-      expect(e).toContain('VOID_WITHOUT_REVERSAL');
-      expect(c).toContain('VOID_WITHOUT_REVERSAL');
+      // Which of the two refusals answers first depends on the creation order of the triggers: since migration 026 re-created the closed-day triggers
+      // (per segment) after the 020 reversal guard, the closed-day verdict now comes first. Both refuse, and nothing is written (the savepoint is
+      // rolled back); the reversal guard itself is pinned below by reopening every closing, which leaves it as the only refusal.
+      expect(e).toMatch(/VOID_WITHOUT_REVERSAL|BACKDATE_BEFORE_CLOSED_DAY/);
+      expect(c).toMatch(/VOID_WITHOUT_REVERSAL|DAY_CLOSED/);
+      const rows = conn(w).prepare('SELECT id FROM daily_closings WHERE reopened_at IS NULL OR closed_at > reopened_at').all() as unknown as Array<{ id: number }>;
+      for (const r of rows) must(await reopenNew(w.fx.s, r.id, 'raw void flip'));
+      expect(flip(w.recs[t]!.E)).toContain('VOID_WITHOUT_REVERSAL');
+      expect(flip(w.recs[t]!.C)).toContain('VOID_WITHOUT_REVERSAL');
     } else if (PROTECTED.has(t)) {
       expect(e).toContain('BACKDATE_BEFORE_CLOSED_DAY');
       expect(c).toContain('DAY_CLOSED');
@@ -165,11 +174,27 @@ describe('database protection: reversal rows, other books, reopen / re-close', (
     const fx = await fixture(s);
     await closeBooks(s, ['shop'], C());
     const w = { fx } as World;
-    const ins = (book: Book, d: string) => probe(fx, () => run(w, `INSERT INTO cash_entries (book, business_date, type, amount_cents${book === 'icecream' ? ', fund' : ''}) VALUES ('${book}', ?, 'capital', 100${book === 'icecream' ? ", 'cost'" : ''})`, d));
+    const ins = (book: Book, d: string) => probe(fx, () => run(w, `INSERT INTO cash_entries (book, business_date, type, amount_cents${book === 'icecream' ? ', fund' : ''}${book === 'telecom' ? ', segment' : ''}) VALUES ('${book}', ?, 'capital', 100${book === 'icecream' ? ", 'cost'" : ''}${book === 'telecom' ? ", 'dialog_reloads'" : ''})`, d));
     for (const d of [E(), C(), L()]) { expect(ins('telecom', d)).toBe('ok'); expect(ins('icecream', d)).toBe('ok'); }
     expect(ins('shop', E())).toContain('BACKDATE_BEFORE_CLOSED_DAY');
     expect(ins('shop', C())).toContain('DAY_CLOSED');
     expect(ins('shop', L())).toBe('ok');
+  });
+
+  it('13D: with ONE Telecom segment closed on C, raw rows of the other seven segments (and Shop / Ice Cream) dated E, C and L are accepted; the closed segment still refuses E and C', async () => {
+    const s = await apiBase(await env.build());
+    const fx = await fixture(s);
+    await seg.closeOk(s, 'dialog_cards', C());
+    const w = { fx } as World;
+    const ins = (segment: string, d: string) => probe(fx, () => run(w, "INSERT INTO cash_entries (book, segment, business_date, type, amount_cents) VALUES ('telecom', ?, ?, 'capital', 100)", segment, d));
+    expect(ins('dialog_cards', E())).toContain('BACKDATE_BEFORE_CLOSED_DAY');
+    expect(ins('dialog_cards', C())).toContain('DAY_CLOSED');
+    expect(ins('dialog_cards', L())).toBe('ok');
+    for (const other of SEGMENTS.filter((x) => x !== 'dialog_cards')) for (const d of [E(), C(), L()]) expect(ins(other, d), `${other} ${d}`).toBe('ok');
+    // the segment-scoped record tables follow the same scope: a Dialog Reloads reload dated C is fine while Dialog Cards is closed
+    expect(probe(fx, () => run(w, "INSERT INTO reload_sales (segment, business_date, provider_id, sales_cents, commission_bp, commission_cents, client_ref) VALUES ('dialog_reloads', ?, ?, 1000, 600, 60, ?)", C(), fx.prov.Dialog, ref()))).toBe('ok');
+    expect(probe(fx, () => run(w, "INSERT INTO expenses (segment, business_date, book, category, amount_cents, description, client_ref) VALUES ('dialog_cards', ?, 'telecom', 'rent', 100, 'x', ?)", C(), ref()))).toContain('DAY_CLOSED');
+    expect(probe(fx, () => run(w, "INSERT INTO expenses (segment, business_date, book, category, amount_cents, description, client_ref) VALUES ('hutch_cards', ?, 'telecom', 'rent', 100, 'x', ?)", C(), ref()))).toBe('ok');
   });
 
   it('reopening lifts the trigger (E and C accepted); re-closing the same row brings it back; M < C reopened leaves C as the latest closed day', async () => {
@@ -198,11 +223,15 @@ describe('server check vs database trigger: they must give the same verdict for 
     const w = { fx } as World;
     const connection = s.ctx.database.conn;
     const dates = Array.from({ length: 9 }, (_, i) => daysAgo(8 - i)); // 8 days ago ... today
-    const verdictService = (book: Book, d: string): Out => {
-      try { assertDayOpen(connection, [book], d); return 'ok'; } catch (e) { return (e as AppError).code; }
+    // 13D: Shop, Ice Cream and EACH of the eight Telecom segments are separate scopes; the service and the trigger must agree on every one.
+    type Scope = { book: Book; segment: string | null };
+    const SCOPES: Scope[] = [{ book: 'shop', segment: null }, ...SEGMENTS.map((segment) => ({ book: 'telecom' as Book, segment })), { book: 'icecream', segment: null }];
+    const verdictService = (sc: Scope, d: string): Out => {
+      try { assertDayOpen(connection, [sc.segment ? { book: sc.book, segment: sc.segment } as any : sc.book], d); return 'ok'; } catch (e) { return (e as AppError).code; }
     };
-    const verdictDb = (book: Book, d: string): Out => {
-      const r = probe(fx, () => run(w, `INSERT INTO cash_entries (book, business_date, type, amount_cents${book === 'icecream' ? ', fund' : ''}) VALUES ('${book}', ?, 'capital', 1${book === 'icecream' ? ", 'cost'" : ''})`, d));
+    const verdictDb = (sc: Scope, d: string): Out => {
+      const { book, segment } = sc;
+      const r = probe(fx, () => run(w, `INSERT INTO cash_entries (book, business_date, type, amount_cents${book === 'icecream' ? ', fund' : ''}${segment ? ', segment' : ''}) VALUES ('${book}', ?, 'capital', 1${book === 'icecream' ? ", 'cost'" : ''}${segment ? `, '${segment}'` : ''})`, d));
       return r === 'ok' ? 'ok' : r.includes('BACKDATE') ? 'BACKDATE_BEFORE_CLOSED_DAY' : r.includes('DAY_CLOSED') ? 'DAY_CLOSED' : `OTHER:${r}`;
     };
     const verdictIceRecords = (d: string): Out[] => {
@@ -214,23 +243,23 @@ describe('server check vs database trigger: they must give the same verdict for 
       return t.map((f) => { const r = probe(fx, f); return r === 'ok' ? 'ok' : r.includes('BACKDATE') ? 'BACKDATE_BEFORE_CLOSED_DAY' : r.includes('DAY_CLOSED') ? 'DAY_CLOSED' : `OTHER:${r}`; });
     };
     const compare = (label: string) => {
-      for (const book of ALL_BOOKS) {
+      for (const sc of SCOPES) {
         for (const d of dates) {
-          const a = verdictService(book, d);
-          expect(verdictDb(book, d), `${label}: ${book} ${d} service=${a}`).toBe(a);
-          if (book === 'icecream') for (const v of verdictIceRecords(d)) expect(v, `${label}: ice record ${d}`).toBe(a);
+          const a = verdictService(sc, d);
+          expect(verdictDb(sc, d), `${label}: ${sc.book}/${sc.segment ?? '-'} ${d} service=${a}`).toBe(a);
+          if (sc.book === 'icecream') for (const v of verdictIceRecords(d)) expect(v, `${label}: ice record ${d}`).toBe(a);
         }
       }
     };
     compare('nothing closed');
     const sh = await closeBooks(s, ['shop'], daysAgo(5));
     const sh2 = await closeBooks(s, ['shop'], daysAgo(3));
-    const te = await closeBooks(s, ['telecom'], daysAgo(1));
+    const te = await closeBooks(s, ['telecom'], daysAgo(1)); // all eight segments
     const ic = await closeBooks(s, ['icecream'], today0());
     compare('shop {5,3} telecom {1} icecream {today}');
     must(await reopenNew(s, sh2.shop.id, 'agree test'));
     compare('shop {5} telecom {1} icecream {today}');
-    must(await reopenNew(s, te.telecom.id, 'agree test'));
+    for (const row of te.telecom._all) must(await reopenNew(s, row.id, 'agree test'));
     must(await reopenNew(s, ic.icecream.id, 'agree test'));
     compare('shop {5} only');
     must(await reopenNew(s, sh.shop.id, 'agree test'));
@@ -238,6 +267,16 @@ describe('server check vs database trigger: they must give the same verdict for 
     must(await closeNew(s, 'shop', daysAgo(5)));
     must(await closeNew(s, 'shop', daysAgo(3)));
     compare('shop {5,3} again');
+    // ONE Telecom segment closed (the new dimension): the service and the trigger agree for all eight scopes, and only that scope refuses
+    const one = await seg.closeOk(s, 'mobitel_cards', daysAgo(2));
+    compare('shop {5,3} mobitel_cards {2}');
+    expect(verdictService({ book: 'telecom', segment: 'mobitel_cards' }, daysAgo(4))).toBe('BACKDATE_BEFORE_CLOSED_DAY');
+    expect(verdictService({ book: 'telecom', segment: 'mobitel_cards' }, daysAgo(2))).toBe('DAY_CLOSED');
+    for (const other of SEGMENTS.filter((x) => x !== 'mobitel_cards')) {
+      for (const d of dates) expect(verdictDb({ book: 'telecom', segment: other }, d), `${other} ${d} must stay open`).toBe('ok');
+    }
+    must(await reopenNew(s, one.id, 'agree test'));
+    compare('mobitel_cards reopened');
   });
 });
 

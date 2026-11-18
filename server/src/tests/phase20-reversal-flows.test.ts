@@ -18,7 +18,6 @@ import {
   buildWorld19, bookBalances, dbIntegrity, fundBalances, n1, probe, returnedQtyProblems, reversalProblems, rows, stockProblems, voidNetProblems,
 } from './helpers/phase19h.ts';
 import { currentVersion, latestVersion, loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
-import { receiveStock } from '../services/inventory.service.ts';
 
 const env = new TestEnv();
 const conns: DatabaseSync[] = [];
@@ -201,6 +200,9 @@ describe('migration 020 on a populated database', () => {
     const mdir = join(dir, 'mig');
     mkdirSync(mdir, { recursive: true });
     for (const f of loadMigrations().filter((m) => m.version < 20)) copyFileSync(join(MIGRATIONS_DIR, f.name), join(mdir, f.name));
+    const mdir23 = join(dir, 'mig23'); // the same folder plus migrations 020-023: stage 1 below applies them, stage 2 applies the Telecom segments (024-026)
+    mkdirSync(mdir23, { recursive: true });
+    for (const f of loadMigrations().filter((m) => m.version <= 23)) copyFileSync(join(MIGRATIONS_DIR, f.name), join(mdir23, f.name));
     const c = new DatabaseSync(join(dir, 'old.db'));
     conns.push(c);
     c.exec('PRAGMA foreign_keys = ON');
@@ -209,7 +211,8 @@ describe('migration 020 on a populated database', () => {
 
     // data written the way the app does it before migration 020
     const p = sqlProduct(c);
-    receiveStock(c, { productId: p, businessDate: '2025-04-01', type: 'purchase', qty: 10, valueCents: 10000, refTable: null, refId: null, reason: 'seed' });
+    // raw insert (what receiveStock writes): the service's product query reads the view of migration 024, which this pre-020 database does not have
+    c.prepare("INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason) VALUES (?, '2025-04-01', 'purchase', 10, 10000, 1000, NULL, NULL, 'seed')").run(p);
     const sale = sqlSale(c, { date: '2025-04-02', total: 300000 });
     const item = sqlSaleItem(c, sale, p, { qty: 3, price: 100000, cogs: 70000 });
     const mkRet = (qty: number, date: string) => {
@@ -245,9 +248,9 @@ describe('migration 020 on a populated database', () => {
     expect(Object.keys(before).length).toBeGreaterThan(30);
     expect(scalar(c, 'SELECT COUNT(*) FROM stock_movements')).toBeGreaterThan(3);
 
-    const out = migrate(c);
+    const out = migrate(c, mdir23);
     expect(out.applied).toContain('020_reversal_protection.sql');
-    expect(currentVersion(c)).toBe(latestVersion());
+    expect(currentVersion(c)).toBe(23);
 
     // every row of every table is identical (the only new column, stock_movements.reverses_movement_id, is NULL everywhere)
     const perTableAfter = snapT(c, before);
@@ -286,5 +289,16 @@ describe('migration 020 on a populated database', () => {
     c.prepare("UPDATE sales_returns SET status = 'void', voided_at = '2026-01-02T00:00:00.000Z', void_reason = 'x' WHERE id = ?").run(rVoid);
     expect(scalar(c, "SELECT COUNT(*) FROM sales_returns WHERE status = 'posted'")).toBe(0);
     expect(pool(c, p)).toEqual({ qty: 10, value: 10000 });
+
+    // stage 2: the Telecom segments (024-026) upgrade the same database: Shop rows keep every old column byte for byte
+    const before23 = snapT(c, Object.fromEntries(tables(c).map((t) => [t, cols(c, t)])));
+    const colsBefore23 = Object.fromEntries(tables(c).map((t) => [t, cols(c, t)]));
+    const out2 = migrate(c);
+    expect(out2.applied.map((n) => n.slice(0, 3))).toEqual(['024', '025', '026']);
+    expect(currentVersion(c)).toBe(latestVersion());
+    const after = snapT(c, colsBefore23);
+    for (const t of Object.keys(colsBefore23).filter((x) => x !== 'schema_migrations')) expect(after[t], `table ${t} changed by 024-026`).toBe(before23[t]);
+    expect(rows({ database: { conn: c } } as any, 'PRAGMA foreign_key_check')).toEqual([]);
+    expect(rows({ database: { conn: c } } as any, 'PRAGMA integrity_check').map((r) => Object.values(r)[0])).toEqual(['ok']);
   });
 });

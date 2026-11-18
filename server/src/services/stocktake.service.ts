@@ -32,6 +32,8 @@ import type {
 import { logAudit } from './audit.service.ts';
 import { gainValue, getPool, issueStock, receiveStock, reverseMovements } from './inventory.service.ts';
 import { assertDayOpen } from './day-closing.ts';
+import { SEGMENT_LABEL, isCardsSegment, mixedSegmentsError, resolveEntrySegment, segmentOfProduct } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated,
@@ -46,7 +48,7 @@ export interface StocktakeItem {
   gainUnitCostCents: number | null;
 }
 export interface Stocktake {
-  id: number; businessDate: string; postedAt: string; backdated: boolean; book: StocktakeBook;
+  id: number; businessDate: string; postedAt: string; backdated: boolean; book: StocktakeBook; segment: StoredSegment | null;
   status: StocktakeStatus; notes: string; completedAt: string | null; voidedAt: string | null;
   voidReason: string | null; clientRef: string; items: StocktakeItem[];
 }
@@ -74,7 +76,7 @@ function toStocktake(conn: DatabaseSync, h: StocktakeRow): Stocktake {
   });
   return {
     id: h.id, businessDate: h.businessDate, postedAt: h.postedAt, backdated: isBackdated(h.businessDate, h.postedAt),
-    book: h.book, status: h.status, notes: h.notes, completedAt: h.completedAt, voidedAt: h.voidedAt,
+    book: h.book, segment: h.segment, status: h.status, notes: h.notes, completedAt: h.completedAt, voidedAt: h.voidedAt,
     voidReason: h.voidReason, clientRef: h.clientRef, items,
   };
 }
@@ -94,7 +96,7 @@ export function getStocktake(ctx: AppContext, id: number): Stocktake {
 
 /** Lists stocktakes newest first. */
 export function listStocktakes(ctx: AppContext, q: {
-  from?: string; to?: string; book?: StocktakeBook; status?: StocktakeStatus; limit: number; offset: number;
+  from?: string; to?: string; book?: StocktakeBook; segment?: StoredSegment; status?: StocktakeStatus; limit: number; offset: number;
 }): { items: Stocktake[]; total: number } {
   const conn = ctx.database.conn;
   const { items, total } = listStocktakeRows(conn, q);
@@ -109,9 +111,10 @@ export function listStocktakes(ctx: AppContext, q: {
  *
  * @throws AppError 400 VALIDATION_ERROR (unknown/duplicate product) or PRODUCT_NOT_IN_BOOK.
  */
-function checkItems(conn: DatabaseSync, book: StocktakeBook, items: StocktakeItemInput[]): void {
+function checkItems(conn: DatabaseSync, book: StocktakeBook, segment: StoredSegment | null | undefined, items: StocktakeItemInput[]): void {
   const bad: Fields = {};
   const wrongBook: Fields = {};
+  const wrongSegment: Fields = {};
   const seen = new Set<number>();
   items.forEach((it, i) => {
     const key = `items.${i}.productId`;
@@ -122,12 +125,46 @@ function checkItems(conn: DatabaseSync, book: StocktakeBook, items: StocktakeIte
       seen.add(p.id);
       if (p.kind !== 'stock') wrongBook[key] = 'Only stock products can be counted.';
       else if (p.book !== book) wrongBook[key] = `This product belongs to the ${p.book} book, not ${book}.`;
+      else if (book === 'telecom' && segment !== undefined && segmentOfProduct(conn, p.id) !== segment) {
+        wrongSegment[key] = `${p.name} is not in ${segment ? SEGMENT_LABEL[segment] : 'this segment'}. A Telecom stocktake covers one provider's cards.`;
+      }
     }
   });
   assertNoFieldErrors(bad);
   if (Object.keys(wrongBook).length > 0) {
     throw new AppError(400, 'PRODUCT_NOT_IN_BOOK', 'Every counted product must be a stock product of the stocktake\'s book.', wrongBook);
   }
+  if (Object.keys(wrongSegment).length > 0) {
+    throw new AppError(400, 'SEGMENT_MISMATCH',
+      'Every counted product must belong to the segment of the stocktake: a Telecom stocktake covers the cards of ONE provider. Split the count by provider.', wrongSegment);
+  }
+}
+
+/**
+ * The segment of a new stocktake (13D): Shop none; Telecom ONE provider's Cards segment, named by the caller or, when the
+ * caller names none, inferred from the counted products (all of one provider).
+ * @throws AppError 400 SEGMENT_REQUIRED / MIXED_SEGMENTS / SEGMENT_MISMATCH (a Reloads segment), 409 SEGMENT_LEGACY_REFUSED.
+ */
+function resolveStocktakeSegment(
+  conn: DatabaseSync, book: StocktakeBook, supplied: string | undefined, items: StocktakeItemInput[],
+): StoredSegment | null {
+  if (book !== 'telecom') return resolveEntrySegment(book, supplied);
+  if (supplied === undefined) {
+    const found = new Set<StoredSegment | null>();
+    for (const it of items) {
+      const p = getProduct(conn, it.productId);
+      if (p && p.kind === 'stock' && p.book === 'telecom') found.add(segmentOfProduct(conn, p.id));
+    }
+    if (found.size > 1) throw mixedSegmentsError();
+    const only = [...found][0];
+    if (only && only !== 'legacy') return only;
+  }
+  const segment = resolveEntrySegment(book, supplied);
+  if (segment === null || !isCardsSegment(segment)) {
+    throw new AppError(400, 'SEGMENT_MISMATCH', 'A stock count belongs to the Cards segment of one provider (for example Dialog Cards).',
+      { segment: 'Choose a Cards segment.' });
+  }
+  return segment;
 }
 
 /** The business date / backdated pair that every audit entry of a financial record carries (section 12). */
@@ -138,7 +175,7 @@ function financialInfo(s: Stocktake): { businessDate: string; backdated: boolean
 // ---------- create / update ----------
 
 export interface StocktakeCreate {
-  businessDate: string; book: StocktakeBook; notes?: string; items?: StocktakeItemInput[]; clientRef: string;
+  businessDate: string; book: StocktakeBook; segment?: string; notes?: string; items?: StocktakeItemInput[]; clientRef: string;
 }
 
 /**
@@ -158,9 +195,11 @@ export function createStocktake(ctx: AppContext, body: StocktakeCreate): { item:
     if (existing) return { item: toStocktake(conn, existing), created: false };
 
     const items = body.items ?? [];
-    checkItems(conn, body.book, items);
+    checkItems(conn, body.book, undefined, items); // unknown / service / other-book products first
+    const segment = resolveStocktakeSegment(conn, body.book, body.segment, items);
+    checkItems(conn, body.book, segment, items);
     const id = insertStocktake(conn, {
-      businessDate: body.businessDate, book: body.book, notes, clientRef: body.clientRef,
+      businessDate: body.businessDate, book: body.book, segment, notes, clientRef: body.clientRef,
     });
     if (items.length > 0) replaceStocktakeItems(conn, id, items);
     const item = loadStocktake(conn, id);
@@ -190,7 +229,7 @@ export function updateStocktake(
     }
     const before = toStocktake(conn, header);
     if (body.items !== undefined) {
-      checkItems(conn, header.book, body.items);
+      checkItems(conn, header.book, header.segment, body.items);
       replaceStocktakeItems(conn, id, body.items);
     }
     if (notes !== undefined) updateStocktakeNotes(conn, id, notes);
@@ -263,7 +302,7 @@ export function completeStocktake(ctx: AppContext, id: number): Stocktake {
   return runWrite(ctx, (conn) => {
     const header = getStocktakeRow(conn, id);
     if (!header) throw notFound('Stocktake');
-    assertDayOpen(conn, [header.book], header.businessDate); // R9: completing is the moment stock is posted
+    assertDayOpen(conn, [{ book: header.book, segment: header.segment }], header.businessDate); // R9: completing is the moment stock is posted
     if (header.status !== 'draft') {
       throw new AppError(409, 'NOT_DRAFT', 'Only a draft stocktake can be completed.');
     }
@@ -300,7 +339,7 @@ export function voidStocktake(ctx: AppContext, id: number, body: { reason: strin
     const header = getStocktakeRow(conn, id);
     if (!header) throw notFound('Stocktake');
     // R9: a draft has posted nothing, so only a completed stocktake's void touches a (closed) day.
-    if (header.status === 'completed') assertDayOpen(conn, [header.book], header.businessDate);
+    if (header.status === 'completed') assertDayOpen(conn, [{ book: header.book, segment: header.segment }], header.businessDate);
     if (header.status === 'void') throw alreadyVoid('stocktake');
     const before = toStocktake(conn, header);
 

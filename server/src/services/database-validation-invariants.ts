@@ -49,7 +49,7 @@ export function checkStock(conn: DatabaseSync): ValidationFailure[] {
 export function checkCashLedger(conn: DatabaseSync): ValidationFailure[] {
   const bad: string[] = [];
   for (const r of all(conn, `SELECT c.id, c.amount_cents a, o.id oid, o.amount_cents oa, c.business_date d, o.business_date od, c.book, o.book ob,
-      c.fund, o.fund ofund, c.ref_table rt, o.ref_table ort, c.ref_id ri, o.ref_id ori, c.type, o.type otype, o.reverses_entry_id oreverses
+      c.fund, o.fund ofund, c.segment seg, o.segment oseg, c.ref_table rt, o.ref_table ort, c.ref_id ri, o.ref_id ori, c.type, o.type otype, o.reverses_entry_id oreverses
       FROM cash_entries c LEFT JOIN cash_entries o ON o.id = c.reverses_entry_id WHERE c.reverses_entry_id IS NOT NULL`)) {
     const id = `cash entry ${r.id}`;
     if (r.oid === null) { bad.push(`${id} reverses an entry that does not exist`); continue; }
@@ -57,6 +57,7 @@ export function checkCashLedger(conn: DatabaseSync): ValidationFailure[] {
     if (r.d !== r.od) bad.push(`${id} is dated ${r.d} but its original is dated ${r.od}`);
     if (r.book !== r.ob) bad.push(`${id} is in another cash book than its original`);
     if ((r.fund ?? null) !== (r.ofund ?? null)) bad.push(`${id} is in another fund than its original`);
+    if ((r.seg ?? null) !== (r.oseg ?? null)) bad.push(`${id} is in another Telecom segment than its original`);
     if (r.rt !== r.ort || num(r.ri) !== num(r.ori)) bad.push(`${id} belongs to another record than its original`);
     if (r.type !== r.otype) bad.push(`${id} is of another type than its original`);
     if (r.oreverses !== null) bad.push(`${id} reverses another reversal`);
@@ -150,6 +151,143 @@ export function checkFutureDates(conn: DatabaseSync, now: Date = new Date()): Va
   return [{ code: 'future_dates', message: 'The file contains records dated in the future.', detail: sample(bad) }];
 }
 
+const ALL_SEGMENTS = ['dialog_cards', 'dialog_reloads', 'mobitel_cards', 'mobitel_reloads', 'airtel_cards', 'airtel_reloads', 'hutch_cards', 'hutch_reloads', 'legacy'];
+const CARD_SEGMENTS = ['dialog_cards', 'mobitel_cards', 'airtel_cards', 'hutch_cards', 'legacy'];
+const RELOAD_SEGMENTS = ['dialog_reloads', 'mobitel_reloads', 'airtel_reloads', 'hutch_reloads', 'legacy'];
+const quoted = (xs: string[]): string => xs.map((x) => `'${x}'`).join(', ');
+
+/**
+ * Telecom segments (BUSINESS_RULES 13D). Written directly against the tables, independent of the services and of the triggers
+ * (a corrupted file may have had its triggers lifted). Rules: a Telecom row has a segment and a Shop / Ice Cream row has none; every
+ * segment is of the kind its table allows; a reversal keeps the segment of its original (in `checkCashLedger`); a cash entry carries the
+ * segment of the record that owns it (transfer legs: of their side of the transfer); sales, purchases, stocktakes, stock losses and
+ * goods drawings carry the segment of every product on them; reload / EZCash / top-up rows carry the segment of their provider; one
+ * opening balance per scope; the reload and EZCash collections of a segment equal its reload / EZCash records; a product never changed
+ * segment after it had stock history; the Telecom total is the sum of its segments. `legacy` (rows from before segments existed) cannot
+ * be told from a wrong value by its date, so only its structural rules are checked: it can only appear where its owner, original or
+ * product is legacy too.
+ */
+export function checkSegments(conn: DatabaseSync): ValidationFailure[] {
+  const out: ValidationFailure[] = [];
+  const fail = (what: string, bad: string[]): void => {
+    if (bad.length) out.push({ code: 'segments', message: `The Telecom segments in the file are inconsistent: ${what} (${plural(bad.length, 'record', 'records')}).`, detail: sample(bad) });
+  };
+  /** Rows of a query that selects `id` and optionally `info`, as "label id (info)". */
+  const idsOf = (label: string, sql: string): string[] => all(conn, sql).map((r) => `${label} ${r.id}${r.info ? ` (${r.info})` : ''}`);
+
+  // 1. a Telecom row has a segment, a Shop / Ice Cream row has none; the segment is of the kind the table allows
+  const withBook: [string, string, string[]][] = [
+    ['cash_entries', 'cash entry', ALL_SEGMENTS], ['cash_counts', 'cash count', ALL_SEGMENTS], ['capital_entries', 'capital entry', ALL_SEGMENTS],
+    ['owner_drawings', 'drawing', ALL_SEGMENTS], ['expenses', 'expense', ALL_SEGMENTS], ['daily_closings', 'day closing', ALL_SEGMENTS],
+    ['purchases', 'purchase', CARD_SEGMENTS], ['stock_losses', 'stock loss', CARD_SEGMENTS], ['stocktakes', 'stocktake', CARD_SEGMENTS],
+    ['sales', 'sale', CARD_SEGMENTS],
+  ];
+  const noSeg: string[] = [];
+  const extraSeg: string[] = [];
+  const wrongKind: string[] = [];
+  for (const [t, label, allowed] of withBook) {
+    noSeg.push(...idsOf(label, `SELECT id FROM ${t} WHERE book = 'telecom' AND segment IS NULL ORDER BY id`));
+    extraSeg.push(...idsOf(label, `SELECT id, book info FROM ${t} WHERE book <> 'telecom' AND segment IS NOT NULL ORDER BY id`));
+    wrongKind.push(...idsOf(label, `SELECT id, segment info FROM ${t} WHERE segment IS NOT NULL AND segment NOT IN (${quoted(allowed)}) ORDER BY id`));
+  }
+  for (const [t, label] of [['reload_sales', 'reload sale'], ['ezcash_sales', 'EZCash sale'], ['telecom_topups', 'top-up']] as const) {
+    noSeg.push(...idsOf(label, `SELECT id FROM ${t} WHERE segment IS NULL ORDER BY id`));
+    wrongKind.push(...idsOf(label, `SELECT id, segment info FROM ${t} WHERE segment IS NOT NULL AND segment NOT IN (${quoted(RELOAD_SEGMENTS)}) ORDER BY id`));
+  }
+  for (const side of ['from', 'to']) {
+    noSeg.push(...idsOf(`transfer (${side} side)`, `SELECT id FROM cash_transfers WHERE ${side}_book = 'telecom' AND ${side}_segment IS NULL ORDER BY id`));
+    extraSeg.push(...idsOf(`transfer (${side} side)`, `SELECT id, ${side}_book info FROM cash_transfers WHERE ${side}_book <> 'telecom' AND ${side}_segment IS NOT NULL ORDER BY id`));
+    wrongKind.push(...idsOf(`transfer (${side} side)`, `SELECT id, ${side}_segment info FROM cash_transfers WHERE ${side}_segment IS NOT NULL AND ${side}_segment NOT IN (${quoted(ALL_SEGMENTS)}) ORDER BY id`));
+  }
+  fail('Telecom records that name no segment', noSeg);
+  fail('Shop or Ice Cream records that carry a Telecom segment', extraSeg);
+  fail('records with a segment that does not belong to that kind of record', wrongKind);
+  fail('transfers whose two sides are the same cash book and segment', idsOf('transfer', 'SELECT id FROM cash_transfers WHERE from_book = to_book AND from_segment IS to_segment ORDER BY id'));
+
+  // 2. a cash entry carries the segment of the record that owns it (a reversal is also compared with its original by checkCashLedger)
+  const owners: [string, string, string][] = [
+    ['sales', 'sale', 'SELECT o.segment FROM sales o WHERE o.id = c.ref_id'],
+    ['sales_returns', 'sales return', 'SELECT s.segment FROM sales_returns r JOIN sales s ON s.id = r.sale_id WHERE r.id = c.ref_id'],
+    ['purchases', 'purchase', 'SELECT o.segment FROM purchases o WHERE o.id = c.ref_id'],
+    ['purchase_returns', 'purchase return', 'SELECT p.segment FROM purchase_returns r JOIN purchases p ON p.id = r.purchase_id WHERE r.id = c.ref_id'],
+    ['expenses', 'expense', 'SELECT o.segment FROM expenses o WHERE o.id = c.ref_id'],
+    ['capital_entries', 'capital entry', 'SELECT o.segment FROM capital_entries o WHERE o.id = c.ref_id'],
+    ['owner_drawings', 'drawing', 'SELECT o.segment FROM owner_drawings o WHERE o.id = c.ref_id'],
+    ['cash_counts', 'cash count', 'SELECT o.segment FROM cash_counts o WHERE o.id = c.ref_id'],
+    ['reload_sales', 'reload sale', 'SELECT o.segment FROM reload_sales o WHERE o.id = c.ref_id'],
+    ['ezcash_sales', 'EZCash sale', 'SELECT o.segment FROM ezcash_sales o WHERE o.id = c.ref_id'],
+    ['telecom_topups', 'top-up', 'SELECT o.segment FROM telecom_topups o WHERE o.id = c.ref_id'],
+  ];
+  const ownerBad: string[] = [];
+  for (const [table, label, probe] of owners) {
+    // the owner exists (a missing owner is not this check's business) and its segment differs
+    ownerBad.push(...idsOf('cash entry', `SELECT c.id, '${label} ' || c.ref_id info FROM cash_entries c
+      WHERE c.ref_table = '${table}' AND EXISTS (${probe}) AND c.segment IS NOT (${probe}) ORDER BY c.id`));
+  }
+  ownerBad.push(...idsOf('cash entry', `SELECT c.id, 'transfer ' || c.ref_id info FROM cash_entries c JOIN cash_transfers t ON t.id = c.ref_id
+    WHERE c.ref_table = 'cash_transfers' AND ((c.type = 'transfer_out' AND c.segment IS NOT t.from_segment) OR (c.type = 'transfer_in' AND c.segment IS NOT t.to_segment)) ORDER BY c.id`));
+  fail('cash entries whose segment differs from the record they belong to', ownerBad);
+
+  // 3. sales, purchases, stocktakes, stock losses and goods drawings carry the segment of their products
+  const lineBad: string[] = [];
+  for (const [head, items, fk, label] of [['sales', 'sale_items', 'sale_id', 'sale'], ['purchases', 'purchase_items', 'purchase_id', 'purchase'], ['stocktakes', 'stocktake_items', 'stocktake_id', 'stocktake']] as const) {
+    lineBad.push(...idsOf(label, `SELECT DISTINCT h.id, 'product ' || i.product_id info FROM ${head} h JOIN ${items} i ON i.${fk} = h.id JOIN v_product_segment v ON v.product_id = i.product_id
+      WHERE v.book IS NOT h.book OR v.segment IS NOT h.segment ORDER BY h.id`));
+  }
+  lineBad.push(...idsOf('stock loss', `SELECT l.id, 'product ' || l.product_id info FROM stock_losses l JOIN v_product_segment v ON v.product_id = l.product_id
+    WHERE v.book IS NOT l.book OR v.segment IS NOT l.segment ORDER BY l.id`));
+  lineBad.push(...idsOf('drawing', `SELECT d.id, 'product ' || d.product_id info FROM owner_drawings d JOIN v_product_segment v ON v.product_id = d.product_id
+    WHERE d.kind = 'goods' AND v.segment IS NOT d.segment ORDER BY d.id`));
+  fail('records whose segment differs from the segment of the products on them', lineBad);
+
+  // 4. reload / EZCash / top-up rows carry the segment of their provider (EZCash and wallet top-ups: Dialog Reloads); legacy rows are not judged
+  const provBad: string[] = [];
+  provBad.push(...idsOf('reload sale', `SELECT r.id, r.segment info FROM reload_sales r JOIN reload_providers p ON p.id = r.provider_id
+    WHERE r.segment <> 'legacy' AND r.segment IS NOT lower(p.name) || '_reloads' ORDER BY r.id`));
+  provBad.push(...idsOf('EZCash sale', "SELECT id, segment info FROM ezcash_sales WHERE segment <> 'legacy' AND segment IS NOT 'dialog_reloads' ORDER BY id"));
+  provBad.push(...idsOf('top-up', `SELECT t.id, t.segment info FROM telecom_topups t LEFT JOIN reload_providers p ON p.id = t.provider_id
+    WHERE t.segment <> 'legacy' AND t.segment IS NOT CASE WHEN t.provider_id IS NULL THEN 'dialog_reloads' ELSE lower(p.name) || '_reloads' END ORDER BY t.id`));
+  fail('reload, EZCash or top-up records whose segment is not their provider\'s', provBad);
+
+  // 5. one posted opening balance per scope
+  fail('more than one opening balance for the same cash book and segment', all(conn, `SELECT book, segment, fund, COUNT(*) n FROM capital_entries
+      WHERE kind = 'opening_balance' AND status = 'posted' GROUP BY book, COALESCE(segment, ''), COALESCE(fund, '') HAVING COUNT(*) > 1`)
+    .map((r) => `${r.book}${r.segment ? ' / ' + r.segment : ''}${r.fund ? ' / ' + r.fund : ''}: ${r.n} opening balances`));
+
+  // 6. the reload and EZCash collections of a segment equal its (not cancelled) reload / EZCash records
+  const collBad: string[] = [];
+  for (const [type, table, col] of [['reload_collection', 'reload_sales', 'sales_cents'], ['ezcash_collection', 'ezcash_sales', 'bill_total_cents']] as const) {
+    for (const r of all(conn, `SELECT s.segment seg, COALESCE((SELECT SUM(amount_cents) FROM cash_entries c WHERE c.type = '${type}' AND c.segment IS s.segment), 0) cash,
+        COALESCE((SELECT SUM(${col}) FROM ${table} x WHERE x.status = 'posted' AND x.segment IS s.segment), 0) rec
+        FROM (SELECT segment FROM cash_entries WHERE type = '${type}' UNION SELECT segment FROM ${table}) s`)) {
+      if (num(r.cash) !== num(r.rec)) collBad.push(`${r.seg ?? 'no segment'}: cash ${num(r.cash)} but ${table.replace('_', ' ')} total ${num(r.rec)}`);
+    }
+  }
+  fail('the collections in a Telecom segment differ from its reload / EZCash records', collBad);
+
+  // 7. a product has the same segment as all its stock history (its category's provider did not change afterwards)
+  const histBad: string[] = [];
+  for (const [table, probe] of [
+    ['sales', 'SELECT o.segment FROM sales o WHERE o.id = m.ref_id'], ['purchases', 'SELECT o.segment FROM purchases o WHERE o.id = m.ref_id'],
+    ['stocktakes', 'SELECT o.segment FROM stocktakes o WHERE o.id = m.ref_id'], ['stock_losses', 'SELECT o.segment FROM stock_losses o WHERE o.id = m.ref_id'],
+    ['owner_drawings', 'SELECT o.segment FROM owner_drawings o WHERE o.id = m.ref_id'],
+    ['sales_returns', 'SELECT s.segment FROM sales_returns r JOIN sales s ON s.id = r.sale_id WHERE r.id = m.ref_id'],
+    ['purchase_returns', 'SELECT p.segment FROM purchase_returns r JOIN purchases p ON p.id = r.purchase_id WHERE r.id = m.ref_id'],
+  ]) {
+    histBad.push(...idsOf('product', `SELECT DISTINCT m.product_id id, '${table} ' || m.ref_id info FROM stock_movements m JOIN v_product_segment v ON v.product_id = m.product_id
+      WHERE m.ref_table = '${table}' AND EXISTS (${probe}) AND v.segment IS NOT (${probe}) ORDER BY m.product_id`));
+  }
+  fail('products whose segment (their category\'s provider) differs from their stock history', histBad);
+
+  // 8. the Telecom total is the sum of its segments
+  const total = one(conn, "SELECT COALESCE(SUM(amount_cents), 0) FROM cash_entries WHERE book = 'telecom'");
+  const parts = one(conn, "SELECT COALESCE(SUM(amount_cents), 0) FROM cash_entries WHERE book = 'telecom' AND segment IS NOT NULL");
+  if (total !== parts) {
+    out.push({ code: 'segments', message: 'The Telecom cash book in the file does not equal the sum of its segments.', detail: `Telecom ${total}; segments add up to ${parts} (cents)` });
+  }
+  return out;
+}
+
 /** The data checks in the order they run (each is independent; a throw is reported by the runner). */
 export const INVARIANT_CHECKS: { code: string; run: (conn: DatabaseSync, now: Date) => ValidationFailure[] }[] = [
   { code: 'stock_reconciliation', run: (c) => checkStock(c) },
@@ -157,5 +295,6 @@ export const INVARIANT_CHECKS: { code: string; run: (conn: DatabaseSync, now: Da
   { code: 'icecream_funds', run: (c) => checkIceCreamFunds(c) },
   { code: 'returned_qty', run: (c) => checkReturnedQuantities(c) },
   { code: 'void_reversals', run: (c) => checkVoidReversals(c) },
+  { code: 'segments', run: (c) => checkSegments(c) },
   { code: 'future_dates', run: (c, now) => checkFutureDates(c, now) },
 ];

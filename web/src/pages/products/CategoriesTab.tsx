@@ -1,6 +1,6 @@
 /**
  * Products > Categories tab (route "/products/categories"): the owner's category management screen.
- * Table of categories with book, product count, status and created date; filters by book and "show inactive";
+ * Table of categories with book, provider (Telecom, 13D), product count, status and created date; filters by book and "show inactive";
  * New category / Rename / Activate / Deactivate. There is deliberately NO delete: a category is retired by
  * deactivating it, so old products and history keep their category.
  * API: GET /categories, POST /categories, PUT /categories/:id (api/catalog.ts). Dialogs: CategoryDialog.tsx.
@@ -66,6 +66,11 @@ export function CategoriesTab() {
       ),
     },
     { key: 'book', header: 'Business book', render: (c) => <BookBadge book={c.book} /> },
+    {
+      key: 'provider',
+      header: 'Provider',
+      render: (c) => (c.book !== 'telecom' ? '—' : c.providerName ?? <span className="text-amber-700" title="Card products need a provider">Not set</span>),
+    },
     { key: 'count', header: 'Number of products', align: 'right', render: (c) => c.productCount },
     { key: 'status', header: 'Status', render: (c) => <ActiveBadge active={c.active} /> },
     // Date only: the server timestamp's time part is noise for the owner here.
@@ -75,8 +80,8 @@ export function CategoriesTab() {
       header: 'Actions',
       render: (c) => (
         <div className="flex flex-wrap gap-1">
-          <Button variant="ghost" className="!min-h-8 !px-2" aria-label={`Edit name of ${c.name}`} onClick={() => setDialog({ category: c })}>
-            <Pencil size={16} aria-hidden="true" /> Edit name
+          <Button variant="ghost" className="!min-h-8 !px-2" aria-label={`Edit ${c.name}`} onClick={() => setDialog({ category: c })}>
+            <Pencil size={16} aria-hidden="true" /> Edit
           </Button>
           {c.active ? (
             <Button variant="ghost" className="!min-h-8 !px-2" aria-label={`Deactivate ${c.name}`} onClick={() => { setDeactivateError(null); setDeactivating(c); }}>

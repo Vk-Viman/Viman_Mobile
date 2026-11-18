@@ -27,6 +27,7 @@ import { useInventoryReconciliation } from '../../api/purchases';
 import { useValuation } from '../../api/stock';
 import { CHECKBOX_CLASS } from '../../lib/constants';
 import { formatLKR } from '../../lib/format';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import type { Book, ValuationItem } from '../../types/api';
 
 /**
@@ -95,6 +96,7 @@ export function ValuationTab() {
     { key: 'name', header: 'Name', render: (i) => <span className="font-medium text-slate-900">{i.name}</span> },
     { key: 'cat', header: 'Category', render: (i) => i.categoryName },
     { key: 'book', header: 'Book', render: (i) => <BookBadge book={i.book} /> },
+    { key: 'seg', header: 'Segment', render: (i) => (i.segment ? SEGMENT_LABEL[i.segment] : '—') },
     { key: 'qty', header: 'Qty', align: 'right', render: (i) => i.qty },
     { key: 'val', header: 'Value (Rs.)', align: 'right', render: (i) => <Money cents={i.valueCents} /> },
     { key: 'avg', header: 'Avg cost', align: 'right', render: (i) => (i.avgUnitCostCents === null ? 'â€”' : <Money cents={i.avgUnitCostCents} />) },
@@ -148,6 +150,18 @@ export function ValuationTab() {
               <p className="num text-sm text-slate-600">{formatLKR(val.data.totals.valueCents)}</p>
             </Card>
           </div>
+          {/* Telecom stock by provider (Cards segments); the rows add up to the Telecom total above. */}
+          <Card title="Telecom stock by segment">
+            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Telecom stock by segment">
+              {val.data.totals.byTelecomSegment.map((g) => (
+                <li key={g.segment} className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-sm font-medium text-slate-700">{g.label}</p>
+                  <p className="num text-lg font-semibold text-slate-900">{g.qty} units</p>
+                  <p className="num text-sm text-slate-600">{formatLKR(g.valueCents)}</p>
+                </li>
+              ))}
+            </ul>
+          </Card>
           <p className="text-sm text-slate-500">
             Shop and Telecom stock are kept separate.
             {val.data.asOf ? ` Showing stock as of ${val.data.asOf}.` : ''}

@@ -22,9 +22,15 @@ import { BookBadge, PostedStatusBadge } from '../../components/StatusBadges';
 import { useSales } from '../../api/sales';
 import { PAGE_SIZE } from '../../lib/constants';
 import type { Book, PostedStatus, Sale, SaleQuery } from '../../types/api';
+import type { StoredSegment } from '../../types/segments';
+import { SelectField } from '../../components/SelectField';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS } from '../../lib/segments';
 import { useCorrectionBadges } from '../../components/CorrectionBadges';
 import { ProductFilter } from './ProductFilter';
 import { SaleDetailDialog } from './SaleDetailDialog';
+
+/** The four Cards segments (a sale only ever has a Cards segment; `legacy` is added separately). */
+const CARD_SEGMENTS = TELECOM_SEGMENTS.filter((c) => c.endsWith('_cards'));
 
 /** The History screen: filter bar, totals line, sales table, pager and the details dialog. */
 export function HistoryTab() {
@@ -32,25 +38,27 @@ export function HistoryTab() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [book, setBook] = useState<'' | Book>('');
+  const [segment, setSegment] = useState<'' | StoredSegment>('');
   const [status, setStatus] = useState<'' | PostedStatus>('');
   const [productId, setProductId] = useState('');
   const [page, setPage] = useState(0);
   const [openId, setOpenId] = useState<number | null>(null);
 
   // Back to the first page whenever a filter changes.
-  useEffect(() => { setPage(0); }, [from, to, book, status, productId]);
+  useEffect(() => { setPage(0); }, [from, to, book, segment, status, productId]);
 
   const query: SaleQuery = {
     from: from || undefined,
     to: to || undefined,
     book: book || undefined,
+    segment: segment || undefined,
     status: status || undefined,
     productId: productId ? Number(productId) : undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   };
   const list = useSales(query);
-  const filtered = Boolean(from || to || book || status || productId);
+  const filtered = Boolean(from || to || book || segment || status || productId);
   const badgesFor = useCorrectionBadges('sales', (list.data?.items ?? []).map((s) => s.id));
 
   const columns: Column<Sale>[] = [
@@ -69,6 +77,7 @@ export function HistoryTab() {
     },
     { key: 'no', header: 'Sale #', render: (s) => `#${s.id}` },
     { key: 'book', header: 'Book', render: (s) => <BookBadge book={s.book} /> },
+    { key: 'segment', header: 'Segment', render: (s) => (s.segment ? SEGMENT_LABEL[s.segment] : '—') },
     { key: 'items', header: 'Items', align: 'right', render: (s) => s.items.length },
     { key: 'total', header: 'Total (Rs.)', align: 'right', render: (s) => <Money cents={s.totalCents} /> },
     { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (s) => <Money cents={s.chargedCostCents} /> },
@@ -88,9 +97,14 @@ export function HistoryTab() {
   return (
     <>
       <Card>
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <DateRangeFields from={from} to={to} onFrom={setFrom} onTo={setTo} />
           <BookFilterSelect value={book} onChange={setBook} />
+          <SelectField label="Segment" value={segment} onChange={(e) => setSegment(e.target.value as '' | StoredSegment)}>
+            <option value="">All</option>
+            {CARD_SEGMENTS.map((c) => <option key={c} value={c}>{SEGMENT_LABEL[c]}</option>)}
+            <option value="legacy">{SEGMENT_LABEL.legacy}</option>
+          </SelectField>
           <PostedStatusFilterSelect value={status} onChange={setStatus} />
           <ProductFilter value={productId} onChange={setProductId} />
         </div>

@@ -14,6 +14,7 @@ import { DataTable } from '../../components/DataTable';
 import type { Column } from '../../components/DataTable';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { BookFilterSelect, DateRangeFields, PostedStatusFilterSelect } from '../../components/FilterFields';
 import { Money } from '../../components/Money';
 import { Pager } from '../../components/Pager';
@@ -83,6 +84,7 @@ export function StockLossesTab() {
     },
     { key: 'prod', header: 'Product', render: (l) => <span className="font-medium text-slate-900">{l.productName}</span> },
     { key: 'book', header: 'Book', render: (l) => <BookBadge book={l.book} /> },
+    { key: 'segment', header: 'Segment', render: (l) => (l.segment ? SEGMENT_LABEL[l.segment] : '—') },
     { key: 'qty', header: 'Qty', align: 'right', render: (l) => l.qty },
     { key: 'cost', header: 'Cost (Rs.)', align: 'right', render: (l) => <Money cents={l.costCents} /> },
     { key: 'reason', header: 'Reason', render: (l) => <Badge tone={l.reason === 'other' ? 'neutral' : 'amber'}>{REASON_LABEL[l.reason]}</Badge> },

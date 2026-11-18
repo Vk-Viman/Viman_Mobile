@@ -12,6 +12,8 @@
  *   GET /reports/printing-variance?from&to&granularity&format=
  *   GET /reports/backdated?from&to&book=&limit=&offset=&format=
  *
+ * `segment=` (a Telecom segment code, 13D) is accepted by stock-movements, product-profitability, purchases, sales, drawings and backdated.
+ *
  * Layer: route (thin): JSON-schema validation -> report service -> JSON body (with `table` and `warnings`) or an .xlsx workbook.
  * Every endpoint is READ-ONLY (no writes, no audit rows). Dates are business dates and are never rejected for being in the
  * future (R-FD applies to transactions only); the shared `parseReportQuery` answers 400 for impossible dates, `from > to` or
@@ -35,7 +37,7 @@ import { MOVEMENT_REPORT_TYPES, MOVEMENTS_EXPORT_LIMIT, stockMovementsReport } f
 import type { MovementReportType } from '../services/reports/stock-movements-report.ts';
 import type { Book, StockBook } from '../services/reports/ops-common.ts';
 import { boolQuery, bookQuery, dateQuery, fail, intQuery, parseBool, parsePaging } from './catalog-query.ts';
-import { parseReportQuery, reportQueryProps, sendReport } from './report-common.ts';
+import { parseReportQuery, reportQueryProps, segmentArg, segmentQuery, sendReport } from './report-common.ts';
 import type { ReportQuery } from './report-common.ts';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -78,9 +80,9 @@ export function registerOperationalReportRoutes(app: FastifyInstance, ctx: AppCo
   });
 
   app.get('/reports/stock-movements', {
-    schema: { querystring: schema({ from: dateQuery, to: dateQuery, productId: intQuery, type: { type: 'string', enum: [...MOVEMENT_REPORT_TYPES] }, book: bookQuery, limit: intQuery, offset: intQuery, format: formatQuery }) },
+    schema: { querystring: schema({ from: dateQuery, to: dateQuery, productId: intQuery, type: { type: 'string', enum: [...MOVEMENT_REPORT_TYPES] }, book: bookQuery, segment: segmentQuery, limit: intQuery, offset: intQuery, format: formatQuery }) },
   }, async (request, reply) => {
-    const raw = request.query as { from?: string; to?: string; productId?: string; type?: MovementReportType; book?: StockBook; limit?: string; offset?: string; format?: string };
+    const raw = request.query as { from?: string; to?: string; productId?: string; type?: MovementReportType; book?: StockBook; segment?: string; limit?: string; offset?: string; format?: string };
     checkDate('from', raw.from); checkDate('to', raw.to);
     if (raw.from !== undefined && raw.to !== undefined && raw.from > raw.to) fail({ from: 'The start date cannot be after the end date.' });
     const xlsx = raw.format === 'xlsx';
@@ -88,7 +90,7 @@ export function registerOperationalReportRoutes(app: FastifyInstance, ctx: AppCo
     const out = stockMovementsReport(conn(), {
       ...(raw.from !== undefined ? { from: raw.from } : {}), ...(raw.to !== undefined ? { to: raw.to } : {}),
       ...(raw.productId !== undefined ? { productId: Number(raw.productId) } : {}), ...(raw.type !== undefined ? { type: raw.type } : {}),
-      ...(raw.book !== undefined ? { book: raw.book } : {}), limit, offset,
+      ...(raw.book !== undefined ? { book: raw.book } : {}), ...segmentArg(raw), limit, offset,
     });
     return sendReport(reply, singleDate(raw.to ?? todayBusinessDate(), raw.format), out, tablesOf(out), 'stock-movements');
   });
@@ -100,11 +102,11 @@ export function registerOperationalReportRoutes(app: FastifyInstance, ctx: AppCo
     return sendReport(reply, q, out, tablesOf(out), 'stock-losses');
   });
 
-  app.get('/reports/product-profitability', { schema: { querystring: periodSchema({ book: bookQuery, categoryId: intQuery }) } }, async (request, reply) => {
-    const raw = request.query as { book?: StockBook; categoryId?: string };
+  app.get('/reports/product-profitability', { schema: { querystring: periodSchema({ book: bookQuery, categoryId: intQuery, segment: segmentQuery }) } }, async (request, reply) => {
+    const raw = request.query as { book?: StockBook; categoryId?: string; segment?: string };
     const q = parseReportQuery(request.query as Record<string, string>);
     const out = productProfitability(conn(), {
-      from: q.from, to: q.to, ...(raw.book !== undefined ? { book: raw.book } : {}), ...(raw.categoryId !== undefined ? { categoryId: Number(raw.categoryId) } : {}),
+      from: q.from, to: q.to, ...(raw.book !== undefined ? { book: raw.book } : {}), ...(raw.categoryId !== undefined ? { categoryId: Number(raw.categoryId) } : {}), ...segmentArg(raw),
     });
     return sendReport(reply, q, out, [out.table], 'product-profitability');
   });
@@ -118,29 +120,29 @@ export function registerOperationalReportRoutes(app: FastifyInstance, ctx: AppCo
     return sendReport(reply, singleDate(todayBusinessDate(), raw.format), out, [out.table], 'low-stock');
   });
 
-  app.get('/reports/purchases', { schema: { querystring: periodSchema({ book: bookQuery, supplierId: intQuery }) } }, async (request, reply) => {
-    const raw = request.query as { book?: StockBook; supplierId?: string };
+  app.get('/reports/purchases', { schema: { querystring: periodSchema({ book: bookQuery, supplierId: intQuery, segment: segmentQuery }) } }, async (request, reply) => {
+    const raw = request.query as { book?: StockBook; supplierId?: string; segment?: string };
     const q = parseReportQuery(request.query as Record<string, string>);
     const out = purchasesReport(conn(), {
       from: q.from, to: q.to, granularity: q.granularity, ...(raw.book !== undefined ? { book: raw.book } : {}),
-      ...(raw.supplierId !== undefined ? { supplierId: Number(raw.supplierId) } : {}),
+      ...(raw.supplierId !== undefined ? { supplierId: Number(raw.supplierId) } : {}), ...segmentArg(raw),
     });
     return sendReport(reply, q, out, tablesOf(out), 'purchases');
   });
 
-  app.get('/reports/sales', { schema: { querystring: periodSchema({ book: bookQuery, topN: intQuery }) } }, async (request, reply) => {
-    const raw = request.query as { book?: StockBook; topN?: string };
+  app.get('/reports/sales', { schema: { querystring: periodSchema({ book: bookQuery, topN: intQuery, segment: segmentQuery }) } }, async (request, reply) => {
+    const raw = request.query as { book?: StockBook; topN?: string; segment?: string };
     const q = parseReportQuery(request.query as Record<string, string>);
     const topN = raw.topN !== undefined ? Number(raw.topN) : 10;
     if (topN < 1 || topN > 100) fail({ topN: 'must be between 1 and 100' });
-    const out = salesReport(conn(), { from: q.from, to: q.to, granularity: q.granularity, topN, ...(raw.book !== undefined ? { book: raw.book } : {}) });
+    const out = salesReport(conn(), { from: q.from, to: q.to, granularity: q.granularity, topN, ...(raw.book !== undefined ? { book: raw.book } : {}), ...segmentArg(raw) });
     return sendReport(reply, q, out, tablesOf(out), 'sales');
   });
 
-  app.get('/reports/drawings', { schema: { querystring: periodSchema({ book: allBooksQuery }) } }, async (request, reply) => {
-    const raw = request.query as { book?: Book };
+  app.get('/reports/drawings', { schema: { querystring: periodSchema({ book: allBooksQuery, segment: segmentQuery }) } }, async (request, reply) => {
+    const raw = request.query as { book?: Book; segment?: string };
     const q = parseReportQuery(request.query as Record<string, string>);
-    const out = drawingsReport(conn(), { from: q.from, to: q.to, granularity: q.granularity, ...(raw.book !== undefined ? { book: raw.book } : {}) });
+    const out = drawingsReport(conn(), { from: q.from, to: q.to, granularity: q.granularity, ...(raw.book !== undefined ? { book: raw.book } : {}), ...segmentArg(raw) });
     return sendReport(reply, q, out, tablesOf(out), 'drawings');
   });
 
@@ -150,11 +152,11 @@ export function registerOperationalReportRoutes(app: FastifyInstance, ctx: AppCo
     return sendReport(reply, q, out, tablesOf(out), 'printing-variance');
   });
 
-  app.get('/reports/backdated', { schema: { querystring: periodSchema({ book: allBooksQuery, limit: intQuery, offset: intQuery }) } }, async (request, reply) => {
-    const raw = request.query as { book?: Book; limit?: string; offset?: string };
+  app.get('/reports/backdated', { schema: { querystring: periodSchema({ book: allBooksQuery, segment: segmentQuery, limit: intQuery, offset: intQuery }) } }, async (request, reply) => {
+    const raw = request.query as { book?: Book; segment?: string; limit?: string; offset?: string };
     const q = parseReportQuery(request.query as Record<string, string>);
     const { limit, offset } = q.format === 'xlsx' ? { limit: MOVEMENTS_EXPORT_LIMIT, offset: 0 } : parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
-    const out = backdatedReport(conn(), { from: q.from, to: q.to, limit, offset, ...(raw.book !== undefined ? { book: raw.book } : {}) });
+    const out = backdatedReport(conn(), { from: q.from, to: q.to, limit, offset, ...(raw.book !== undefined ? { book: raw.book } : {}), ...segmentArg(raw) });
     return sendReport(reply, q, out, [out.table], 'backdated-entries');
   });
 }

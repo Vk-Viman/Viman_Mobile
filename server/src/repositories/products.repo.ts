@@ -8,6 +8,7 @@
  * duplicate names, category book) live in `catalog.service.ts`; migration 003 triggers are the backstop.
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../services/segments.ts';
 import { SQL_NOW_UTC, escapeLike } from './sql-helpers.ts';
 
 export type Book = 'shop' | 'telecom';
@@ -19,11 +20,17 @@ export interface ProductRow {
   categoryId: number; categoryName: string; kind: Kind; book: Book;
   sellPriceCents: number; minPriceCents: number; reorderLevel: number; active: boolean;
   qtyOnHand: number; stockValueCents: number; createdAt: string; updatedAt: string;
+  /** 13D: the Cards segment from `v_product_segment` (null for Shop products, `legacy` for a provider-less Telecom category). */
+  segment: StoredSegment | null;
+  /** The provider linked to the product's category (Telecom only), else null. */
+  providerId: number | null; providerName: string | null;
 }
 
 /** Filters and paging for `listProducts`. `q` searches name and code. */
 export interface ProductQuery {
   q?: string; book?: Book; categoryId?: number; kind?: Kind; lowStock?: boolean; active?: boolean;
+  /** 13D: Cards segment (or `legacy`) and the category's provider. */
+  segment?: StoredSegment; providerId?: number;
   limit: number; offset: number;
 }
 
@@ -33,12 +40,19 @@ interface Raw {
   sell_price_cents: number | bigint; min_price_cents: number | bigint; reorder_level: number | bigint;
   active: number | bigint; qty_on_hand: number | bigint; stock_value_cents: number | bigint;
   created_at: string; updated_at: string;
+  segment: StoredSegment | null; provider_id: number | bigint | null; provider_name: string | null;
 }
 
 const SELECT = `SELECT p.id, p.code, p.name, p.description, p.category_id, c.name AS category_name,
   p.kind, p.book, p.sell_price_cents, p.min_price_cents, p.reorder_level, p.active,
-  p.qty_on_hand, p.stock_value_cents, p.created_at, p.updated_at
-  FROM products p JOIN categories c ON c.id = p.category_id`;
+  p.qty_on_hand, p.stock_value_cents, p.created_at, p.updated_at,
+  vs.segment AS segment, c.provider_id AS provider_id, rp.name AS provider_name
+  FROM products p JOIN categories c ON c.id = p.category_id
+  LEFT JOIN v_product_segment vs ON vs.product_id = p.id
+  LEFT JOIN reload_providers rp ON rp.id = c.provider_id`;
+// The same joins for the count query (the filters may touch the category / segment view).
+const FROM = `FROM products p JOIN categories c ON c.id = p.category_id
+  LEFT JOIN v_product_segment vs ON vs.product_id = p.id`;
 
 function map(r: Raw): ProductRow {
   return {
@@ -48,6 +62,7 @@ function map(r: Raw): ProductRow {
     reorderLevel: Number(r.reorder_level), active: Number(r.active) === 1,
     qtyOnHand: Number(r.qty_on_hand), stockValueCents: Number(r.stock_value_cents),
     createdAt: r.created_at, updatedAt: r.updated_at,
+    segment: r.segment ?? null, providerId: r.provider_id === null ? null : Number(r.provider_id), providerName: r.provider_name,
   };
 }
 
@@ -64,12 +79,14 @@ export function listProducts(conn: DatabaseSync, q: ProductQuery): { items: Prod
   if (q.categoryId !== undefined) { where.push('p.category_id = ?'); params.push(q.categoryId); }
   if (q.kind !== undefined) { where.push('p.kind = ?'); params.push(q.kind); }
   if (q.active !== undefined) { where.push('p.active = ?'); params.push(q.active ? 1 : 0); }
+  if (q.segment !== undefined) { where.push('vs.segment = ?'); params.push(q.segment); }
+  if (q.providerId !== undefined) { where.push('c.provider_id = ?'); params.push(q.providerId); }
   if (q.lowStock === true) {
     // Low stock = an active stock product with a reorder level set and quantity at or below it.
     where.push("(p.kind = 'stock' AND p.active = 1 AND p.reorder_level > 0 AND p.qty_on_hand <= p.reorder_level)");
   }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';
-  const total = Number((conn.prepare(`SELECT COUNT(*) AS n FROM products p${w}`).get(...params) as unknown as { n: number | bigint }).n);
+  const total = Number((conn.prepare(`SELECT COUNT(*) AS n ${FROM}${w}`).get(...params) as unknown as { n: number | bigint }).n);
   const rows = conn.prepare(`${SELECT}${w} ORDER BY p.name COLLATE NOCASE, p.id LIMIT ? OFFSET ?`)
     .all(...params, q.limit, q.offset) as unknown as Raw[];
   return { items: rows.map(map), total };
@@ -128,4 +145,9 @@ export function updateProduct(conn: DatabaseSync, id: number, patch: {
   if (sets.length === 0) return;
   sets.push(`updated_at = ${SQL_NOW_UTC}`);
   conn.prepare(`UPDATE products SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+}
+
+/** True when the product has at least one stock movement (its segment is then fixed, 13D PRODUCT_SEGMENT_LOCKED). */
+export function productHasMovements(conn: DatabaseSync, id: number): boolean {
+  return conn.prepare('SELECT 1 FROM stock_movements WHERE product_id = ? LIMIT 1').get(id) !== undefined;
 }

@@ -9,6 +9,7 @@
  * `client_ref` is unique so a repeated submission cannot create a second purchase.
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { StoredSegment } from '../services/segments.ts';
 import { escapeLike, SQL_NOW_UTC } from './sql-helpers.ts';
 
 export type PurchaseBook = 'shop' | 'telecom';
@@ -17,7 +18,7 @@ export type PurchaseStatus = 'posted' | 'void';
 /** Purchase header with the supplier name (null when no supplier was chosen). */
 export interface PurchaseHeaderRow {
   id: number; businessDate: string; postedAt: string; supplierId: number | null; supplierName: string | null;
-  billNo: string; book: PurchaseBook; totalCents: number; status: PurchaseStatus; clientRef: string;
+  billNo: string; book: PurchaseBook; segment: StoredSegment | null; totalCents: number; status: PurchaseStatus; clientRef: string;
   notes: string; voidedAt: string | null; voidReason: string | null;
 }
 /** One bought line: `units = packs x packSize`; `lineTotalCents` is the exact price paid for the line. */
@@ -36,7 +37,7 @@ export interface PurchaseReturnItemRow {
 type N = number | bigint;
 interface RawHeader {
   id: N; business_date: string; posted_at: string; supplier_id: N | null; supplier_name: string | null;
-  bill_no: string; book: PurchaseBook; total_cents: N; status: PurchaseStatus; client_ref: string;
+  bill_no: string; book: PurchaseBook; segment: StoredSegment | null; total_cents: N; status: PurchaseStatus; client_ref: string;
   notes: string; voided_at: string | null; void_reason: string | null;
 }
 interface RawItem {
@@ -50,7 +51,7 @@ interface RawReturnItem {
   id: N; purchase_return_id: N; purchase_item_id: N; product_id: N; product_name: string; units: N; value_cents: N;
 }
 
-const HEADER_SELECT = `SELECT p.id, p.business_date, p.posted_at, p.supplier_id, s.name AS supplier_name, p.bill_no, p.book,
+const HEADER_SELECT = `SELECT p.id, p.business_date, p.posted_at, p.supplier_id, s.name AS supplier_name, p.bill_no, p.book, p.segment,
   p.total_cents, p.status, p.client_ref, p.notes, p.voided_at, p.void_reason
   FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id`;
 
@@ -58,20 +59,20 @@ function mapHeader(r: RawHeader): PurchaseHeaderRow {
   return {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at,
     supplierId: r.supplier_id === null ? null : Number(r.supplier_id), supplierName: r.supplier_name,
-    billNo: r.bill_no, book: r.book, totalCents: Number(r.total_cents), status: r.status, clientRef: r.client_ref,
+    billNo: r.bill_no, book: r.book, segment: r.segment, totalCents: Number(r.total_cents), status: r.status, clientRef: r.client_ref,
     notes: r.notes, voidedAt: r.voided_at, voidReason: r.void_reason,
   };
 }
 
 /** Inserts a purchase header (status 'posted') and returns its id. */
 export function insertPurchase(conn: DatabaseSync, p: {
-  businessDate: string; supplierId: number | null; billNo: string; book: PurchaseBook; totalCents: number;
-  notes: string; clientRef: string;
+  businessDate: string; supplierId: number | null; billNo: string; book: PurchaseBook; segment: StoredSegment | null;
+  totalCents: number; notes: string; clientRef: string;
 }): number {
   const res = conn.prepare(
-    `INSERT INTO purchases (business_date, supplier_id, bill_no, book, total_cents, notes, client_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(p.businessDate, p.supplierId, p.billNo, p.book, p.totalCents, p.notes, p.clientRef);
+    `INSERT INTO purchases (business_date, supplier_id, bill_no, book, segment, total_cents, notes, client_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(p.businessDate, p.supplierId, p.billNo, p.book, p.segment, p.totalCents, p.notes, p.clientRef);
   return Number(res.lastInsertRowid);
 }
 
@@ -117,7 +118,7 @@ export function listPurchaseItems(conn: DatabaseSync, purchaseId: number): Purch
  * `q` searches the bill number; `from`/`to` are inclusive business dates.
  */
 export function listPurchases(conn: DatabaseSync, q: {
-  from?: string; to?: string; book?: PurchaseBook; supplierId?: number; status?: PurchaseStatus; q?: string;
+  from?: string; to?: string; book?: PurchaseBook; segment?: StoredSegment; supplierId?: number; status?: PurchaseStatus; q?: string;
   limit: number; offset: number;
 }): { items: PurchaseHeaderRow[]; total: number } {
   const where: string[] = [];
@@ -125,6 +126,7 @@ export function listPurchases(conn: DatabaseSync, q: {
   if (q.from !== undefined) { where.push('p.business_date >= ?'); params.push(q.from); }
   if (q.to !== undefined) { where.push('p.business_date <= ?'); params.push(q.to); }
   if (q.book !== undefined) { where.push('p.book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('p.segment = ?'); params.push(q.segment); }
   if (q.supplierId !== undefined) { where.push('p.supplier_id = ?'); params.push(q.supplierId); }
   if (q.status !== undefined) { where.push('p.status = ?'); params.push(q.status); }
   if (q.q !== undefined && q.q !== '') { where.push("p.bill_no LIKE ? ESCAPE '\\'"); params.push(`%${escapeLike(q.q)}%`); }

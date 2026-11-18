@@ -23,7 +23,7 @@ const setup = async (): Promise<ApiBase> => apiBase(await env.build());
 const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
 
 const DRAWING_KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'fund', 'id', 'kind', 'note', 'postedAt', 'productId',
-  'productName', 'qty', 'status', 'voidReason', 'voidedAt'];
+  'productName', 'qty', 'segment', 'status', 'voidReason', 'voidedAt'];
 
 describe('POST /drawings kind cash', () => {
   it('201 exact shape; money out of the Shop book as drawing_cash; no expense row, no stock movement; audit with business date', async () => {

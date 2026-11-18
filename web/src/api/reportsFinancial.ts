@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet } from './client';
 import { periodQuery } from '../pages/reports/shared';
 import type { ReportPeriod } from '../pages/reports/shared';
+import type { StoredSegment } from '../types/segments';
 import type {
   CashbookReport, CombinedPnl, FinBook, FundsReport, IceCreamPnl, PnlSegment, ShopPnl, TelecomPnl, TransfersReport,
 } from '../types/reportsFinancial';
@@ -19,19 +20,20 @@ export const FIN_REPORTS_KEY = ['reports', 'financial'] as const;
 type PnlBySegment = { shop: ShopPnl; telecom: TelecomPnl; icecream: IceCreamPnl; combined: CombinedPnl };
 
 /** GET /reports/pnl/:segment for the chosen period. */
-export function usePnl<S extends PnlSegment>(segment: S, period: ReportPeriod) {
+export function usePnl<S extends PnlSegment>(segment: S, period: ReportPeriod, telecomSegment: StoredSegment | '' = '') {
+  const extra: Record<string, string> = segment === 'telecom' && telecomSegment ? { segment: telecomSegment } : {};
   return useQuery({
-    queryKey: [...FIN_REPORTS_KEY, 'pnl', segment, period.from, period.to, period.granularity],
-    queryFn: () => apiGet<PnlBySegment[S]>(`/reports/pnl/${segment}${periodQuery(period)}`),
+    queryKey: [...FIN_REPORTS_KEY, 'pnl', segment, period.from, period.to, period.granularity, extra.segment ?? ''],
+    queryFn: () => apiGet<PnlBySegment[S]>(`/reports/pnl/${segment}${periodQuery(period, extra)}`),
     enabled: period.ready, placeholderData: (prev) => prev, staleTime: 0,
   });
 }
 
 /** GET /reports/cashbook/:book: per-period opening / in / out / closing, entry types and (Ice Cream) funds. */
-export const useCashbookReport = (book: FinBook, period: ReportPeriod) =>
+export const useCashbookReport = (book: FinBook, period: ReportPeriod, segment: StoredSegment | '' = '') =>
   useQuery({
-    queryKey: [...FIN_REPORTS_KEY, 'cashbook', book, period.from, period.to, period.granularity],
-    queryFn: () => apiGet<CashbookReport>(`/reports/cashbook/${book}${periodQuery(period)}`),
+    queryKey: [...FIN_REPORTS_KEY, 'cashbook', book, period.from, period.to, period.granularity, segment],
+    queryFn: () => apiGet<CashbookReport>(`/reports/cashbook/${book}${periodQuery(period, book === 'telecom' && segment ? { segment } : {})}`),
     enabled: period.ready, placeholderData: (prev) => prev, staleTime: 0,
   });
 

@@ -7,6 +7,9 @@
  * R13: a book (or fund) below zero is a warning banner here, never a block. R9: a closed day refuses new records until it is
  * reopened (audited). The selected book is kept in the URL (`?book=icecream`) so the browser Back button and bookmarks work.
  * The tabs are plain buttons (one tab per book) because the three books share this single route.
+ * 13D: under the Telecom tab a strip of segment tiles (4 providers x Cards / Reloads, "All Telecom", and "Telecom before segments"
+ * only when it has entries) chooses the segment (`?book=telecom&segment=dialog_reloads`). Without a segment Telecom shows the
+ * read-only total; every write panel (opening balance, count, close day, reopen) works on the selected segment.
  */
 import { AlertTriangle } from 'lucide-react';
 import { useSearchParams } from 'react-router';
@@ -16,8 +19,10 @@ import { PageHeader } from '../../components/PageHeader';
 import { Spinner } from '../../components/Spinner';
 import { useCashBooks } from '../../api/cashbooks';
 import { useHealth } from '../../api/health';
+import { parseSegmentParam, scopeLabel } from '../../lib/segments';
 import type { CashBook } from '../../types/cashbooks';
 import { CashBookPanel } from './CashBookPanel';
+import { SegmentStrip } from './SegmentStrip';
 import { CASHBOOKS, CASHBOOK_LABEL } from './shared';
 
 /** Reads the `?book=` parameter, falling back to the Shop book for anything unknown. */
@@ -29,6 +34,8 @@ function selectedBook(raw: string | null): CashBook {
 export function CashBooksPage() {
   const [params, setParams] = useSearchParams();
   const book = selectedBook(params.get('book'));
+  // Only Telecom has segments; a `segment` parameter on another book (or an unknown one) is ignored.
+  const segment = book === 'telecom' ? parseSegmentParam(params.get('segment')) : null;
   const summary = useCashBooks();
   const health = useHealth();
   const today = health.data?.today ?? '';
@@ -46,7 +53,7 @@ export function CashBooksPage() {
           {summary.data.warnings.length > 0 && (
             <section aria-label="Cash book warnings" className="mb-4 space-y-2">
               {summary.data.warnings.map((w, i) => (
-                <p key={`${w.code}-${w.fund ?? w.book}-${i}`} className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <p key={`${w.code}-${w.segment ?? w.fund ?? w.book}-${i}`} className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                   <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" aria-hidden="true" />
                   <span>{w.message}</span>
                 </p>
@@ -65,9 +72,15 @@ export function CashBooksPage() {
             ))}
           </div>
 
+          {book === 'telecom' && (
+            <SegmentStrip segments={summary.data.books.find((b) => b.book === 'telecom')?.segments ?? []} selected={segment}
+              totalCents={summary.data.books.find((b) => b.book === 'telecom')?.balanceCents ?? 0}
+              onSelect={(s) => setParams(s ? { book: 'telecom', segment: s } : { book: 'telecom' })} />
+          )}
+
           {today ? (
-            <div role="tabpanel" aria-label={`${CASHBOOK_LABEL[book]} cash book`}>
-              <CashBookPanel key={book} book={book} today={today} summary={summary.data.books.find((b) => b.book === book)} />
+            <div role="tabpanel" aria-label={`${scopeLabel(book, segment)} cash book`}>
+              <CashBookPanel key={`${book}:${segment ?? ''}`} book={book} segment={segment} today={today} summary={summary.data.books.find((b) => b.book === book)} />
             </div>
           ) : (
             <div className="flex justify-center py-12"><Spinner label="Loading" /></div>

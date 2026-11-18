@@ -245,7 +245,7 @@ describe('text fields: SQL injection and XSS strings are stored verbatim and ret
     const cases: Array<[string, string, any, (b: any) => any[]]> = [
       ['/expenses', 'expense', { businessDate: t, book: 'shop', category: 'other', amountCents: 100, description: XSS, notes: SQLI, clientRef: ref() }, (b) => [b.item.description, b.item.notes]],
       ['/printing-supplies', 'supplies', { businessDate: t, amountCents: 100, description: SQLI, clientRef: ref() }, (b) => [b.item.description]],
-      ['/cash-transfers', 'transfer', { businessDate: t, fromBook: 'shop', toBook: 'telecom', amountCents: 100, note: XSS, clientRef: ref() }, (b) => [b.item.note]],
+      ['/cash-transfers', 'transfer', { businessDate: t, fromBook: 'shop', toBook: 'telecom', toSegment: 'dialog_reloads', amountCents: 100, note: XSS, clientRef: ref() }, (b) => [b.item.note]],
       ['/capital', 'capital', { businessDate: t, book: 'shop', amountCents: 100, note: SQLI, clientRef: ref() }, (b) => [b.item.note]],
       ['/drawings', 'drawing', { kind: 'cash', businessDate: t, book: 'shop', amountCents: 100, note: XSS, clientRef: ref() }, (b) => [b.item.note]],
       ['/cash-counts', 'count', { businessDate: t, book: 'shop', countedCents: 1, note: XSS + SQLI, clientRef: ref() }, (b) => [b.item.note]],
@@ -329,8 +329,8 @@ describe('duplicate submissions and concurrent injects', () => {
     if (c.status === 200) expect(c.body.item.amountCents, 'a duplicate must return the original amount, not the new one').toBe(1000);
     expect(rowsOf('expenses')).toBe(before);
     // the same clientRef on two different documents of the same kind in different books
-    const t1 = await post(w.s.app, '/cash-transfers', { businessDate: D(4), fromBook: 'shop', toBook: 'telecom', amountCents: 100, clientRef: 'dupe-ref-0001' });
-    const t2 = await post(w.s.app, '/cash-transfers', { businessDate: D(4), fromBook: 'telecom', toBook: 'shop', amountCents: 100, clientRef: 'dupe-ref-0001' });
+    const t1 = await post(w.s.app, '/cash-transfers', { businessDate: D(4), fromBook: 'shop', toBook: 'telecom', toSegment: 'dialog_reloads', amountCents: 100, clientRef: 'dupe-ref-0001' });
+    const t2 = await post(w.s.app, '/cash-transfers', { businessDate: D(4), fromBook: 'telecom', fromSegment: 'dialog_reloads', toBook: 'shop', amountCents: 100, clientRef: 'dupe-ref-0001' });
     expect(t1.status).toBe(201);
     expect([200, 409]).toContain(t2.status);
     expect(rowsOf('cash_transfers') - 0).toBeGreaterThan(0);
@@ -436,7 +436,7 @@ describe('voids: twice, at the same time, and with dependents', () => {
       ['ice payment', MAKERS.icePayment!(w, D(5)), (b) => `/icecream/payments/${b.payment.id}/void`],
       ['ice move', MAKERS.iceMove!(w, D(5)), (b) => `/icecream/fund-moves/${b.move.id}/void`],
       ['ice day', MAKERS.iceDay!(w, D(5)), () => `/icecream/days/${D(5)}/void`],
-      ['count', { method: 'POST', url: '/cash-counts', body: { businessDate: D(5), book: 'telecom', countedCents: 1, note: 'x', clientRef: ref() } }, (b) => `/cash-counts/${b.item.id}/void`],
+      ['count', { method: 'POST', url: '/cash-counts', body: { businessDate: D(5), book: 'telecom', segment: 'dialog_reloads', countedCents: 1, note: 'x', clientRef: ref() } }, (b) => `/cash-counts/${b.item.id}/void`],
     ];
     for (const [name, req, urlOf] of list) {
       const made = await send(w, req);
@@ -560,7 +560,7 @@ describe('electricity is never an expense or cost category (E1-E5)', () => {
     }
     for (const category of ['electricity bill', 'electric', 'power', 'elec', '​electricity', 'electricity ']) for (const book of ['shop', 'telecom']) {
       const before = snapshotAll(w.s.ctx);
-      const r = await post(w.s.app, '/expenses', { businessDate: D(1), book, category, amountCents: 100, description: 'bill', clientRef: ref() });
+      const r = await post(w.s.app, '/expenses', { businessDate: D(1), book, ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), category, amountCents: 100, description: 'bill', clientRef: ref() });
       expect(r.status, `${book} "${category}" must not be stored`).toBe(400);
       expect(diffSnapshots(before, snapshotAll(w.s.ctx))).toEqual([]);
     }
@@ -633,7 +633,7 @@ describe('returns, warnings, cash counts as-of a date, report/dashboard query va
   });
 
   it('spending more than the book holds is a WARNING, never a block (R13)', async () => {
-    const r = await post(w.s.app, '/expenses', { businessDate: D(1), book: 'telecom', category: 'other', amountCents: 999_000_000, description: 'huge', clientRef: ref() });
+    const r = await post(w.s.app, '/expenses', { businessDate: D(1), book: 'telecom', segment: 'dialog_reloads', category: 'other', amountCents: 999_000_000, description: 'huge', clientRef: ref() });
     expect(r.status).toBe(201);
     expect(r.body.warnings.some((x: any) => x.code === 'NEGATIVE_CASH_BALANCE' && x.book === 'telecom')).toBe(true);
     await assertGlobalInvariants(w.s);

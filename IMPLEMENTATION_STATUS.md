@@ -16,6 +16,7 @@
 | **11** | Financial and operational reports, Excel export | ☑ Built, merged (PR #9) |
 | **12** | Dashboard, charts, Excel export pack | ☑ Built, merged (PR #10) |
 | **14** | Integration, independent validation, documentation, release readiness | ◐ In progress (see "Phase 14" below) |
+| **26** | Telecom segments: 8 provider x Cards/Reloads segments, migrations 024-026 | ☑ Built on `feature/telecom-segments` (final integration and pull request pending; see "Telecom segments" below) |
 
 Server test count by milestone: 798 (Phase 5) → 1,127 (Wave 1) → 1,264 (Phase 8) → 1,511 (Wave 3) → 1,639 (Phase 11) → 1,681 (Phase 12) → 1,689 (Phase 14 fixes) → 1,797 (QA suite + defect fix). 0 skipped throughout.
 
@@ -142,3 +143,10 @@ Owner-approved fix of all seven Medium audit findings. **Migration 019**: closed
 
 ## Product names unique per category (2026-11-16)
 Migration 023 rebuilds `products` with UNIQUE (category_id, name) (names case-insensitive); ids, rows and every reference unchanged (verified byte for byte on a populated schema-22 database, all six products indexes/triggers re-created). Create/rename/move checks are category-scoped (409 DUPLICATE_NAME within a category); Excel import refuses an ambiguous name-only row. Full suite 153 files, 2,895 tests, 0 skipped; typecheck and build clean; browser check: "100/-" created under both Airtel Crds and Dialog Crds, same-category duplicate refused. Three existing assertions were updated because they encoded the old shop-wide rule.
+
+## Telecom segments (2026-11-16 to 2026-11-18, integration branch `feature/telecom-segments`; BUSINESS_RULES 13D IMPLEMENTED)
+The Telecom book is divided into eight segments (Dialog, Mobitel, Airtel, Hutch x Cards, Reloads) plus the read-only "Telecom before segments". Built in packages: A migrations 024-026 (segment columns, view `v_product_segment`, rebuilt `daily_closings` / `cash_transfers` / `sales`, per-segment closed-day triggers, consistency triggers; verified on the frozen schema-23 populated database), B core (cash posting, closing, counts, opening balances, warnings and ledgers per scope), C Telecom, D catalog (category provider), E sales (one sale per provider), F stock and purchases, G entry-chosen flows (expenses, capital, drawings, transfers, corrections), H reports and dashboard, I restore validation and documentation, J integration.
+- Restore validation (package I): new check `segments` (`checkSegments`, plain SQL on the upgraded trial copy) and the segment comparison inside `checkCashLedger`; a backup whose segments were corrupted is refused `422 RESTORE_INVALID` before the live data is touched; valid backups (current schema with real segments, the frozen schema-23 fixture with all Telecom rows legacy) still restore. Tests: `phase26-i-world`, `phase26-i-corrupt` (every rule broken in a copy built through the API), `phase26-i-restore-flow`.
+- Documented: BUSINESS_RULES 0, 1, 2, 5, 8, 13D; API_CONTRACTS "Telecom segments, as built"; DATABASE_SCHEMA; ARCHITECTURE; README (owner guide, first-day checklist, troubleshooting).
+- Not covered by any check, by design: a `legacy` row cannot be told from a wrong value by its date, so only its structure is validated; a change inside free-text columns stays undetectable (as before).
+- Still to do for the branch: the final integration pass (package J), one pull request to `main`, and the owner's browser pass of every changed screen.

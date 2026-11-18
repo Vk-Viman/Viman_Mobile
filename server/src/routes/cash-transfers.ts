@@ -17,6 +17,8 @@ import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
 } from './catalog-query.ts';
 import { registerCorrectionEndpoints, transferCorrection } from '../services/correction-cash.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { correctionBodySchema } from './corrections.ts';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -33,7 +35,8 @@ const createBody = {
   additionalProperties: false,
   required: ['businessDate', 'fromBook', 'toBook', 'amountCents', 'clientRef'],
   properties: {
-    businessDate: dateField, fromBook: bookEnum, toBook: bookEnum, fromFund: fundEnum, toFund: fundEnum,
+    businessDate: dateField, fromBook: bookEnum, toBook: bookEnum,
+    fromSegment: STORED_SEGMENT_SCHEMA, toSegment: STORED_SEGMENT_SCHEMA, fromFund: fundEnum, toFund: fundEnum,
     amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS }, note: { type: 'string' }, clientRef,
   },
 } as const;
@@ -42,7 +45,7 @@ const listQuery = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    from: dateQuery, to: dateQuery, book: bookEnum, status: { type: 'string', enum: ['posted', 'void'] }, limit: intQuery, offset: intQuery,
+    from: dateQuery, to: dateQuery, book: bookEnum, segment: STORED_SEGMENT_SCHEMA, status: { type: 'string', enum: ['posted', 'void'] }, limit: intQuery, offset: intQuery,
   },
 } as const;
 
@@ -54,13 +57,14 @@ export function registerCashTransferRoutes(app: FastifyInstance, ctx: AppContext
   });
 
   app.get('/cash-transfers', { schema: { querystring: listQuery } }, async (request) => {
-    const raw = request.query as { from?: string; to?: string; book?: CashBook; status?: 'posted' | 'void'; limit?: string; offset?: string };
+    const raw = request.query as { from?: string; to?: string; book?: CashBook; segment?: StoredSegment; status?: 'posted' | 'void'; limit?: string; offset?: string };
     checkQueryDates(raw);
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listTransfers>[1] = { limit, offset };
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.status !== undefined) q.status = raw.status;
     return listTransfers(ctx, q);
   });

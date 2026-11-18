@@ -9,7 +9,9 @@ import { DatabaseSync } from 'node:sqlite';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../../app.ts';
 import { migrate } from '../../db/migrate.ts';
-import { catIds, get, post } from './catalog.ts';
+import { catIds, get, post, put } from './catalog.ts';
+import { makeProviderCategory, providerIdByName } from './segments.ts';
+import type { ProviderName } from './segments.ts';
 
 /**
  * In-memory migrated database (foreign keys on) for engine / SQL-level tests.
@@ -40,14 +42,39 @@ let seq = 0;
  * @returns the new product id
  */
 export function sqlProduct(
-  c: DatabaseSync, p: { name?: string; kind?: 'stock' | 'service'; book?: 'shop' | 'telecom'; active?: number } = {},
+  c: DatabaseSync, p: { name?: string; kind?: 'stock' | 'service'; book?: 'shop' | 'telecom'; active?: number; provider?: ProviderName } = {},
 ): number {
   const book = p.book ?? 'shop';
+  // Telecom stock products need a provider category (migration 024, PRODUCT_NEEDS_PROVIDER): the default "Scratch Cards" category
+  // is linked to Dialog while it still has no products, or the product goes into its own "<provider> Cards" category (`provider`).
+  if (book === 'telecom' && p.provider !== undefined) return sqlCardProduct(c, p.provider, p);
+  if (book === 'telecom') {
+    c.exec(`UPDATE categories SET provider_id = (SELECT id FROM reload_providers WHERE name = 'Dialog')
+             WHERE name = 'Scratch Cards' AND book = 'telecom' AND provider_id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM products WHERE category_id = categories.id)`);
+  }
   const cat = catId(c, book === 'shop' ? 'Other' : 'Scratch Cards');
   return Number(c.prepare(
     `INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents, active)
      VALUES (?, ?, ?, ?, 100000, 50000, ?)`,
   ).run(p.name ?? `SQLP${seq++}`, cat, p.kind ?? 'stock', book, p.active ?? 1).lastInsertRowid);
+}
+
+/**
+ * Raw-SQL Telecom card product in the "<provider> Cards" category of a provider (created and linked by SQL when missing), i.e. a
+ * product of the segment `<provider>_cards`.
+ */
+export function sqlCardProduct(
+  c: DatabaseSync, provider: ProviderName, p: { name?: string; kind?: 'stock' | 'service'; active?: number } = {},
+): number {
+  const catName = `${provider} Cards`;
+  const providerId = Number((c.prepare('SELECT id FROM reload_providers WHERE name = ?').get(provider) as { id: number | bigint }).id);
+  let cat = (c.prepare("SELECT id FROM categories WHERE name = ? AND book = 'telecom'").get(catName) as { id: number | bigint } | undefined)?.id;
+  if (cat === undefined) cat = c.prepare("INSERT INTO categories (name, book, provider_id) VALUES (?, 'telecom', ?)").run(catName, providerId).lastInsertRowid;
+  return Number(c.prepare(
+    `INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents, active)
+     VALUES (?, ?, ?, 'telecom', 100000, 50000, ?)`,
+  ).run(p.name ?? `SQLP${seq++}`, cat, p.kind ?? 'stock', p.active ?? 1).lastInsertRowid);
 }
 
 /**
@@ -136,6 +163,9 @@ let pseq = 0;
  * @throws if the API does not answer 201, so a broken setup fails loudly instead of confusing later asserts
  */
 export async function mkProduct(s: ApiBase, over: Record<string, unknown> = {}): Promise<any> {
+  // 13D: the default "Scratch Cards" category (Telecom) must be linked to a provider before it can hold a new card product; setup code that
+  // names it gets Dialog on first use (the server allows it while the category has no products). Tests of the rule itself use `post` directly.
+  if (over.categoryId !== undefined && over.categoryId === s.ids['Scratch Cards'] && (over.kind ?? 'stock') === 'stock') await linkScratchCards(s);
   const r = await post(s.app, '/products', {
     name: `Item ${pseq++}`, categoryId: s.ids.Electronics, kind: 'stock', sellPriceCents: 100000, minPriceCents: 50000, ...over,
   });
@@ -143,10 +173,34 @@ export async function mkProduct(s: ApiBase, over: Record<string, unknown> = {}):
   return r.body.item;
 }
 /**
- * Creates a product in the Scratch Cards category, i.e. in the telecom book (book is derived from the category).
+ * Creates a Telecom card product (book is derived from the category, 13D: the segment from the category's provider).
+ * Defaults: the default "Scratch Cards" category, which is linked to Dialog on first use (allowed while it has no products), so
+ * the product is in `dialog_cards`. `over.provider` ('Dialog' | 'Mobitel' | 'Airtel' | 'Hutch') puts it in that provider's own
+ * "<Provider> Cards" category instead (see `cardProduct`); an explicit `over.categoryId` is used as given.
  */
-export const mkTelecom = (s: ApiBase, over: Record<string, unknown> = {}) =>
-  mkProduct(s, { categoryId: s.ids['Scratch Cards'], ...over });
+export async function mkTelecom(s: ApiBase, over: Record<string, unknown> = {}): Promise<any> {
+  const { provider, ...fields } = over as { provider?: ProviderName } & Record<string, unknown>;
+  if (provider !== undefined) return cardProduct(s, { provider, ...fields });
+  return mkProduct(s, { categoryId: s.ids['Scratch Cards'], ...fields });
+}
+
+/** Links the default "Scratch Cards" category to Dialog when it has no provider yet (a no-op afterwards; refused by the server only if products exist). */
+export async function linkScratchCards(s: ApiBase): Promise<void> {
+  const scratch = s.ids['Scratch Cards']!;
+  const cat = (await get(s.app, '/categories?book=telecom')).body.items.find((c: any) => c.id === scratch);
+  if (cat && cat.providerId === null) await put(s.app, `/categories/${scratch}`, { providerId: (await providerIdByName(s.app)).Dialog });
+}
+
+/**
+ * Creates a Telecom card product in the Cards category of a provider (default Dialog): the category "<Provider> Cards" is created
+ * and linked to the provider through the API when missing (`makeProviderCategory`). The product belongs to `<provider>_cards`.
+ * Other fields (name, prices, reorderLevel ...) are passed to POST /products; `categoryId` overrides the category.
+ */
+export async function cardProduct(s: ApiBase, over: Record<string, unknown> & { provider?: ProviderName } = {}): Promise<any> {
+  const { provider = 'Dialog', ...fields } = over;
+  const categoryId = fields.categoryId ?? (await makeProviderCategory(s.app, provider)).id;
+  return mkProduct(s, { ...fields, categoryId });
+}
 
 /**
  * Creates a supplier through POST /suppliers and returns it (throws unless 201).

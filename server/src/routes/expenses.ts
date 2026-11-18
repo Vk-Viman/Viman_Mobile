@@ -18,6 +18,8 @@ import type { ExpenseCreate } from '../services/expenses.service.ts';
 import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
 } from './catalog-query.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { registerCorrectionEndpoints, expenseCorrection } from '../services/correction-cash.ts';
 import { correctionBodySchema } from './corrections.ts';
 
@@ -37,6 +39,7 @@ const createBody = {
   properties: {
     businessDate: dateField,
     book: { type: 'string', enum: ['shop', 'telecom', 'icecream'] },
+    segment: STORED_SEGMENT_SCHEMA,
     category: { type: 'string', minLength: 1, maxLength: 60 },
     amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS },
     description: { type: 'string' },
@@ -49,7 +52,7 @@ const listQuery = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    from: dateQuery, to: dateQuery, book: { type: 'string', enum: ['shop', 'telecom'] }, category: { type: 'string', maxLength: 60 },
+    from: dateQuery, to: dateQuery, book: { type: 'string', enum: ['shop', 'telecom'] }, segment: STORED_SEGMENT_SCHEMA, category: { type: 'string', maxLength: 60 },
     status: statusQuery, limit: intQuery, offset: intQuery,
   },
 } as const;
@@ -65,7 +68,7 @@ export function registerExpenseRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   app.get('/expenses', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      from?: string; to?: string; book?: 'shop' | 'telecom'; category?: string; status?: 'posted' | 'void'; limit?: string; offset?: string;
+      from?: string; to?: string; book?: 'shop' | 'telecom'; segment?: StoredSegment; category?: string; status?: 'posted' | 'void'; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
@@ -73,6 +76,7 @@ export function registerExpenseRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.category !== undefined) q.category = raw.category;
     if (raw.status !== undefined) q.status = raw.status;
     return listExpenses(ctx, q);

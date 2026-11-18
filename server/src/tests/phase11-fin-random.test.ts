@@ -139,9 +139,9 @@ for (const [SEED, MAX_PAY] of RUNS) describe(`randomized model check (seed ${SEE
         mapAdd(telNet, date, Math.floor((bill * 80 + 5000) / 10000)); ops++;
       } else if (r < 0.70) { // cash count (shop or telecom): over or short
         const book = pick(['shop', 'telecom'] as const);
-        const expected = (await get(s.app, `/cash-counts/expected?book=${book}&businessDate=${date}`)).body.expectedCents as number;
+        const expected = (await get(s.app, `/cash-counts/expected?book=${book}&businessDate=${date}${book === 'telecom' ? '&segment=dialog_reloads' : ''}`)).body.expectedCents as number;
         let diff = int(-300, 300); if (diff === 0) diff = 7;
-        expect((await countNew(s, book, expected + diff, { businessDate: date, note: 'random' })).status).toBe(201);
+        expect((await countNew(s, book, expected + diff, { businessDate: date, note: 'random', ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}) })).status).toBe(201);
         mapAdd(net(book), date, diff); ops++;
       } else if (r < 0.76) { // Ice Cream daily entry (one per date); sometimes voided straight away
         if (usedIceDates.has(date)) continue;

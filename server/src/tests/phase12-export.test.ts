@@ -46,8 +46,8 @@ function stockTotal(ws: ExcelJS.Worksheet): ExcelJS.CellValue {
 describe('GET /reports/export-pack', () => {
   it('has every sheet of the contract, in order', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
-      'Combined P&L (by month)', 'Shop P&L', 'Telecom P&L', 'Ice Cream P&L', 'Ice Cream funds', 'Ice Cream profit and excess',
-      'Cash book - Shop', 'Cash book - Telecom', 'Cash book - Ice Cream', 'Inventory valuation', 'Low stock', 'Sales', 'Purchases', 'Drawings', 'Printing variance',
+      'Combined P&L (by month)', 'Shop P&L', 'Telecom P&L', 'Telecom P&L by segment', 'Ice Cream P&L', 'Ice Cream funds', 'Ice Cream profit and excess',
+      'Cash book - Shop', 'Cash book - Telecom', 'Cash book - Telecom segments', 'Cash book - Ice Cream', 'Inventory valuation', 'Low stock', 'Sales', 'Purchases', 'Drawings', 'Printing variance',
     ]);
   });
 
@@ -112,7 +112,7 @@ describe('GET /reports/export-pack', () => {
   it('a single-day range and a range with no records both work; the workbook still has every sheet', async () => {
     const one = await pack(s, 'from=2025-03-02&to=2025-03-02');
     expect(one.status).toBe(200);
-    expect(one.wb!.worksheets).toHaveLength(15);
+    expect(one.wb!.worksheets).toHaveLength(17);
     expect(cellBy(one.wb!.getWorksheet('Shop P&L')!, 'Total', 'Net profit')).toBe(1200); // 03-02: 120,000 cents
     const empty = await pack(s, 'from=2020-01-01&to=2020-01-31');
     expect(empty.status).toBe(200);

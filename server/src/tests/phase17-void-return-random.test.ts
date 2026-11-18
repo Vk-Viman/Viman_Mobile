@@ -208,7 +208,7 @@ async function simulate(seed: number, ops: number): Promise<Record<string, numbe
       if (cand.length === 0) continue;
       const r = pick(cand);
       const book = sales.find((x) => x.id === r.saleId)!.book;
-      const closing = await closeOk(s, book, r.date);
+      const closing = await closeOk(s, book, r.date, book === 'telecom' ? { segment: 'dialog_cards' } : {}); // the Telecom products are Dialog card products: the sale's segment is Dialog Cards
       const before = snapshotAll(s.ctx);
       const res = await voidReturnNew(s, r.saleId, r.id, 'closed day');
       expect(res.status, label).toBe(409);

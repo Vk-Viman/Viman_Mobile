@@ -6,12 +6,15 @@
  * with the Phase 8 endpoint `POST /capital-entries/:id/void`.
  *
  *   POST /capital        create (201 { item, warnings }; 200 on a repeated `clientRef`)
- *   GET  /capital        list + totals (filters kind = capital | opening_balance | all, book, from, to, status; paged)
+ *   GET  /capital        list + totals (filters kind = capital | opening_balance | all, book, segment, from, to, status; paged)
+ *   (13D: a Telecom capital entry REQUIRES `segment`; the other books refuse it)
  *   GET  /capital/:id    one entry
  */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import type { CashBook } from '../repositories/cash-entries.repo.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { createCapital, getCapitalEntry, listCapital } from '../services/capital.service.ts';
 import type { CapitalCreate } from '../services/capital.service.ts';
 import {
@@ -30,7 +33,7 @@ const createBody = {
   additionalProperties: false,
   required: ['businessDate', 'book', 'amountCents', 'clientRef'],
   properties: {
-    businessDate: dateField, book: bookEnum, fund: { type: 'string', enum: ['cost', 'electricity', 'profit'] },
+    businessDate: dateField, book: bookEnum, fund: { type: 'string', enum: ['cost', 'electricity', 'profit'] }, segment: STORED_SEGMENT_SCHEMA,
     amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS }, note: { type: 'string' }, clientRef,
   },
 } as const;
@@ -39,7 +42,7 @@ const listQuery = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    kind: { type: 'string', enum: ['capital', 'opening_balance', 'all'] }, book: bookEnum, from: dateQuery, to: dateQuery,
+    kind: { type: 'string', enum: ['capital', 'opening_balance', 'all'] }, book: bookEnum, segment: STORED_SEGMENT_SCHEMA, from: dateQuery, to: dateQuery,
     status: { type: 'string', enum: ['posted', 'void'] }, limit: intQuery, offset: intQuery,
   },
 } as const;
@@ -53,14 +56,15 @@ export function registerCapitalRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   app.get('/capital', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      kind?: 'capital' | 'opening_balance' | 'all'; book?: CashBook; from?: string; to?: string; status?: 'posted' | 'void';
-      limit?: string; offset?: string;
+      kind?: 'capital' | 'opening_balance' | 'all'; book?: CashBook; segment?: StoredSegment; from?: string; to?: string;
+      status?: 'posted' | 'void'; limit?: string; offset?: string;
     };
     checkQueryDates(raw);
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listCapital>[1] = { limit, offset };
     if (raw.kind !== undefined && raw.kind !== 'all') q.kind = raw.kind;
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.status !== undefined) q.status = raw.status;

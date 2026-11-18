@@ -39,7 +39,7 @@ async function pUnits(s: ApiBase, units: number, value: number, mk = mkProduct):
 
 // Exact field list of a drawing in API responses.
 const KEYS = ['amountCents', 'backdated', 'book', 'businessDate', 'clientRef', 'fund', 'id', 'kind', 'note', 'postedAt', 'productId', 'productName',
-  'qty', 'status', 'voidReason', 'voidedAt'];
+  'qty', 'segment', 'status', 'voidReason', 'voidedAt'];
 
 // Taking goods for personal use: valued at cost, book from the product, validation and dates.
 describe('POST /drawings - goods drawing', () => {

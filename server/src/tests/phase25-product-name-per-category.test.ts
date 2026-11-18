@@ -13,6 +13,7 @@ import { writeFileSync } from 'node:fs';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase, buy, mkProduct } from './helpers/inventory.ts';
 import { get, post, put } from './helpers/catalog.ts';
+import { providerIdByName } from './helpers/segments.ts';
 import { assertGlobalInvariants, buildWorld14, diffSnapshots, rows, snapshotAll } from './helpers/phase14.ts';
 import { rl, returnOk, sellOne } from './helpers/phase5.ts';
 import { importFile, mkSku, previewFile, xlsx } from './helpers/phase13.ts';
@@ -32,8 +33,10 @@ afterEach(async () => { blind.on = false; await env.cleanup(); });
 const NAME_MSG = 'Another product already uses this name.';
 const prod = (cat: number | undefined, name: string, over: Record<string, unknown> = {}) =>
   ({ name, categoryId: cat, kind: 'stock', sellPriceCents: 1000, minPriceCents: 500, ...over });
-async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom'): Promise<number> {
-  const r = await post(s.app, '/categories', { name, book });
+async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom', provider?: 'Dialog' | 'Airtel'): Promise<number> {
+  // 13D: a Telecom category that will hold card products is linked to a provider (the product trigger of migration 024 needs it)
+  const providerId = provider ? (await providerIdByName(s.app))[provider] : undefined;
+  const r = await post(s.app, '/categories', { name, book, ...(providerId !== undefined ? { providerId } : {}) });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return r.body.item.id;
 }
@@ -41,8 +44,8 @@ async function newCat(s: { app: any }, name: string, book: 'shop' | 'telecom'): 
 describe('product name unique per category - API', () => {
   it('the same name is accepted in two categories of one book and in categories of different books', async () => {
     const s = await apiBase(await env.build());
-    const dialog = await newCat(s, 'Dialog Crds', 'telecom');
-    const airtel = await newCat(s, 'Airtel Crds', 'telecom');
+    const dialog = await newCat(s, 'Dialog Crds', 'telecom', 'Dialog');
+    const airtel = await newCat(s, 'Airtel Crds', 'telecom', 'Airtel');
     const a = await post(s.app, '/products', prod(dialog, '100/-'));
     const b = await post(s.app, '/products', prod(airtel, '100/-'));
     expect([a.status, b.status]).toEqual([201, 201]);
@@ -50,6 +53,8 @@ describe('product name unique per category - API', () => {
     // same book (shop), two categories; and a shop vs a telecom category
     expect((await post(s.app, '/products', prod(s.ids.Electronics, 'Cable'))).status).toBe(201);
     expect((await post(s.app, '/products', prod(s.ids.Other, 'cable'))).status).toBe(201);
+    // the default Scratch Cards category needs a provider before it can hold a new card product (13D; allowed while it has no products)
+    expect((await put(s.app, `/categories/${s.ids['Scratch Cards']}`, { providerId: (await providerIdByName(s.app)).Dialog })).status).toBe(200);
     expect((await post(s.app, '/products', prod(s.ids['Scratch Cards'], ' CABLE '))).status).toBe(201);
     expect((await get(s.app, '/products?q=cable&limit=50')).body.items).toHaveLength(3);
   });
@@ -97,6 +102,8 @@ describe('product name unique per category - API', () => {
   it('product CODE uniqueness is still global (across categories and books)', async () => {
     const s = await apiBase(await env.build());
     await post(s.app, '/products', prod(s.ids.Electronics, 'A', { code: 'Same' }));
+    // 13D: the default Scratch Cards category needs a provider before it can hold a stock product
+    await put(s.app, `/categories/${s.ids['Scratch Cards']}`, { providerId: (await providerIdByName(s.app)).Dialog });
     for (const cat of [s.ids.Electronics, s.ids.Other, s.ids['Scratch Cards']]) {
       const r = await post(s.app, '/products', prod(cat, `B${cat}`, { code: 'SAME' }));
       expect(r.status).toBe(409);
@@ -166,7 +173,11 @@ describe('migration 023 on a populated database', () => {
     expect(oldObjs.map((o) => o.name)).toEqual([
       'idx_products_active_name', 'idx_products_category', 'trg_products_book_insert', 'trg_products_book_update', 'trg_products_kind_immutable', 'trg_products_value_without_qty',
     ]);
-    expect(productObjects(b1.ctx.database.conn)).toEqual(oldObjs); // the migrated schema carries the same objects
+    // the migrated schema carries the same objects, plus the two triggers of migration 024 (Telecom segments: provider needed on a new card product, segment locked)
+    const byTypeName = (a: any, b: any) => (a.type + a.name < b.type + b.name ? -1 : 1);
+    const segObjs = productObjects(b1.ctx.database.conn).filter((o) => !oldObjs.some((x) => x.name === o.name));
+    expect(segObjs.map((o) => o.name)).toEqual(['trg_products_needs_provider', 'trg_products_segment_locked']);
+    expect(productObjects(b1.ctx.database.conn)).toEqual([...oldObjs, ...segObjs].sort(byTypeName));
     const newObjs = otherObjects(b1.ctx.database.conn);
     await b1.app.close();
 
@@ -204,7 +215,11 @@ describe('migration 023 on a populated database', () => {
     expect(rows(s2.ctx, 'PRAGMA integrity_check')).toEqual([{ integrity_check: 'ok' }]);
     expect(rows(s2.ctx, 'PRAGMA foreign_key_check')).toEqual([]);
     expect(JSON.stringify(rows(s2.ctx, 'SELECT name, seq FROM sqlite_sequence ORDER BY name'))).toBe(seqBefore);
-    expect(productObjects(s2.ctx.database.conn)).toEqual(oldObjs); // every products index and trigger is back, unchanged
+    // every products index and trigger of schema 22 is back, unchanged. (The re-applied 023 drops and re-creates `products` with its own objects only; the two
+    // triggers of migration 024 belong to a LATER version that this rewind kept, so the test puts them back exactly as they were before the rewind.)
+    expect(productObjects(s2.ctx.database.conn)).toEqual(oldObjs);
+    for (const o of segObjs) s2.ctx.database.conn.exec(String(o.sql));
+    expect(productObjects(s2.ctx.database.conn)).toEqual([...oldObjs, ...segObjs].sort(byTypeName));
     expect(otherObjects(s2.ctx.database.conn)).toEqual(newObjs); // nothing else in the schema moved
     const tbl = String(rows(s2.ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'products'")[0]!.sql);
     expect(tbl).toMatch(/UNIQUE \(category_id, name\)/);
@@ -259,6 +274,8 @@ describe('migration 023 on a populated database', () => {
     expect(all(db, "SELECT seq FROM sqlite_sequence WHERE name = 'products'")[0]!.seq).toBe(3);
     expect(all(db, 'PRAGMA foreign_key_check')).toEqual([]);
     expect(all(db, 'PRAGMA integrity_check')).toEqual([{ integrity_check: 'ok' }]);
+    // migration 024 (Telecom segments): a NEW Telecom stock product needs a category with a provider (it has no products yet, so it may get one)
+    db.exec(`UPDATE categories SET provider_id = (SELECT id FROM reload_providers WHERE name = 'Dialog') WHERE id = ${cat('Other tel')}`);
     db.exec(`INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('a', ${cat('Other tel')}, 'stock', 'telecom', 1, 1)`); // now allowed
     expect(Number(all(db, "SELECT id FROM products WHERE name = 'a' ORDER BY id DESC")[0]!.id)).toBe(4);
     expect(() => db.exec(`INSERT INTO products (name, category_id, kind, book, sell_price_cents, min_price_cents) VALUES ('A', ${cat('Mine')}, 'stock', 'shop', 1, 1)`)).toThrow(/UNIQUE/);

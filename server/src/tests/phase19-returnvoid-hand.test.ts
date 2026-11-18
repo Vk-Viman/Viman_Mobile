@@ -545,7 +545,8 @@ describe('S10: cash reversal row and negative-cash warnings (Telecom card sales)
     const sale = (await sellOk(s, [cl(T.id, 3, 800)], { businessDate: '2025-09-02' })).sales[0];
     expect(sale.book).toBe('telecom');
     expect(line(sale, 0).cogsCents).toBe(1500);
-    const exp = await expNew(s, { book: 'telecom', businessDate: '2025-09-02', amountCents: 3000, category: 'other', description: 'x' });
+    // the expense is booked in the Dialog Cards segment, where the cards were bought and sold: the hand balances (-2,000 / +400 / -2,600 / -4,200) are those of that segment
+    const exp = await expNew(s, { book: 'telecom', segment: 'dialog_cards', businessDate: '2025-09-02', amountCents: 3000, category: 'other', description: 'x' });
     expect(exp.status).toBe(201);
     expect(cashOf(s, 'telecom')).toBe(-2600);
 
@@ -553,12 +554,12 @@ describe('S10: cash reversal row and negative-cash warnings (Telecom card sales)
     expect(rr.status).toBe(201);
     const R = rr.body.item;
     expect(R).toMatchObject({ refundCents: 1600, cogsReversedCents: 1000 });
-    expect(rr.body.warnings).toEqual([expect.objectContaining({ code: 'NEGATIVE_CASH_BALANCE', book: 'telecom', balanceCents: -4200 })]);
+    expect(rr.body.warnings).toEqual([expect.objectContaining({ code: 'NEGATIVE_CASH_BALANCE', book: 'telecom', segment: 'dialog_cards', balanceCents: -4200 })]);
     expect(cashOf(s, 'telecom')).toBe(-4200);
 
     const before = cashOf(s, 'telecom');
     const v = await voidReturnOk(s, sale.id, R.id, 'oops');
-    expect(v.warnings).toEqual([expect.objectContaining({ code: 'NEGATIVE_CASH_BALANCE', book: 'telecom', balanceCents: -2600 })]);
+    expect(v.warnings).toEqual([expect.objectContaining({ code: 'NEGATIVE_CASH_BALANCE', book: 'telecom', segment: 'dialog_cards', balanceCents: -2600 })]);
     expect(cashOf(s, 'telecom')).toBe(before + 1600);
     const rows = cashOfRef(s, 'sales_returns', R.id);
     expect(rows).toHaveLength(2);

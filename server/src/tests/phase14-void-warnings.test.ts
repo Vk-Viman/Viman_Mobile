@@ -17,9 +17,11 @@ const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
 
-const warn = (book: string, balanceCents: number, shown: string) => ({
+// A Telecom warning names its segment (13D): `segment` code and "Telecom - Dialog Reloads" in the message.
+const warn = (book: string, balanceCents: number, shown: string, segment?: string) => ({
   code: 'NEGATIVE_CASH_BALANCE', book, balanceCents,
-  message: `The ${book === 'shop' ? 'Shop' : 'Telecom'} cash book is now below zero (${shown}). Check that the opening balance and sales are recorded.`,
+  ...(segment ? { segment } : {}),
+  message: `The ${book === 'shop' ? 'Shop' : segment ? `Telecom - ${segment.split('_').map((w) => w[0]!.toUpperCase() + w.slice(1)).join(' ')}` : 'Telecom'} cash book is now below zero (${shown}). Check that the opening balance and sales are recorded.`,
 });
 
 describe('R13 warnings on voids of cash-in records', () => {
@@ -87,7 +89,7 @@ describe('R13 warnings on voids of cash-in records', () => {
     expect(r.status).toBe(200);
     expect(Object.keys(r.body)).toEqual(['item', 'warnings']);
     expect(r.body.item.status).toBe('void');
-    expect(r.body.warnings).toEqual([warn('telecom', -150000, '-Rs. 1,500.00')]);
+    expect(r.body.warnings).toEqual([warn('telecom', -150000, '-Rs. 1,500.00', 'dialog_reloads')]);
   });
 
   it('reload sale void: no warning when the telecom book returns to zero', async () => {
@@ -109,7 +111,7 @@ describe('R13 warnings on voids of cash-in records', () => {
     expect(r.status).toBe(200);
     expect(Object.keys(r.body)).toEqual(['item', 'warnings']);
     expect(r.body.item.status).toBe('void');
-    expect(r.body.warnings).toEqual([warn('telecom', -250000, '-Rs. 2,500.00')]);
+    expect(r.body.warnings).toEqual([warn('telecom', -250000, '-Rs. 2,500.00', 'dialog_reloads')]);
   });
 
   it('EZCash void: no warning when the telecom book returns to zero', async () => {

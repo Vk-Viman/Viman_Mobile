@@ -23,6 +23,7 @@ import { capNew, drawCash, tr, trVoid } from './phase9.ts';
 import { dayNew, dayReplace, dayVoid, moveNew, moveVoid, payNew, payVoid } from './phase10.ts';
 import { importFile, mkSku, xlsx } from './phase13.ts';
 import { voidReturnNew } from './phase17.ts';
+import { SEGMENTS, segmentLabel } from './segments.ts';
 
 export type { Book } from './phase8.ts';
 export const ALL_BOOKS: readonly Book[] = ['shop', 'telecom', 'icecream'];
@@ -38,15 +39,20 @@ export const L = (): string => daysAgo(1);
 export const OLD = (): string => daysAgo(12);
 
 export const LABEL: Record<Book, string> = { shop: 'Shop', telecom: 'Telecom', icecream: 'Ice Cream' };
-export const closedMsg = (book: Book): string => `That day is closed for the ${LABEL[book]} cash book. Reopen it first (it will be recorded in the audit log).`;
-export const backMsg = (book: Book, closed: string): string =>
-  `A later day (${closed}) is already closed for the ${LABEL[book]} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`;
+// 13D: a Telecom scope is a SEGMENT, so its messages name it ("Telecom - Dialog Cards") and the error body carries `segment`. The `segment`
+// argument is optional only so that book-level callers keep compiling; a Telecom expectation must pass the segment of the write under test
+// (card flows: dialog_cards; reloads / EZCash / top-ups / Telecom expenses / counts: dialog_reloads; see helpers/segments.ts).
+const scopeName = (book: Book, segment?: string): string => (segment ? `${LABEL[book]} - ${segmentLabel(segment)}` : LABEL[book]);
+export const closedMsg = (book: Book, segment?: string): string => `That day is closed for the ${scopeName(book, segment)} cash book. Reopen it first (it will be recorded in the audit log).`;
+export const backMsg = (book: Book, closed: string, segment?: string): string =>
+  `A later day (${closed}) is already closed for the ${scopeName(book, segment)} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`;
 
 /** Expected error body of a DAY_CLOSED refusal. */
-export const dayClosedBody = (book: Book, date: string) => ({ code: 'DAY_CLOSED', message: closedMsg(book), book, businessDate: date });
+export const dayClosedBody = (book: Book, date: string, segment?: string) =>
+  ({ code: 'DAY_CLOSED', message: closedMsg(book, segment), book, ...(segment ? { segment } : {}), businessDate: date });
 /** Expected error body of a BACKDATE_BEFORE_CLOSED_DAY refusal. */
-export const backdateBody = (book: Book, closedDate: string, date: string) =>
-  ({ code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(book, closedDate), book, closedDate, businessDate: date });
+export const backdateBody = (book: Book, closedDate: string, date: string, segment?: string) =>
+  ({ code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(book, closedDate, segment), book, ...(segment ? { segment } : {}), closedDate, businessDate: date });
 
 export const ok = (r: Res): boolean => r.status === 200 || r.status === 201;
 export const must = (r: Res): Res => { expect(ok(r), JSON.stringify(r.body)).toBe(true); return r; };
@@ -68,9 +74,10 @@ export function fullSnapshot(s: { ctx: AppContext }, omit: readonly string[] = [
   return out;
 }
 
-/** Ledger balance of a book as of a date (independent of the services). */
-export const balAsOf = (s: { ctx: AppContext }, book: Book, date: string): number =>
-  Number(Object.values(sql(s, 'SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ? AND business_date <= ?', book, date)[0]!)[0]);
+/** Ledger balance of a book (Telecom: of one `segment`, or the whole book) as of a date (independent of the services). */
+export const balAsOf = (s: { ctx: AppContext }, book: Book, date: string, segment?: string | null): number =>
+  Number(Object.values(sql(s, `SELECT COALESCE(SUM(amount_cents),0) AS t FROM cash_entries WHERE book = ? AND business_date <= ?${segment ? ' AND segment = ?' : ''}`,
+    ...(segment ? [book, date, segment] : [book, date]))[0]!)[0]);
 
 // ---------------------------------------------------------------------------------------------
 // (3) fixtures and the operation registry
@@ -121,6 +128,8 @@ export interface Op {
   returns?: boolean;
   /** Dates (E, C, L) of Ice Cream daily entries that must exist before the day is closed (replace operation). */
   seedDays?: boolean;
+  /** 13D: the Telecom SEGMENT the write posts into (what a refusal names). Default 'dialog_reloads'; card flows are 'dialog_cards'. Ignored for ops without the Telecom book. */
+  seg?: string;
   create: (fx: Fx, date: string) => Promise<Res>;
   void?: (fx: Fx, created: Res, date: string, focus: Book) => Promise<Res>;
   /** Tables left out of the 'nothing written' comparison (a stocktake's DRAFT is a separate, non-posting write made before the completion). */
@@ -132,6 +141,9 @@ export interface Op {
   /** Voiding is not offered by the API, or is covered through the dedicated operation (e.g. returns). */
   noVoidRecord?: boolean;
 }
+
+/** The segment a refusal of `op` names for `book` (undefined for Shop / Ice Cream: their messages and bodies carry no segment). */
+export const opSegment = (op: Op, book: Book): string | undefined => (book === 'telecom' ? op.seg ?? 'dialog_reloads' : undefined);
 
 const stockedMk = (fx: Fx, book: Book): any => (book === 'shop' ? fx.shopP : fx.telP);
 const bookKey = (b: Book): 'shop' | 'telecom' => (b === 'telecom' ? 'telecom' : 'shop');
@@ -220,6 +232,8 @@ function perBook(book: 'shop' | 'telecom'): Op[] {
       },
     },
   ];
+  // 13D: a Telecom product is a card product (Dialog Cards); a Telecom expense is entered in Dialog Reloads (the default of the builders).
+  if (book === 'telecom') for (const o of ops) o.seg = o.key.startsWith('expense') ? 'dialog_reloads' : 'dialog_cards';
   return ops;
 }
 
@@ -245,7 +259,7 @@ function perCashBook(book: Book): Op[] {
     {
       // Always 1,000 cents above the balance as of its date (or 0 when the balance is negative), so the adjustment (a cash entry) is never zero.
       key: `cash count with adjustment (${book})`, books: [book],
-      create: (fx, d) => { const b = balAsOf(fx.s, book, d); return countNew(fx.s, book, b >= 0 ? b + 1000 : 0, { businessDate: d, note: 'drawer differs', ...fund }); },
+      create: (fx, d) => { const b = balAsOf(fx.s, book, d, book === 'telecom' ? 'dialog_reloads' : null); return countNew(fx.s, book, b >= 0 ? b + 1000 : 0, { businessDate: d, note: 'drawer differs', ...fund }); },
       void: (fx, c) => countVoid(fx.s, c.body.item.id),
     },
   ];
@@ -343,13 +357,13 @@ function transfers(): Op[] {
 /** Operations that touch Shop AND Telecom with one request. */
 const MIXED: Op[] = [
   {
-    key: 'sale cart with a Shop and a Telecom line', books: ['shop', 'telecom'],
+    key: 'sale cart with a Shop and a Telecom line', books: ['shop', 'telecom'], seg: 'dialog_cards',
     create: (fx, d) => sellNew(fx.s, [cl(fx.shopP.id, 1, 3000), cl(fx.telP.id, 1, 3000)], { businessDate: d }),
     // The cart made two sales (one per book). Voiding is per sale, so the audit voids the sale of the `focus` book only.
     void: (fx, c, _d, focus) => voidSaleNew(fx.s, c.body.sales.find((x: any) => x.book === (focus === 'telecom' ? 'telecom' : 'shop')).id),
   },
   {
-    key: 'opening stock batch with a Shop and a Telecom product', books: ['shop', 'telecom'],
+    key: 'opening stock batch with a Shop and a Telecom product', books: ['shop', 'telecom'], seg: 'dialog_cards',
     create: (fx, d) => post(fx.s.app, '/opening-stock', {
       businessDate: d, items: [{ productId: fx.osShop.id, qty: 1, unitCostCents: 1000 }, { productId: fx.osTel.id, qty: 1, unitCostCents: 1000 }], clientRef: ref(),
     }),
@@ -378,10 +392,24 @@ export async function setupFx(env: { build: () => Promise<{ app: any; ctx: AppCo
 // ---------------------------------------------------------------------------------------------
 // closing helpers
 // ---------------------------------------------------------------------------------------------
-/** Closes the given books on a date (no count); returns the closing rows by book. */
+/**
+ * Closes the given books on a date (no count); returns the closing rows by book. 13D: closing "Telecom" closes ALL EIGHT Telecom segments
+ * (the old meaning: nothing of that book can be written on that date); `out.telecom` is the first closing with `_all` = the eight rows.
+ * Close one segment only with `seg.closeOk` (helpers/seg.ts).
+ */
 export async function closeBooks(s: ApiBase, books: Iterable<Book>, date: string): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   for (const b of books) {
+    if (b === 'telecom') {
+      const all: any[] = [];
+      for (const segment of SEGMENTS) {
+        const r = await closeNew(s, 'telecom', date, { segment });
+        expect(r.status, JSON.stringify(r.body)).toBe(201);
+        all.push(r.body.item);
+      }
+      out[b] = { ...all[0], _all: all };
+      continue;
+    }
     const r = await closeNew(s, b, date);
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     out[b] = r.body.item;
@@ -390,15 +418,19 @@ export async function closeBooks(s: ApiBase, books: Iterable<Book>, date: string
 }
 export async function reopenAll(s: ApiBase, closings: Record<string, any>, reason = 'audit reopen'): Promise<void> {
   for (const c of Object.values(closings)) {
-    const r = await reopenNew(s, c.id, reason);
-    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    for (const row of (c._all ?? [c]) as any[]) {
+      const r = await reopenNew(s, row.id, reason);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
   }
 }
-/** Re-closes (the same row is updated) every book of `closings` on `date`. */
+/** Re-closes (the same row is updated) every book of `closings` on `date` (Telecom: all eight segments). */
 export async function recloseAll(s: ApiBase, closings: Record<string, any>, date: string): Promise<void> {
   for (const b of Object.keys(closings)) {
-    const r = await closeNew(s, b as Book, date);
-    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    for (const segment of b === 'telecom' ? SEGMENTS : [undefined]) {
+      const r = await closeNew(s, b as Book, date, segment ? { segment } : {});
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
   }
 }
 
@@ -416,23 +448,39 @@ export function rng(seed: number): () => number {
   };
 }
 
-/** The model's view of closings: per book, the set of dates currently closed. */
-export type ClosedModel = Record<Book, Set<string>>;
-export const emptyModel = (): ClosedModel => ({ shop: new Set(), telecom: new Set(), icecream: new Set() });
+/** 13D: a cash SCOPE of the closed-day rules: Shop, Ice Cream, or ONE Telecom segment (`seg`). */
+export interface Scope { book: Book; seg?: string }
+export const scopeKey = (sc: Scope): string => (sc.seg ? `${sc.book}:${sc.seg}` : sc.book);
+/** The scope a Telecom segment names (`tel('dialog_cards')`). */
+export const tel = (seg: string): Scope => ({ book: 'telecom', seg });
+/** Request-body fragment that names the scope's segment (nothing for Shop / Ice Cream). */
+export const segBody = (sc: Scope): Record<string, unknown> => (sc.seg ? { segment: sc.seg } : {});
+const scopeOrder = (sc: Scope): number => ALL_BOOKS.indexOf(sc.book) * 100 + (sc.seg ? SEGMENTS.indexOf(sc.seg as never) : -1);
+
+/** The model's view of closings: per scope (see scopeKey), the set of dates currently closed. */
+export type ClosedModel = Map<string, Set<string>>;
+export const emptyModel = (): ClosedModel => new Map();
+export const closedDatesOf = (model: ClosedModel, sc: Scope): Set<string> => {
+  const k = scopeKey(sc);
+  if (!model.has(k)) model.set(k, new Set());
+  return model.get(k)!;
+};
 
 /**
- * What the closed-day rules (BUSINESS_RULES 8, written independently of services/day-closing.ts) say about a write dated `date` touching
- * `books`: 'DAY_CLOSED' wins over 'BACKDATE_BEFORE_CLOSED_DAY'; within a kind the first book in shop, telecom, icecream order is named.
+ * What the closed-day rules (BUSINESS_RULES 8 + 13D, written independently of services/day-closing.ts) say about a write dated `date` touching
+ * `scopes`: 'DAY_CLOSED' wins over 'BACKDATE_BEFORE_CLOSED_DAY'; within a kind the first scope in shop, telecom (segment display order), icecream
+ * order is named. A day closed in one scope says nothing about another.
  */
-export function predict(model: ClosedModel, books: Iterable<Book>, date: string):
-  { code: 'DAY_CLOSED'; book: Book } | { code: 'BACKDATE_BEFORE_CLOSED_DAY'; book: Book; closedDate: string } | null {
-  const touched = new Set(books);
-  let back: { code: 'BACKDATE_BEFORE_CLOSED_DAY'; book: Book; closedDate: string } | null = null;
-  for (const b of ALL_BOOKS) {
-    if (!touched.has(b)) continue;
-    if (model[b].has(date)) return { code: 'DAY_CLOSED', book: b };
-    const later = [...model[b]].filter((d) => d > date).sort();
-    if (later.length > 0 && back === null) back = { code: 'BACKDATE_BEFORE_CLOSED_DAY', book: b, closedDate: later[later.length - 1]! };
+export function predict(model: ClosedModel, scopes: Iterable<Scope>, date: string):
+  { code: 'DAY_CLOSED'; scope: Scope } | { code: 'BACKDATE_BEFORE_CLOSED_DAY'; scope: Scope; closedDate: string } | null {
+  const touched = new Map<string, Scope>();
+  for (const sc of scopes) touched.set(scopeKey(sc), sc);
+  let back: { code: 'BACKDATE_BEFORE_CLOSED_DAY'; scope: Scope; closedDate: string } | null = null;
+  for (const sc of [...touched.values()].sort((x, y) => scopeOrder(x) - scopeOrder(y))) {
+    const closed = model.get(scopeKey(sc)) ?? new Set<string>();
+    if (closed.has(date)) return { code: 'DAY_CLOSED', scope: sc };
+    const later = [...closed].filter((d) => d > date).sort();
+    if (later.length > 0 && back === null) back = { code: 'BACKDATE_BEFORE_CLOSED_DAY', scope: sc, closedDate: later[later.length - 1]! };
   }
   return back;
 }
@@ -440,12 +488,12 @@ export function predict(model: ClosedModel, books: Iterable<Book>, date: string)
 /** The ledger-based property: for every currently closed day, the balance as of that day equals what the closing recorded. */
 export function closedSnapshotViolations(s: { ctx: AppContext }): string[] {
   const out: string[] = [];
-  const rows = sql(s, `SELECT book, business_date, expected_cents, counted_cents FROM daily_closings
+  const rows = sql(s, `SELECT book, segment, business_date, expected_cents, counted_cents FROM daily_closings
                         WHERE reopened_at IS NULL OR closed_at > reopened_at`);
   for (const r of rows) {
     const want = r.counted_cents === null ? Number(r.expected_cents) : Number(r.counted_cents);
-    const have = balAsOf(s, r.book as Book, r.business_date as string);
-    if (have !== want) out.push(`${r.book} ${r.business_date}: ledger ${have} != closing ${want}`);
+    const have = balAsOf(s, r.book as Book, r.business_date as string, r.segment as string | null); // a segment closing snapshots THAT segment
+    if (have !== want) out.push(`${r.book}${r.segment ? `:${r.segment}` : ''} ${r.business_date}: ledger ${have} != closing ${want}`);
   }
   return out;
 }

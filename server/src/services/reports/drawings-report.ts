@@ -13,11 +13,13 @@
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Granularity, ReportTable } from '../../lib/report-table.ts';
-import { addInto, fillPeriods, num, numericOnly, periodKeySql } from './ops-common.ts';
+import { addInto, fillPeriods, num, numericOnly, periodKeySql, segmentFilter } from './ops-common.ts';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS } from '../segments.ts';
+import type { StoredSegment } from '../segments.ts';
 import type { Book, ReportWarning, SqlRow } from './ops-common.ts';
 
 /** Request: dates, granularity and an optional book (limits drawings and capital; transfers match either side). */
-export interface DrawingsQuery { from: string; to: string; granularity: Granularity; book?: Book }
+export interface DrawingsQuery { from: string; to: string; granularity: Granularity; book?: Book; segment?: StoredSegment }
 
 /** Figures of one period (cents). */
 export interface DrawingFigures {
@@ -33,6 +35,8 @@ export interface DrawingsReport {
   rows: Array<{ period: { from: string; to: string; label: string } } & DrawingFigures>;
   totals: DrawingFigures;
   byBook: Array<{ book: Book; cashCents: number; goodsCents: number; totalCents: number; capitalCents: number }>;
+  /** Telecom drawings and capital per segment (the eight always; `legacy` only when it has records); sums to `byBook` telecom. */
+  bySegment: Array<{ segment: StoredSegment; label: string; cashCents: number; goodsCents: number; totalCents: number; capitalCents: number }>;
   icecreamByFund: Array<{ fund: 'cost' | 'electricity' | 'profit'; cashCents: number }>;
   table: ReportTable; extraTables: ReportTable[]; warnings: ReportWarning[];
 }
@@ -47,8 +51,9 @@ const BOOKS: Book[] = ['shop', 'telecom', 'icecream'];
 export function drawingsReport(conn: DatabaseSync, q: DrawingsQuery): DrawingsReport {
   const byLabel = new Map<string, DrawingFigures>();
   const at = (k: string): DrawingFigures => { let x = byLabel.get(k); if (!x) { x = zero(); byLabel.set(k, x); } return x; };
-  const bookSql = (col: string) => (q.book !== undefined ? ` AND ${col} = ?` : '');
-  const bookArg: SQLInputValue[] = q.book !== undefined ? [q.book] : [];
+  const sg = segmentFilter('segment', q.segment);
+  const bookSql = (col: string) => (q.book !== undefined ? ` AND ${col} = ?` : '') + sg.sql;
+  const bookArg: SQLInputValue[] = [...(q.book !== undefined ? [q.book] : []), ...sg.params];
 
   for (const r of conn.prepare(
     `SELECT ${periodKeySql('business_date', q.granularity)} AS k, book, kind, SUM(amount_cents) AS t
@@ -67,8 +72,8 @@ export function drawingsReport(conn: DatabaseSync, q: DrawingsQuery): DrawingsRe
   ).all(q.from, q.to, ...bookArg) as unknown as SqlRow[]) at(String(r.k)).capitalCents = num(r.t);
   for (const r of conn.prepare(
     `SELECT ${periodKeySql('business_date', q.granularity)} AS k, COUNT(*) AS n, SUM(amount_cents) AS t
-       FROM cash_transfers WHERE status = 'posted' AND business_date BETWEEN ? AND ?${q.book !== undefined ? ' AND (from_book = ? OR to_book = ?)' : ''} GROUP BY k`,
-  ).all(q.from, q.to, ...(q.book !== undefined ? [q.book, q.book] : [])) as unknown as SqlRow[]) {
+       FROM cash_transfers WHERE status = 'posted' AND business_date BETWEEN ? AND ?${q.book !== undefined ? ' AND (from_book = ? OR to_book = ?)' : ''}${q.segment ? ' AND (from_segment = ? OR to_segment = ?)' : ''} GROUP BY k`,
+  ).all(q.from, q.to, ...(q.book !== undefined ? [q.book, q.book] : []), ...(q.segment ? [q.segment, q.segment] : [])) as unknown as SqlRow[]) {
     const x = at(String(r.k)); x.transferCount = num(r.n); x.transfersCents = num(r.t);
   }
 
@@ -89,6 +94,24 @@ export function drawingsReport(conn: DatabaseSync, q: DrawingsQuery): DrawingsRe
     `SELECT book, SUM(amount_cents) AS t FROM capital_entries WHERE status = 'posted' AND kind = 'capital' AND business_date BETWEEN ? AND ?${bookSql('book')} GROUP BY book`,
   ).all(q.from, q.to, ...bookArg) as unknown as SqlRow[]) bookRows.get(r.book as Book)!.capitalCents = num(r.t);
   const byBook = [...bookRows.values()].filter((b) => q.book === undefined || b.book === q.book);
+  const segRows = new Map<StoredSegment, { segment: StoredSegment; label: string; cashCents: number; goodsCents: number; totalCents: number; capitalCents: number }>();
+  const segRow = (code: StoredSegment) => {
+    let x = segRows.get(code);
+    if (!x) { x = { segment: code, label: SEGMENT_LABEL[code], cashCents: 0, goodsCents: 0, totalCents: 0, capitalCents: 0 }; segRows.set(code, x); }
+    return x;
+  };
+  for (const code of TELECOM_SEGMENTS) if (q.segment === undefined || q.segment === code) segRow(code);
+  for (const r of conn.prepare(
+    `SELECT segment, kind, SUM(amount_cents) AS t FROM owner_drawings WHERE status = 'posted' AND book = 'telecom' AND business_date BETWEEN ? AND ?${sg.sql} GROUP BY segment, kind`,
+  ).all(q.from, q.to, ...sg.params) as unknown as SqlRow[]) {
+    const x = segRow(r.segment as StoredSegment);
+    if (r.kind === 'cash') x.cashCents += num(r.t); else x.goodsCents += num(r.t);
+    x.totalCents += num(r.t);
+  }
+  for (const r of conn.prepare(
+    `SELECT segment, SUM(amount_cents) AS t FROM capital_entries WHERE status = 'posted' AND kind = 'capital' AND book = 'telecom' AND business_date BETWEEN ? AND ?${sg.sql} GROUP BY segment`,
+  ).all(q.from, q.to, ...sg.params) as unknown as SqlRow[]) segRow(r.segment as StoredSegment).capitalCents += num(r.t);
+  const bySegment = [...segRows.values()].filter((x) => !(q.book !== undefined && q.book !== 'telecom'));
   const icecreamByFund = (conn.prepare(
     `SELECT fund, SUM(amount_cents) AS t FROM owner_drawings WHERE status = 'posted' AND book = 'icecream' AND business_date BETWEEN ? AND ? GROUP BY fund ORDER BY fund`,
   ).all(q.from, q.to) as unknown as SqlRow[]).map((r) => ({ fund: r.fund as 'cost' | 'electricity' | 'profit', cashCents: num(r.t) }));
@@ -113,5 +136,12 @@ export function drawingsReport(conn: DatabaseSync, q: DrawingsQuery): DrawingsRe
     columns: [{ key: 'book', label: 'Book', kind: 'text' }, m('cashCents', 'Cash'), m('goodsCents', 'Goods'), m('totalCents', 'Total'), m('capitalCents', 'Memo: capital in')],
     rows: byBook.map((b) => ({ ...b })),
   }];
-  return { from: q.from, to: q.to, granularity: q.granularity, rows, totals, byBook, icecreamByFund, table, extraTables, warnings: [] };
+  if (bySegment.length > 0) {
+    extraTables.push({
+      title: 'Drawings by Telecom segment',
+      columns: [{ key: 'segment', label: 'Segment', kind: 'text' }, m('cashCents', 'Cash'), m('goodsCents', 'Goods'), m('totalCents', 'Total'), m('capitalCents', 'Memo: capital in')],
+      rows: bySegment.map((b) => ({ segment: b.label, cashCents: b.cashCents, goodsCents: b.goodsCents, totalCents: b.totalCents, capitalCents: b.capitalCents })),
+    });
+  }
+  return { from: q.from, to: q.to, granularity: q.granularity, rows, totals, byBook, bySegment, icecreamByFund, table, extraTables, warnings: [] };
 }

@@ -4,21 +4,25 @@
  * Layer: route (thin): JSON-schema validation -> the cash book services -> response. The business rules (ledger maths,
  * opening balance uniqueness, count expected/difference, closings, R9 DAY_CLOSED, R-FD, R13 warnings) live in the services.
  *
- *   GET  /cashbooks                          balances of the three books (+ Ice Cream fund balances, warnings)
- *   GET  /cashbooks/:book?from&to&limit&offset   ledger with running balance, opening/in/out/closing, closed dates
- *   POST /cashbooks/:book/opening            set the opening balance (Ice Cream: per fund)
- *   GET  /cashbooks/:book/opening            opening balances of the book
+ *   GET  /cashbooks                          balances of the three books (+ Ice Cream fund balances, Telecom `segments[]`, warnings)
+ *   GET  /cashbooks/:book?segment&from&to&limit&offset   ledger with running balance, opening/in/out/closing, closed dates
+ *                                            (Telecom: `segment` = that segment's ledger; none = the read-only total ledger)
+ *   POST /cashbooks/:book/opening            set the opening balance (Ice Cream: per fund; Telecom: per `segment`, required)
+ *   GET  /cashbooks/:book/opening?segment    opening balances of the book
  *   POST /capital-entries/:id/void           void an opening balance / capital entry (reversal)
  *   POST /cash-counts                        count the drawer (over/short adjustment)
- *   GET  /cash-counts  GET /cash-counts/expected?book&businessDate  GET /cash-counts/:id  POST /cash-counts/:id/void
- *   POST /daily-closings                     close a day (optionally with a count)
+ *   GET  /cash-counts?book&segment  GET /cash-counts/expected?book&segment&businessDate  GET /cash-counts/:id  POST /cash-counts/:id/void
+ *   POST /daily-closings                     close a day (optionally with a count); Telecom: of one `segment`
  *   POST /daily-closings/:id/reopen          reopen a closed day (reason required, audited)
- *   GET  /daily-closings?book&from&to        closings   GET /daily-closings/status?book&businessDate -> { isClosed }
+ *   GET  /daily-closings?book&segment&from&to   closings   GET /daily-closings/status?book&segment&businessDate -> { isClosed }
+ * Telecom writes and day questions REQUIRE `segment` (13D); Shop and Ice Cream refuse it. `legacy` is only a filter / a re-close.
  */
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../app.ts';
 import { isIsoDate } from '../lib/dates.ts';
 import type { CashBook, IceFund } from '../repositories/cash-entries.repo.ts';
+import { STORED_SEGMENT_SCHEMA, resolveEntrySegment } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { getCashBookLedger, listCashBooks } from '../services/cashbooks.service.ts';
 import {
   createCashCount, expectedCashAsOf, getCashCountById, listCashCounts, voidCashCount,
@@ -41,20 +45,25 @@ const bookEnum = { type: 'string', enum: ['shop', 'telecom', 'icecream'] } as co
 const fundEnum = { type: 'string', enum: ['cost', 'electricity', 'profit'] } as const;
 const statusQuery = { type: 'string', enum: ['posted', 'void'] } as const;
 
+const segmentField = STORED_SEGMENT_SCHEMA;
+
 const bookParams = {
   type: 'object', additionalProperties: false, required: ['book'], properties: { book: bookEnum },
 } as const;
 
 const ledgerQuery = {
-  type: 'object', additionalProperties: false, properties: { from: dateQuery, to: dateQuery, limit: intQuery, offset: intQuery },
+  type: 'object', additionalProperties: false,
+  properties: { segment: segmentField, from: dateQuery, to: dateQuery, limit: intQuery, offset: intQuery },
 } as const;
+
+const openingQuery = { type: 'object', additionalProperties: false, properties: { segment: segmentField } } as const;
 
 const openingBody = {
   type: 'object',
   additionalProperties: false,
   required: ['businessDate', 'amountCents', 'clientRef'],
   properties: {
-    businessDate: dateField, amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS }, fund: fundEnum,
+    businessDate: dateField, amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS }, fund: fundEnum, segment: segmentField,
     note: { type: 'string' }, clientRef,
   },
 } as const;
@@ -64,19 +73,20 @@ const countBody = {
   additionalProperties: false,
   required: ['businessDate', 'book', 'countedCents', 'clientRef'],
   properties: {
-    businessDate: dateField, book: bookEnum, countedCents: { type: 'integer', minimum: 0, maximum: MAX_CENTS }, fund: fundEnum,
-    note: { type: 'string' }, clientRef,
+    businessDate: dateField, book: bookEnum, segment: segmentField, countedCents: { type: 'integer', minimum: 0, maximum: MAX_CENTS },
+    fund: fundEnum, note: { type: 'string' }, clientRef,
   },
 } as const;
 
 const countListQuery = {
   type: 'object',
   additionalProperties: false,
-  properties: { book: bookEnum, from: dateQuery, to: dateQuery, status: statusQuery, limit: intQuery, offset: intQuery },
+  properties: { book: bookEnum, segment: segmentField, from: dateQuery, to: dateQuery, status: statusQuery, limit: intQuery, offset: intQuery },
 } as const;
 
 const dayQuery = {
-  type: 'object', additionalProperties: false, required: ['book', 'businessDate'], properties: { book: bookEnum, businessDate: dateQuery },
+  type: 'object', additionalProperties: false, required: ['book', 'businessDate'],
+  properties: { book: bookEnum, segment: segmentField, businessDate: dateQuery },
 } as const;
 
 const closingBody = {
@@ -84,8 +94,8 @@ const closingBody = {
   additionalProperties: false,
   required: ['book', 'businessDate', 'clientRef'],
   properties: {
-    book: bookEnum, businessDate: dateField, countedCents: { type: 'integer', minimum: 0, maximum: MAX_CENTS }, fund: fundEnum,
-    note: { type: 'string' }, clientRef,
+    book: bookEnum, segment: segmentField, businessDate: dateField, countedCents: { type: 'integer', minimum: 0, maximum: MAX_CENTS },
+    fund: fundEnum, note: { type: 'string' }, clientRef,
   },
 } as const;
 
@@ -94,7 +104,7 @@ const reopenBody = {
 } as const;
 
 const closingListQuery = {
-  type: 'object', additionalProperties: false, properties: { book: bookEnum, from: dateQuery, to: dateQuery },
+  type: 'object', additionalProperties: false, properties: { book: bookEnum, segment: segmentField, from: dateQuery, to: dateQuery },
 } as const;
 
 /** A query date must be a real calendar day (R-FD never rejects query dates, only impossible ones). */
@@ -111,7 +121,7 @@ const capitalReplacementBody = {
   additionalProperties: false,
   required: ['book', 'amountCents', 'clientRef'],
   properties: {
-    businessDate: dateField, book: bookEnum, fund: fundEnum,
+    businessDate: dateField, book: bookEnum, fund: fundEnum, segment: segmentField,
     amountCents: { type: 'integer', minimum: 1, maximum: MAX_CENTS }, note: { type: 'string' }, clientRef,
   },
 } as const;
@@ -122,10 +132,11 @@ export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): v
   app.get('/cashbooks', async () => listCashBooks(ctx));
 
   app.get('/cashbooks/:book', { schema: { params: bookParams, querystring: ledgerQuery } }, async (request) => {
-    const raw = request.query as { from?: string; to?: string; limit?: string; offset?: string };
+    const raw = request.query as { segment?: StoredSegment; from?: string; to?: string; limit?: string; offset?: string };
     checkQueryDates(raw);
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof getCashBookLedger>[2] = { limit, offset };
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     return getCashBookLedger(ctx, (request.params as { book: CashBook }).book, q);
@@ -135,13 +146,13 @@ export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): v
   app.post('/cashbooks/:book/opening', { schema: { params: bookParams, body: openingBody } }, async (request, reply) => {
     const { item, warnings, created } = setOpeningBalance(
       ctx, (request.params as { book: CashBook }).book,
-      request.body as { businessDate: string; amountCents: number; fund?: IceFund; note?: string; clientRef: string },
+      request.body as { businessDate: string; amountCents: number; fund?: IceFund; segment?: StoredSegment; note?: string; clientRef: string },
     );
     return reply.code(created ? 201 : 200).send({ item, warnings });
   });
 
-  app.get('/cashbooks/:book/opening', { schema: { params: bookParams } }, async (request) =>
-    listOpeningBalances(ctx, (request.params as { book: CashBook }).book));
+  app.get('/cashbooks/:book/opening', { schema: { params: bookParams, querystring: openingQuery } }, async (request) =>
+    listOpeningBalances(ctx, (request.params as { book: CashBook }).book, (request.query as { segment?: StoredSegment }).segment));
 
   app.post('/capital-entries/:id/void', { schema: { params: idParamsSchema, body: voidBody } }, async (request) =>
     voidCapitalEntry(ctx, parseId(request.params), request.body as { reason: string }));
@@ -153,11 +164,14 @@ export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): v
   });
 
   app.get('/cash-counts', { schema: { querystring: countListQuery } }, async (request) => {
-    const raw = request.query as { book?: CashBook; from?: string; to?: string; status?: 'posted' | 'void'; limit?: string; offset?: string };
+    const raw = request.query as {
+      book?: CashBook; segment?: StoredSegment; from?: string; to?: string; status?: 'posted' | 'void'; limit?: string; offset?: string;
+    };
     checkQueryDates(raw);
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: Parameters<typeof listCashCounts>[1] = { limit, offset };
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.status !== undefined) q.status = raw.status;
@@ -165,9 +179,10 @@ export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): v
   });
 
   app.get('/cash-counts/expected', { schema: { querystring: dayQuery } }, async (request) => {
-    const q = request.query as { book: CashBook; businessDate: string };
+    const q = request.query as { book: CashBook; segment?: StoredSegment; businessDate: string };
     checkDay(q.businessDate);
-    return expectedCashAsOf(ctx, q.book, q.businessDate);
+    const segment = resolveEntrySegment(q.book, q.segment); // a drawer count is per segment on Telecom
+    return expectedCashAsOf(ctx, { book: q.book, segment }, q.businessDate);
   });
 
   app.get('/cash-counts/:id', { schema: { params: idParamsSchema } }, async (request) => ({
@@ -184,19 +199,20 @@ export function registerCashbookRoutes(app: FastifyInstance, ctx: AppContext): v
   });
 
   app.get('/daily-closings', { schema: { querystring: closingListQuery } }, async (request) => {
-    const raw = request.query as { book?: CashBook; from?: string; to?: string };
+    const raw = request.query as { book?: CashBook; segment?: StoredSegment; from?: string; to?: string };
     checkQueryDates(raw);
     const q: Parameters<typeof listDailyClosings>[1] = {};
     if (raw.book !== undefined) q.book = raw.book;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     return listDailyClosings(ctx, q);
   });
 
   app.get('/daily-closings/status', { schema: { querystring: dayQuery } }, async (request) => {
-    const q = request.query as { book: CashBook; businessDate: string };
+    const q = request.query as { book: CashBook; segment?: StoredSegment; businessDate: string };
     checkDay(q.businessDate);
-    return dayStatus(ctx, q.book, q.businessDate);
+    return dayStatus(ctx, q.book, q.businessDate, q.segment);
   });
 
   app.post('/daily-closings/:id/reopen', { schema: { params: idParamsSchema, body: reopenBody } }, async (request) => ({

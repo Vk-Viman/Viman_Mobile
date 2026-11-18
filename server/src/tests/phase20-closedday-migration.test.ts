@@ -119,11 +119,11 @@ describe('M1: coverage guard - every table with a business date is protected or 
 });
 
 describe('M1: performance pattern', () => {
-  it('the closed-day probe is answered by the (book, business_date) index of daily_closings', async () => {
+  it('the closed-day probe is answered by an index of daily_closings (book, business_date) - the segment-aware probe is checked in phase26-segment-db', async () => {
     const s = await apiBase(await env.build());
     const conn = s.ctx.database.conn;
     const plan = conn.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM daily_closings d WHERE d.book = 'shop' AND d.business_date >= '2026-01-01' AND (d.reopened_at IS NULL OR d.closed_at > d.reopened_at)").all() as Array<{ detail: string }>;
-    expect(plan.map((p) => p.detail).join(' | ')).toMatch(/USING (COVERING )?INDEX sqlite_autoindex_daily_closings/);
+    expect(plan.map((p) => p.detail).join(' | ')).toMatch(/USING (COVERING )?INDEX idx_daily_closings_book/); // migration 025 rebuilt daily_closings: the UNIQUE(book, business_date) autoindex became idx_daily_closings_book_date / idx_daily_closings_book_segment_date
     const plan2 = conn.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM daily_closings d WHERE d.book IN ('shop','telecom') AND d.business_date = '2026-01-01'").all() as Array<{ detail: string }>;
     expect(plan2.map((p) => p.detail).join(' | ')).toMatch(/INDEX/);
   });

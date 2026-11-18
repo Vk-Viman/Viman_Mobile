@@ -36,10 +36,10 @@ export const RETURN_KEYS = [
 export const RETURN_ITEM_KEYS = ['cogsCents', 'extraCostCents', 'id', 'productId', 'productName', 'qty', 'resalable', 'revenueCents', 'saleItemId'].sort();
 /** Sorted keys of the `totals` object of GET /sales (C13 adds extraCostCents and costCents). */
 export const SALE_TOTALS_KEYS = ['cogsCents', 'costCents', 'extraCostCents', 'refundsCents', 'revenueCents'].sort();
-/** Sorted keys of a StockLoss (Phase 5 adds `salesReturnId`). */
+/** Sorted keys of a StockLoss (Phase 5 adds `salesReturnId`; the Telecom segments add `segment`, null outside Telecom). */
 export const LOSS_KEYS = [
   'backdated', 'book', 'businessDate', 'clientRef', 'costCents', 'id', 'note', 'postedAt', 'productId', 'productName', 'qty',
-  'reason', 'salesReturnId', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt',
+  'reason', 'salesReturnId', 'segment', 'source', 'status', 'unitCostCents', 'voidReason', 'voidedAt',
 ].sort();
 
 let seq5 = 0;
@@ -55,11 +55,15 @@ export const uniq5 = (): string => `p5-${seq5++}-${Math.random().toString(36).sl
  * @returns the new sale id
  */
 export function sqlSale(c: DatabaseSync, o: Record<string, any> = {}): number {
+  // 13D (migration 024): a Telecom sale names its segment (cards only: default dialog_cards, or `o.segment`); other books store none
+  const segment: string | null = o.segment ?? ((o.book ?? 'shop') === 'telecom' ? 'dialog_cards' : null);
+  const segCol = segment === null ? '' : ', segment';
+  const segVal = segment === null ? '' : ', ?';
   return Number(c.prepare(
-    `INSERT INTO sales (business_date, book, total_cents, status, notes, client_ref, voided_at, void_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sales (business_date, book, total_cents, status, notes, client_ref, voided_at, void_reason${segCol})
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?${segVal})`,
   ).run(o.date ?? today(), o.book ?? 'shop', o.total ?? 300000, o.status ?? 'posted', o.notes ?? '', o.ref ?? uniq5(),
-    o.voidedAt ?? null, o.voidReason ?? null).lastInsertRowid);
+    o.voidedAt ?? null, o.voidReason ?? null, ...(segment === null ? [] : [segment])).lastInsertRowid);
 }
 
 /**

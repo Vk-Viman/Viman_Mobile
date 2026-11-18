@@ -16,7 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { currentVersion, latestVersion, loadMigrations, migrate, MIGRATIONS_DIR } from '../db/migrate.ts';
-import { issueStock, receiveStock } from '../services/inventory.service.ts';
+import { issueStock } from '../services/inventory.service.ts';
 import { TestEnv } from './helpers/tmp.ts';
 import { memDb, msgOf, pool, scalar, sqlProduct, today } from './helpers/inventory.ts';
 import { sqlReturn, sqlReturnItem, sqlSale, sqlSaleItem } from './helpers/phase5.ts';
@@ -66,7 +66,8 @@ const returned = (c: DatabaseSync, item: number) => scalar(c, 'SELECT returned_q
  */
 function world(c: DatabaseSync, extra = 50) {
   const p = sqlProduct(c);
-  receiveStock(c, { productId: p, businessDate: '2025-04-01', type: 'purchase', qty: 10, valueCents: 10000, refTable: null, refId: null, reason: 'seed' });
+  // raw insert (what receiveStock writes): `world` also runs on a pre-017 schema, where the service's product query (view v_product_segment, migration 024) does not exist yet
+  c.prepare("INSERT INTO stock_movements (product_id, business_date, type, qty_delta, value_delta_cents, unit_cost_cents, ref_table, ref_id, reason) VALUES (?, '2025-04-01', 'purchase', 10, 10000, 1000, NULL, NULL, 'seed')").run(p);
   const sale = sqlSale(c, { date: '2025-04-02', total: 300000 });
   const item = sqlSaleItem(c, sale, p, { qty: 3, price: 100000, cogs: 70000, extra });
   const ret = (qty: number, date = '2025-04-03', o: { extra?: number; damaged?: boolean } = {}) => {
@@ -275,8 +276,8 @@ describe('reversal rows of a return void', () => {
     const cash = (amount: number, link: number | null) => c.prepare(
       "INSERT INTO cash_entries (book, business_date, type, amount_cents, ref_table, ref_id, reverses_entry_id) VALUES ('shop', '2025-04-03', 'sale_refund', ?, 'sales_returns', ?, ?)").run(amount, id, link);
     const orig = scalar(c, "SELECT id FROM cash_entries WHERE ref_table = 'sales_returns' AND ref_id = ?", id);
-    expect(msgOf(() => cash(100000, orig))).toMatch(/RETURN_REVERSAL_INVALID/);
-    expect(msgOf(() => cash(100000, null))).toMatch(/RETURN_REVERSAL_INVALID/);
+    expect(msgOf(() => cash(100000, orig))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);
+    expect(msgOf(() => cash(100000, null))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);
     // the restock itself (positive qty) and the refund itself (negative cash) are of course fine - they are how a return is written
     expect(scalar(c, "SELECT COUNT(*) FROM stock_movements WHERE ref_table = 'sales_returns'")).toBe(1);
   });
@@ -296,14 +297,14 @@ describe('reversal rows of a return void', () => {
     const orig = scalar(c, "SELECT id FROM cash_entries WHERE ref_table = 'sales_returns' AND ref_id = ? AND amount_cents < 0", id);
     const cash = (amount: number, link: number | null, date = '2025-04-03') => c.prepare(
       "INSERT INTO cash_entries (book, business_date, type, amount_cents, ref_table, ref_id, reverses_entry_id) VALUES ('shop', ?, 'sale_refund', ?, 'sales_returns', ?, ?)").run(date, amount, id, link);
-    expect(msgOf(() => cash(100000, null))).toMatch(/RETURN_REVERSAL_INVALID/);          // no link
-    expect(msgOf(() => cash(99999, orig))).toMatch(/RETURN_REVERSAL_INVALID/);           // wrong amount
-    expect(msgOf(() => cash(100000, orig, '2025-04-04'))).toMatch(/RETURN_REVERSAL_INVALID/); // not the return's date
+    expect(msgOf(() => cash(100000, null))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);          // no link
+    expect(msgOf(() => cash(99999, orig))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);           // wrong amount
+    expect(msgOf(() => cash(100000, orig, '2025-04-04'))).toMatch(/RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/); // not the return's date
     cash(100000, orig);
     expect(msgOf(() => cash(100000, orig))).toMatch(/UNIQUE constraint failed/);         // the same refund can be reversed only once
     expect(scalar(c, "SELECT COUNT(*) FROM cash_entries WHERE ref_table = 'sales_returns' AND amount_cents > 0")).toBe(1);
     voidRet(c, id);                                              // every reversal exists: the flip passes
-    expect(msgOf(() => cash(100000, orig))).toMatch(/UNIQUE constraint failed|RETURN_REVERSAL_INVALID/);
+    expect(msgOf(() => cash(100000, orig))).toMatch(/UNIQUE constraint failed|RETURN_REVERSAL_INVALID|REVERSAL_MISMATCH/);
     expect(msgOf(() => mv(-1, -10))).toMatch(/RETURN_REVERSAL_EXCEEDS/);
     expect(msgOf(() => mv(0, -3, 'adjustment'))).toMatch(/UNIQUE|RETURN_NOT_VOID/);
   });

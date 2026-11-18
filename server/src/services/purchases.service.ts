@@ -41,6 +41,8 @@ import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayOpen, mapCashAbort } from './day-closing.ts';
 import { issueStockCapped, receiveStock } from './inventory.service.ts';
+import { mixedSegmentsError, segmentOfProduct } from './segments.ts';
+import type { CashScope, StoredSegment } from './segments.ts';
 import { returnBeforeOriginalError, returnPortion } from './return-rules.ts';
 import {
   FUTURE_DATE_MESSAGE, NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate,
@@ -66,7 +68,7 @@ export interface PurchaseReturn {
 /** A purchase with its lines and returns, as returned by the API. */
 export interface Purchase {
   id: number; businessDate: string; postedAt: string; backdated: boolean;
-  supplierId: number | null; supplierName: string | null; billNo: string; book: PurchaseBook;
+  supplierId: number | null; supplierName: string | null; billNo: string; book: PurchaseBook; segment: StoredSegment | null;
   totalCents: number; status: PurchaseStatus; notes: string; voidedAt: string | null; voidReason: string | null;
   clientRef: string; items: PurchaseItem[]; returns: PurchaseReturn[];
 }
@@ -113,6 +115,11 @@ function runWrite<T>(ctx: AppContext, fn: (conn: DatabaseSync) => T, originalDat
   }
 }
 
+/** The cash scope of a purchase (its book and, for Telecom, its Cards segment). */
+function scopeOfPurchase(h: { book: PurchaseBook; segment: StoredSegment | null }): CashScope {
+  return { book: h.book, segment: h.segment };
+}
+
 // ---------- DTO assembly ----------
 
 /** Builds the API shape of a return (adds its lines and the `backdated` flag). */
@@ -132,7 +139,7 @@ function toReturn(conn: DatabaseSync, r: PurchaseReturnRow): PurchaseReturn {
 function toPurchase(conn: DatabaseSync, h: PurchaseHeaderRow): Purchase {
   return {
     id: h.id, businessDate: h.businessDate, postedAt: h.postedAt, backdated: isBackdated(h.businessDate, h.postedAt),
-    supplierId: h.supplierId, supplierName: h.supplierName, billNo: h.billNo, book: h.book,
+    supplierId: h.supplierId, supplierName: h.supplierName, billNo: h.billNo, book: h.book, segment: h.segment,
     totalCents: h.totalCents, status: h.status, notes: h.notes, voidedAt: h.voidedAt, voidReason: h.voidReason,
     clientRef: h.clientRef,
     items: listPurchaseItems(conn, h.id).map((i) => ({
@@ -160,7 +167,7 @@ export function getPurchase(ctx: AppContext, id: number): Purchase {
 
 /** Lists purchases newest business date first (filters: dates, book, supplier, status, bill-number text). */
 export function listPurchases(ctx: AppContext, q: {
-  from?: string; to?: string; book?: PurchaseBook; supplierId?: number; status?: PurchaseStatus; q?: string;
+  from?: string; to?: string; book?: PurchaseBook; segment?: StoredSegment; supplierId?: number; status?: PurchaseStatus; q?: string;
   limit: number; offset: number;
 }): { items: Purchase[]; total: number } {
   const conn = ctx.database.conn;
@@ -230,7 +237,23 @@ export function createPurchase(
       throw new AppError(400, 'MIXED_BOOKS', 'Shop and Telecom items cannot be on one bill — please split into two bills.');
     }
     const book = (products[0] as ProductRow).book;
-    assertDayOpen(conn, [book], body.businessDate); // R9 (the book is only known once the products are)
+    // Telecom: one purchase = ONE provider's Cards segment (13D). A Telecom product without a provider (legacy) cannot be bought.
+    let segment: StoredSegment | null = null;
+    if (book === 'telecom') {
+      const segments = new Set<StoredSegment | null>();
+      products.forEach((p, i) => {
+        const seg = segmentOfProduct(conn, p.id);
+        if (seg === 'legacy' || seg === null) {
+          throw new AppError(409, 'SEGMENT_LEGACY_REFUSED',
+            `${p.name} has no provider, so it cannot be purchased. Link its category to a provider first.`,
+            { [`items.${i}.productId`]: 'This product has no provider (legacy). Link its category to a provider.' });
+        }
+        segments.add(seg);
+      });
+      if (segments.size > 1) throw mixedSegmentsError();
+      segment = [...segments][0] as StoredSegment;
+    }
+    assertDayOpen(conn, [{ book, segment }], body.businessDate); // R9 (the scope is only known once the products are)
 
     // units = packs x pack size; the bill total is the sum of the exact line totals.
     let totalCents = 0;
@@ -243,7 +266,7 @@ export function createPurchase(
 
     // Write order: header first (lines and movements refer to its id), then per line the item and its stock inflow.
     const purchaseId = insertPurchase(conn, {
-      businessDate: body.businessDate, supplierId: body.supplierId ?? null, billNo, book, totalCents,
+      businessDate: body.businessDate, supplierId: body.supplierId ?? null, billNo, book, segment, totalCents,
       notes, clientRef: body.clientRef,
     });
     for (const line of lines) {
@@ -259,7 +282,7 @@ export function createPurchase(
     // A zero-value bill (free goods) moves no cash, so no cash entry is written for it.
     if (totalCents > 0) {
       insertCashEntry(conn, {
-        book, businessDate: body.businessDate, type: 'purchase_payment', amountCents: -totalCents,
+        book, segment, businessDate: body.businessDate, type: 'purchase_payment', amountCents: -totalCents,
         refTable: 'purchases', refId: purchaseId,
       });
     }
@@ -267,7 +290,7 @@ export function createPurchase(
     logAudit(conn, 'purchase', String(purchaseId), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
     // R13: a cash-out may leave the book negative; that is a warning, never a block.
-    const warnings = totalCents > 0 ? negativeCashWarnings(conn, [book]) : [];
+    const warnings = totalCents > 0 ? negativeCashWarnings(conn, [{ book, segment }]) : [];
     return { item, warnings, created: true };
   });
 }
@@ -294,7 +317,7 @@ export function voidPurchase(ctx: AppContext, id: number, body: { reason: string
   return runWrite(ctx, (conn) => {
     const header = getPurchaseRow(conn, id);
     if (!header) throw notFound('Purchase');
-    assertDayOpen(conn, [header.book], header.businessDate); // R9: a void is judged on the purchase's own date
+    assertDayOpen(conn, [scopeOfPurchase(header)], header.businessDate); // R9: a void is judged on the purchase's own date
     if (header.status === 'void') throw alreadyVoid('purchase');
     const before = toPurchase(conn, header);
     if (before.returns.length > 0 || before.items.some((i) => i.returnedUnits > 0)) {
@@ -342,7 +365,7 @@ export function voidPurchase(ctx: AppContext, id: number, body: { reason: string
         .find((e) => e.type === 'purchase_payment' && e.reversesEntryId === null && e.amountCents < 0);
       if (!original) throw new Error(`Purchase #${id} has no payment cash entry to reverse`);
       insertCashEntry(conn, {
-        book: before.book, businessDate: before.businessDate, type: 'purchase_payment',
+        book: before.book, segment: before.segment, businessDate: before.businessDate, type: 'purchase_payment',
         amountCents: before.totalCents, refTable: 'purchases', refId: id, reversesEntryId: original.id,
         note: `Void of purchase #${id}`,
       });
@@ -398,7 +421,7 @@ export function createPurchaseReturn(
     if (!header) throw notFound('Purchase');
     originalDate = header.businessDate;
     if (body.businessDate < header.businessDate) throw returnBeforeOriginalError('purchase', header.businessDate); // R-RD
-    assertDayOpen(conn, [header.book], body.businessDate); // R9: judged on the RETURN's date
+    assertDayOpen(conn, [scopeOfPurchase(header)], body.businessDate); // R9: judged on the RETURN's date
     if (header.status === 'void') {
       throw new AppError(409, 'PURCHASE_VOID', 'This purchase has been voided, so it cannot be returned.');
     }
@@ -465,7 +488,7 @@ export function createPurchaseReturn(
     }
     if (refundCents > 0) {
       insertCashEntry(conn, {
-        book: header.book, businessDate: body.businessDate, type: 'purchase_refund', amountCents: refundCents,
+        book: header.book, segment: header.segment, businessDate: body.businessDate, type: 'purchase_refund', amountCents: refundCents,
         refTable: 'purchase_returns', refId: returnId,
       });
     }

@@ -1,7 +1,7 @@
 /**
  * routes/products.ts - HTTP endpoints for products.
  *
- *   GET /products?q=&book=&categoryId=&kind=&lowStock=&active=&limit=&offset=   list (default 100, max 500)
+ *   GET /products?q=&book=&categoryId=&kind=&lowStock=&active=&segment=&providerId=&limit=&offset=   list (default 100, max 500)
  *   GET /products/:id    one product        POST /products   create (201)        PUT /products/:id   edit
  *
  * Layer: route (thin) -> `catalog.service.ts`. Rules (book comes from the category, kind/book never change,
@@ -13,6 +13,8 @@ import {
   createProduct, getProductItem, listProductItems, updateProductItem,
 } from '../services/catalog.service.ts';
 import type { Book, Kind, ProductCreate, ProductListQuery, ProductUpdate } from '../services/catalog.service.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import {
   bookQuery, boolQuery, idParamsSchema, intQuery, parseBool, parseId, parsePaging,
 } from './catalog-query.ts';
@@ -31,6 +33,8 @@ const listQuery = {
     kind: { type: 'string', enum: ['stock', 'service'] },
     lowStock: boolQuery,
     active: boolQuery,
+    segment: STORED_SEGMENT_SCHEMA,
+    providerId: intQuery,
     limit: intQuery,
     offset: intQuery,
   },
@@ -51,7 +55,7 @@ const createBody = {
       type: 'object',
       additionalProperties: false,
       required: ['name', 'book'],
-      properties: { name: { type: 'string' }, book: bookQuery },
+      properties: { name: { type: 'string' }, book: bookQuery, providerId: { type: ['integer', 'null'], minimum: 1 } },
     },
     kind: { type: 'string', enum: ['stock', 'service'] },
     sellPriceCents: { type: 'integer' },
@@ -81,7 +85,7 @@ const updateBody = {
 export function registerProductRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/products', { schema: { querystring: listQuery } }, async (request) => {
     const raw = request.query as {
-      q?: string; book?: Book; categoryId?: string; kind?: Kind; lowStock?: string; active?: string; limit?: string; offset?: string;
+      q?: string; book?: Book; categoryId?: string; kind?: Kind; lowStock?: string; active?: string; segment?: StoredSegment; providerId?: string; limit?: string; offset?: string;
     };
     const { limit, offset } = parsePaging(raw, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     const q: ProductListQuery = { limit, offset };
@@ -90,6 +94,8 @@ export function registerProductRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (raw.book !== undefined) q.book = raw.book;
     if (raw.categoryId !== undefined) q.categoryId = Number(raw.categoryId);
     if (raw.kind !== undefined) q.kind = raw.kind;
+    if (raw.segment !== undefined) q.segment = raw.segment;
+    if (raw.providerId !== undefined) q.providerId = Number(raw.providerId);
     const lowStock = parseBool(raw.lowStock);
     if (lowStock !== undefined) q.lowStock = lowStock;
     const active = parseBool(raw.active);

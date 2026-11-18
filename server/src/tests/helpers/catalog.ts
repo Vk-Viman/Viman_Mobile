@@ -108,7 +108,7 @@ export async function catIds(app: FastifyInstance): Promise<Record<string, numbe
 /**
  * Exact, sorted field list of a category in API responses (contract check: no field may appear or vanish silently).
  */
-export const CATEGORY_KEYS = ['active', 'book', 'createdAt', 'id', 'isDefault', 'name', 'productCount', 'updatedAt'];
+export const CATEGORY_KEYS = ['active', 'book', 'createdAt', 'id', 'isDefault', 'name', 'productCount', 'providerId', 'providerName', 'updatedAt'];
 /**
  * Exact, sorted field list of a product in API responses, including the computed stock fields.
  */

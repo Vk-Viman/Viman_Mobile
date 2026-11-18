@@ -4,8 +4,12 @@
  *
  * Layer: service helper used by EVERY financial write service (purchases, sales, returns, stock losses, stocktakes,
  * goods drawings, opening stock, telecom, printing, expenses, opening balances, cash counts, transfers, capital, Ice
- * Cream records). A daily closing locks one cash book for one business date; edits to a closed day need a reopen
+ * Cream records). A daily closing locks one cash SCOPE for one business date: Shop, Ice Cream, or ONE Telecom segment
+ * (13D: a day closed for Dialog Reloads stays open for Mobitel Cards); edits to a closed day need a reopen
  * (audited) and are then made as reversal + new rows (R9, R1).
+ *
+ * Scopes: every function takes `Iterable<CashBook | CashScope>`. A bare `'telecom'` is the compat error
+ * `TELECOM_SEGMENT_REQUIRED` (until package J removes the book-only form).
  *
  * How it is used (API_CONTRACTS "DAY_CLOSED enforcement" and "Approved-decisions contract" part A):
  *  - every create AND every void (and every return) calls `assertDayOpen(conn, books, date)` inside its transaction;
@@ -22,6 +26,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { AppError } from '../lib/errors.ts';
 import type { CashBook } from '../repositories/cash-entries.repo.ts';
 import { closedDayProbe } from '../repositories/daily-closings.repo.ts';
+import { mapSegmentAbort, scopeLabel, scopesOf } from './segments.ts';
+import type { CashScope } from './segments.ts';
 import { validationError } from './validation.ts';
 
 /** Owner-facing book names. */
@@ -30,21 +36,32 @@ export const BOOK_LABEL: Record<CashBook, string> = { shop: 'Shop', telecom: 'Te
 /** The three books in their display order (also the order in which a multi-book write reports the first closed one). */
 export const BOOKS: readonly CashBook[] = ['shop', 'telecom', 'icecream'];
 
-/** 409 DAY_CLOSED for one book and date, with `error.book` and `error.businessDate` (API contract wording). */
-export function dayClosedError(book: CashBook, businessDate: string): AppError {
-  return new AppError(409, 'DAY_CLOSED',
-    `That day is closed for the ${BOOK_LABEL[book]} cash book. Reopen it first (it will be recorded in the audit log).`,
-    undefined, { book, businessDate });
+/** `error.book` (+ `error.segment` for Telecom) of a scope, as carried by the closed-day errors. */
+function scopeExtra(scope: CashBook | CashScope): Record<string, unknown> {
+  if (typeof scope === 'string') return { book: scope };
+  return scope.segment ? { book: scope.book, segment: scope.segment } : { book: scope.book };
 }
 
 /**
- * 409 BACKDATE_BEFORE_CLOSED_DAY: `businessDate` is earlier than `closedDate`, the latest closed day of the book.
- * Carries `error.book`, `error.closedDate` and `error.businessDate` (API contract wording).
+ * 409 DAY_CLOSED for one scope and date, with `error.book` (+ `error.segment` on Telecom) and `error.businessDate`. The message
+ * names the scope: "Shop" or "Telecom - Dialog Reloads".
  */
-export function backdateBeforeClosedError(book: CashBook, closedDate: string, businessDate: string): AppError {
+export function dayClosedError(scope: CashBook | CashScope, businessDate: string): AppError {
+  const e = scopeExtra(scope);
+  return new AppError(409, 'DAY_CLOSED',
+    `That day is closed for the ${scopeLabel(typeof scope === 'string' ? { book: scope } : scope)} cash book. Reopen it first (it will be recorded in the audit log).`,
+    undefined, { ...e, businessDate });
+}
+
+/**
+ * 409 BACKDATE_BEFORE_CLOSED_DAY: `businessDate` is earlier than `closedDate`, the latest closed day of the scope.
+ * Carries `error.book` (+ `error.segment`), `error.closedDate` and `error.businessDate` (API contract wording).
+ */
+export function backdateBeforeClosedError(scope: CashBook | CashScope, closedDate: string, businessDate: string): AppError {
+  const e = scopeExtra(scope);
   return new AppError(409, 'BACKDATE_BEFORE_CLOSED_DAY',
-    `A later day (${closedDate}) is already closed for the ${BOOK_LABEL[book]} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`,
-    undefined, { book, closedDate, businessDate });
+    `A later day (${closedDate}) is already closed for the ${scopeLabel(typeof scope === 'string' ? { book: scope } : scope)} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`,
+    undefined, { ...e, closedDate, businessDate });
 }
 
 /**
@@ -61,14 +78,12 @@ export function backdateBeforeClosedError(book: CashBook, closedDate: string, bu
  * @param date  The record's business date (the return's date for a return; a void passes the record's own date).
  * @throws AppError 409 DAY_CLOSED or BACKDATE_BEFORE_CLOSED_DAY.
  */
-export function assertDayOpen(conn: DatabaseSync, books: Iterable<CashBook>, date: string): void {
-  const touched = new Set(books);
+export function assertDayOpen(conn: DatabaseSync, scopes: Iterable<CashBook | CashScope>, date: string): void {
   let backdate: AppError | undefined;
-  for (const book of BOOKS) {
-    if (!touched.has(book)) continue;
-    const probe = closedDayProbe(conn, book, date);
-    if (probe.onDay) throw dayClosedError(book, date);
-    if (probe.latest !== null && backdate === undefined) backdate = backdateBeforeClosedError(book, probe.latest, date);
+  for (const scope of scopesOf(scopes)) {
+    const probe = closedDayProbe(conn, scope, date);
+    if (probe.onDay) throw dayClosedError(scope, date);
+    if (probe.latest !== null && backdate === undefined) backdate = backdateBeforeClosedError(scope, probe.latest, date);
   }
   if (backdate) throw backdate;
 }
@@ -78,10 +93,9 @@ export function assertDayOpen(conn: DatabaseSync, books: Iterable<CashBook>, dat
  * book. For writes that move no money and change no balance (a zero-difference count and its void), which the
  * ordering protection deliberately lets through (section 8: closing without a cash entry stays allowed).
  */
-export function assertDayNotClosed(conn: DatabaseSync, books: Iterable<CashBook>, date: string): void {
-  const touched = new Set(books);
-  for (const book of BOOKS) {
-    if (touched.has(book) && closedDayProbe(conn, book, date).onDay) throw dayClosedError(book, date);
+export function assertDayNotClosed(conn: DatabaseSync, scopes: Iterable<CashBook | CashScope>, date: string): void {
+  for (const scope of scopesOf(scopes)) {
+    if (closedDayProbe(conn, scope, date).onDay) throw dayClosedError(scope, date);
   }
 }
 
@@ -105,4 +119,5 @@ export function mapCashAbort(err: unknown): void {
   if (msg.includes('INVALID_BUSINESS_DATE')) {
     throw validationError({ businessDate: 'Enter a valid date (YYYY-MM-DD).' });
   }
+  mapSegmentAbort(err); // 13D: SEGMENT_* and the category / product provider rules (migrations 024-026)
 }

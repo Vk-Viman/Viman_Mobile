@@ -5,8 +5,11 @@
  * signed row (money in is positive, money out is negative). Balance = SUM of all rows (BUSINESS_RULES
  * section 8). Rows are never edited or deleted (R1): a void adds a row that points back at the original via
  * `reverses_entry_id`. The database refuses future dates (R-FD) and edits (migration 004 triggers).
+ * Telecom rows also carry a `segment` (BUSINESS_RULES 13D, migration 024): named exactly when the book is Telecom.
  */
 import type { DatabaseSync } from 'node:sqlite';
+import { telecomSegmentRequired, toScopeQuery } from '../services/segments.ts';
+import type { ScopeQuery, StoredSegment } from '../services/segments.ts';
 import { numberOrNull } from './sql-helpers.ts';
 
 /** The three logical cash books (BUSINESS_RULES section 0). */
@@ -15,28 +18,28 @@ export type CashBook = 'shop' | 'telecom' | 'icecream';
 /** The three Ice Cream funds (BUSINESS_RULES section 10). */
 export type IceFund = 'cost' | 'electricity' | 'profit';
 
-/** One cash ledger row. `fund` is only set for the ice-cream book (section 10.2). */
+/** One cash ledger row. `fund` is only set for the ice-cream book (section 10.2); `segment` only for Telecom (13D). */
 export interface CashEntryRow {
   id: number; book: CashBook; businessDate: string; postedAt: string; type: string; amountCents: number;
-  fund: IceFund | null; refTable: string | null; refId: number | null;
+  fund: IceFund | null; segment: StoredSegment | null; refTable: string | null; refId: number | null;
   transferId: number | null; reversesEntryId: number | null; note: string | null;
 }
 
 /** Row as SQLite returns it. */
 interface Raw {
   id: number | bigint; book: CashBook; business_date: string; posted_at: string; type: string;
-  amount_cents: number | bigint; fund: IceFund | null;
+  amount_cents: number | bigint; fund: IceFund | null; segment: StoredSegment | null;
   ref_table: string | null; ref_id: number | bigint | null; transfer_id: number | bigint | null;
   reverses_entry_id: number | bigint | null; note: string | null;
 }
 
-const SELECT = `SELECT id, book, business_date, posted_at, type, amount_cents, fund, ref_table, ref_id,
+const SELECT = `SELECT id, book, business_date, posted_at, type, amount_cents, fund, segment, ref_table, ref_id,
   transfer_id, reverses_entry_id, note FROM cash_entries`;
 
 function map(r: Raw): CashEntryRow {
   return {
     id: Number(r.id), book: r.book, businessDate: r.business_date, postedAt: r.posted_at, type: r.type,
-    amountCents: Number(r.amount_cents), fund: r.fund, refTable: r.ref_table, refId: numberOrNull(r.ref_id),
+    amountCents: Number(r.amount_cents), fund: r.fund, segment: r.segment, refTable: r.ref_table, refId: numberOrNull(r.ref_id),
     transferId: numberOrNull(r.transfer_id), reversesEntryId: numberOrNull(r.reverses_entry_id), note: r.note,
   };
 }
@@ -49,16 +52,20 @@ function map(r: Raw): CashEntryRow {
  * @param e.refTable/refId   The business record that caused the entry (e.g. 'purchases', 12).
  * @param e.reversesEntryId  Set when this row cancels an earlier row (void, R1).
  * @param e.fund             Ice Cream only: the fund this movement belongs to.
+ * @param e.segment          Telecom only (required there, forbidden elsewhere): the segment of the entry. A reversal
+ *                           carries the segment of the entry it reverses.
+ * @throws AppError 400 TELECOM_SEGMENT_REQUIRED (compat rule) when a Telecom entry is written without the `segment` key.
  * @returns The new entry id.
  */
 export function insertCashEntry(conn: DatabaseSync, e: {
   book: CashBook; businessDate: string; type: string; amountCents: number; refTable: string | null; refId: number | null;
-  reversesEntryId?: number | null; note?: string | null; fund?: IceFund | null;
+  reversesEntryId?: number | null; note?: string | null; fund?: IceFund | null; segment?: StoredSegment | null;
 }): number {
+  if (e.book === 'telecom' && e.segment === undefined) throw telecomSegmentRequired(); // compat rule
   const res = conn.prepare(
-    `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, ref_table, ref_id, reverses_entry_id, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(e.book, e.businessDate, e.type, e.amountCents, e.fund ?? null, e.refTable, e.refId, e.reversesEntryId ?? null, e.note ?? null);
+    `INSERT INTO cash_entries (book, business_date, type, amount_cents, fund, segment, ref_table, ref_id, reverses_entry_id, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(e.book, e.businessDate, e.type, e.amountCents, e.fund ?? null, e.segment ?? null, e.refTable, e.refId, e.reversesEntryId ?? null, e.note ?? null);
   return Number(res.lastInsertRowid);
 }
 
@@ -74,19 +81,30 @@ export function findCashEntriesByRef(conn: DatabaseSync, refTable: string, refId
   return rows.map(map);
 }
 
-/** Current balance of a cash book in cents: opening + in - out, i.e. the sum of every ledger row (section 8). */
-export function cashBalance(conn: DatabaseSync, book: CashBook): number {
-  const r = conn.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM cash_entries WHERE book = ?')
-    .get(book) as unknown as { total: number | bigint };
+/** WHERE fragment of a read scope: the book, plus the segment when one is named (Telecom without a segment = the whole Telecom total). */
+function scopeWhere(scope: CashBook | ScopeQuery): { sql: string; params: string[] } {
+  const q = toScopeQuery(scope);
+  return q.segment ? { sql: 'book = ? AND segment = ?', params: [q.book, q.segment] } : { sql: 'book = ?', params: [q.book] };
+}
+
+/**
+ * Current balance of a cash scope in cents: opening + in - out, i.e. the sum of every ledger row (section 8). A bare book name
+ * (or a Telecom scope without a segment) is the WHOLE book: for Telecom the sum of all segments and `legacy`.
+ */
+export function cashBalance(conn: DatabaseSync, scope: CashBook | ScopeQuery): number {
+  const w = scopeWhere(scope);
+  const r = conn.prepare(`SELECT COALESCE(SUM(amount_cents), 0) AS total FROM cash_entries WHERE ${w.sql}`)
+    .get(...w.params) as unknown as { total: number | bigint };
   return Number(r.total);
 }
 
 /**
- * Balance of a cash book at the END of a business date: the sum of every ledger row dated on or before it
+ * Balance of a cash scope at the END of a business date: the sum of every ledger row dated on or before it
  * (section 8, "expected" of a cash count). Business date, not posting time, decides which rows count (R7).
  */
-export function cashBalanceAsOf(conn: DatabaseSync, book: CashBook, date: string): number {
-  const r = conn.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM cash_entries WHERE book = ? AND business_date <= ?')
-    .get(book, date) as unknown as { total: number | bigint };
+export function cashBalanceAsOf(conn: DatabaseSync, scope: CashBook | ScopeQuery, date: string): number {
+  const w = scopeWhere(scope);
+  const r = conn.prepare(`SELECT COALESCE(SUM(amount_cents), 0) AS total FROM cash_entries WHERE ${w.sql} AND business_date <= ?`)
+    .get(...w.params, date) as unknown as { total: number | bigint };
   return Number(r.total);
 }

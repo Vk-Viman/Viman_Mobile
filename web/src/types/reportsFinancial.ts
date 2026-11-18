@@ -4,6 +4,7 @@
  * Money is integer cents, rates basis points; every figure comes from the server - nothing here is calculated on the screen.
  */
 import type { ReportTable } from '../pages/reports/shared';
+import type { StoredSegment } from './segments';
 
 /** The four P&L views. */
 export type PnlSegment = 'shop' | 'telecom' | 'icecream' | 'combined';
@@ -58,7 +59,13 @@ export interface CombinedFigures {
 }
 
 export type ShopPnl = FinReport<ShopFigures>;
-export type TelecomPnl = FinReport<TelecomFigures>;
+/** One Telecom segment's figures (13D): rows per period and the total over the range. */
+export interface TelecomSegmentBlock {
+  segment: StoredSegment; label: string; kind: 'cards' | 'reloads' | 'legacy'; rows: Array<FinRow<TelecomFigures>>; totals: TelecomFigures;
+}
+export type TelecomPnl = FinReport<TelecomFigures> & {
+  filterSegment: StoredSegment | null; telecomSegments: TelecomSegmentBlock[]; segmentTable: ReportTable; segmentsMatchTotal: boolean;
+};
 export type IceCreamPnl = FinReport<IceFigures>;
 export type CombinedPnl = FinReport<CombinedFigures>;
 
@@ -68,17 +75,22 @@ export interface CashbookFigures {
   openingCents: number; inCents: number; outCents: number; closingCents: number; byType: TypeTotal[]; funds?: Record<FinFund, FundPeriod>;
 }
 export interface CashbookReport extends FinReport<CashbookFigures> {
-  book: FinBook; ledgerBalanceAsOfToCents: number; typeTable: ReportTable; fundTable?: ReportTable;
+  book: FinBook; segment: StoredSegment | null; ledgerBalanceAsOfToCents: number; typeTable: ReportTable; fundTable?: ReportTable;
+  /** Telecom only (13D): opening / in / out / closing per segment, and the table of the same. */
+  segments?: Array<{ segment: StoredSegment; label: string; openingCents: number; inCents: number; outCents: number; closingCents: number }>;
+  segmentTable?: ReportTable;
 }
 
 export interface TransferItem {
-  id: number; businessDate: string; fromBook: FinBook; toBook: FinBook; fromFund: FinFund | null; toFund: FinFund | null; amountCents: number; note: string;
+  id: number; businessDate: string; fromBook: FinBook; toBook: FinBook; fromFund: FinFund | null; toFund: FinFund | null;
+  fromSegment: StoredSegment | null; toSegment: StoredSegment | null; amountCents: number; note: string;
 }
 export interface TransferFigures {
   count: number; totalCents: number; byDirection: Record<string, { count: number; amountCents: number }>;
   byBook: Record<FinBook, { outCents: number; inCents: number; netCents: number }>;
+  bySegment: Record<string, { outCents: number; inCents: number; netCents: number }>;
 }
-export interface TransfersReport extends FinReport<TransferFigures> { items: TransferItem[]; itemsTable: ReportTable }
+export interface TransfersReport extends FinReport<TransferFigures> { items: TransferItem[]; itemsTable: ReportTable; segmentTable: ReportTable }
 
 export interface FundStatement {
   openingCents: number; allocationsCents: number; openingBalanceCents: number; capitalCents: number; transfersInCents: number;

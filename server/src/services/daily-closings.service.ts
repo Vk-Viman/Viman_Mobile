@@ -2,7 +2,10 @@
  * services/daily-closings.service.ts - closing and reopening a cash book's day (Phase 8, R9).
  *
  * Layer: service (route -> SERVICE -> repository -> database). Business rules (BUSINESS_RULES sections 8, 12; R9, R6):
- *  - Sec 8  a daily closing locks ONE cash book for ONE business date. Closing optionally includes the drawer count:
+ *  - 13D    the unit is the cash SCOPE: Shop, Ice Cream or ONE Telecom segment. Closing Dialog Reloads for a date leaves
+ *           Mobitel Cards (and every other segment) open for it. The read-only `legacy` segment ("Telecom before segments")
+ *           can be reopened and re-closed (without a count) but never closed for the first time.
+ *  - Sec 8  a daily closing locks ONE cash scope for ONE business date. Closing optionally includes the drawer count:
  *           when `countedCents` is given, the count and its over/short adjustment are posted FIRST (same rules as a
  *           cash count, C4), then the day is marked closed - so the closing's own adjustment is never blocked by itself.
  *           `expected` = the book's ledger balance as of the end of that date, BEFORE any adjustment.
@@ -29,7 +32,8 @@ import { logAudit } from './audit.service.ts';
 import { checkCountFund, postCashCount } from './cash-counts.service.ts';
 import type { CashCount } from './cash-counts.service.ts';
 import type { CashWarning } from './cash-warnings.ts';
-import { BOOK_LABEL } from './day-closing.ts';
+import { resolveEntrySegment, scopeLabel, segmentLegacyRefusedError, toScope } from './segments.ts';
+import type { StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, assertNoFieldErrors, checkBusinessDate, isBackdatedToday, notFound, trimmed, validationError,
@@ -43,14 +47,14 @@ export const REOPEN_REASON_MAX = 200;
 
 /** A daily closing as returned by the API. */
 export interface DailyClosing {
-  id: number; book: CashBook; businessDate: string; postedAt: string; closedAt: string; reopenedAt: string | null;
-  reopenReason: string | null; expectedCents: number; countedCents: number | null; overShortCents: number;
+  id: number; book: CashBook; segment: StoredSegment | null; businessDate: string; postedAt: string; closedAt: string;
+  reopenedAt: string | null; reopenReason: string | null; expectedCents: number; countedCents: number | null; overShortCents: number;
   cashCountId: number | null; isClosed: boolean;
 }
 
 function toClosing(r: ClosingRow): DailyClosing {
   return {
-    id: r.id, book: r.book, businessDate: r.businessDate, postedAt: r.postedAt, closedAt: r.closedAt, reopenedAt: r.reopenedAt,
+    id: r.id, book: r.book, segment: r.segment, businessDate: r.businessDate, postedAt: r.postedAt, closedAt: r.closedAt, reopenedAt: r.reopenedAt,
     reopenReason: r.reopenReason, expectedCents: r.expectedCents, countedCents: r.countedCents, overShortCents: r.overShortCents,
     cashCountId: r.cashCountId, isClosed: r.isClosed,
   };
@@ -62,29 +66,33 @@ function loadClosing(conn: DatabaseSync, id: number): DailyClosing {
   return toClosing(r);
 }
 
-/** Closings (open or closed), newest date first, with `isClosed` on each. */
-export function listDailyClosings(ctx: AppContext, q: { book?: CashBook; from?: string; to?: string }): { items: DailyClosing[] } {
+/** Closings (open or closed), newest date first, with `isClosed` on each. Telecom without `segment` lists every segment's. */
+export function listDailyClosings(ctx: AppContext, q: { book?: CashBook; segment?: StoredSegment; from?: string; to?: string }): { items: DailyClosing[] } {
   return { items: listClosingRows(ctx.database.conn, q).map(toClosing) };
 }
 
-/** Whether the book's day is closed right now (the screen uses it to show the closed badge and disable forms). */
-export function dayStatus(ctx: AppContext, book: CashBook, businessDate: string): { isClosed: boolean } {
-  return { isClosed: isDayClosed(ctx.database.conn, book, businessDate) };
+/**
+ * Whether the scope's day is closed right now (the screen uses it to show the closed badge and disable forms).
+ * @throws AppError 400 SEGMENT_REQUIRED for a Telecom question without a segment.
+ */
+export function dayStatus(ctx: AppContext, book: CashBook, businessDate: string, segment?: StoredSegment): { isClosed: boolean } {
+  const seg = resolveEntrySegment(book, segment, { allowLegacy: true });
+  return { isClosed: isDayClosed(ctx.database.conn, { book, segment: seg }, businessDate) };
 }
 
-/** Request body of a closing. */
+/** Request body of a closing (`segment` is required for Telecom, forbidden for the other books). */
 export interface DailyClosingCreate {
-  book: CashBook; businessDate: string; countedCents?: number; fund?: IceFund; note?: string; clientRef: string;
+  book: CashBook; segment?: StoredSegment; businessDate: string; countedCents?: number; fund?: IceFund; note?: string; clientRef: string;
 }
 
 /**
  * Closes the book's day (see the file header): optional count + adjustment first, then the closed row.
  *
- * Validation order: fields -> fund rule -> R-FD -> clientRef repeat -> DAY_ALREADY_CLOSED -> DAY_CLOSED (inside the
- * count, cannot fire here) -> NOTE_REQUIRED / FUND_REQUIRED (only when counted differs).
+ * Validation order: fields -> fund rule -> segment rule -> R-FD -> clientRef repeat -> DAY_ALREADY_CLOSED -> DAY_CLOSED (inside
+ * the count, cannot fire here) -> NOTE_REQUIRED / FUND_REQUIRED (only when counted differs).
  *
- * @throws AppError 400 VALIDATION_ERROR / FUND_NOT_ALLOWED / FUND_REQUIRED / NOTE_REQUIRED / FUTURE_DATE_NOT_ALLOWED,
- *   409 DAY_ALREADY_CLOSED / CLIENT_REF_CONFLICT.
+ * @throws AppError 400 VALIDATION_ERROR / FUND_NOT_ALLOWED / FUND_REQUIRED / NOTE_REQUIRED / FUTURE_DATE_NOT_ALLOWED /
+ *   SEGMENT_REQUIRED / SEGMENT_NOT_ALLOWED, 409 DAY_ALREADY_CLOSED / CLIENT_REF_CONFLICT / SEGMENT_LEGACY_REFUSED.
  * @returns The closing, the count it posted (null when no count was given) and the negative-cash warnings of a short.
  */
 export function closeDay(ctx: AppContext, body: DailyClosingCreate): {
@@ -94,33 +102,40 @@ export function closeDay(ctx: AppContext, body: DailyClosingCreate): {
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
   checkCountFund(body.book, body.fund);
+  // The read-only legacy segment can only be RE-closed (it must have a reopened closing, checked below), never with a count.
+  const segment = resolveEntrySegment(body.book, body.segment, { allowLegacy: true });
+  if (segment === 'legacy' && body.countedCents !== undefined) throw segmentLegacyRefusedError();
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
+  const scope = toScope({ book: body.book, segment });
+  const seg = segment ?? undefined;
 
   return runWrite(ctx, (conn) => {
     // A retry of a close that already saved its count returns that closing instead of an error.
     if (body.countedCents !== undefined) {
       const saved = getCashCountByClientRef(conn, body.clientRef);
       if (saved) {
-        const closing = getClosingByDay(conn, saved.book, saved.businessDate);
-        if (!closing || saved.book !== body.book || saved.businessDate !== body.businessDate || closing.cashCountId !== saved.id) {
+        const closing = getClosingByDay(conn, { book: saved.book, segment: saved.segment }, saved.businessDate);
+        if (!closing || saved.book !== body.book || saved.segment !== segment || saved.businessDate !== body.businessDate
+          || closing.cashCountId !== saved.id) {
           throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different record.');
         }
         return { item: toClosing(closing), count: null, warnings: [], created: false };
       }
     }
-    const existing = getClosingByDay(conn, body.book, body.businessDate);
+    const existing = getClosingByDay(conn, scope, body.businessDate);
     if (existing?.isClosed) {
       throw new AppError(409, 'DAY_ALREADY_CLOSED',
-        `That day is already closed for the ${BOOK_LABEL[body.book]} cash book.`, undefined,
-        { book: body.book, businessDate: body.businessDate });
+        `That day is already closed for the ${scopeLabel(scope)} cash book.`, undefined,
+        { book: body.book, ...(segment ? { segment } : {}), businessDate: body.businessDate });
     }
+    if (segment === 'legacy' && !existing) throw segmentLegacyRefusedError(); // no NEW legacy closing
 
-    const expectedCents = cashBalanceAsOf(conn, body.book, body.businessDate); // before any adjustment
+    const expectedCents = cashBalanceAsOf(conn, seg ? { book: body.book, segment: seg } : { book: body.book }, body.businessDate); // before any adjustment
     let count: CashCount | null = null;
     let warnings: CashWarning[] = [];
     if (body.countedCents !== undefined) {
       const posted = postCashCount(conn, {
-        businessDate: body.businessDate, book: body.book, countedCents: body.countedCents,
+        businessDate: body.businessDate, book: body.book, ...(seg ? { segment: seg } : {}), countedCents: body.countedCents,
         ...(body.fund !== undefined ? { fund: body.fund } : {}), clientRef: body.clientRef,
       }, note);
       count = posted.item;
@@ -135,7 +150,7 @@ export function closeDay(ctx: AppContext, body: DailyClosingCreate): {
       recloseClosing(conn, existing.id, existing.reopenedAt as string, figures); // R9: a reopened day is closed again
       id = existing.id;
     } else {
-      id = insertClosing(conn, { book: body.book, businessDate: body.businessDate, ...figures });
+      id = insertClosing(conn, { scope, businessDate: body.businessDate, ...figures });
     }
     const item = loadClosing(conn, id);
     logAudit(conn, 'daily_closing', String(id), 'close', existing ? toClosing(existing) : null, item, undefined,
@@ -159,7 +174,7 @@ export function reopenDay(ctx: AppContext, id: number, body: { reason: string })
     const row = getClosing(conn, id);
     if (!row) throw notFound('Daily closing');
     if (!row.isClosed) {
-      throw new AppError(409, 'DAY_NOT_CLOSED', `That day is not closed for the ${BOOK_LABEL[row.book]} cash book.`);
+      throw new AppError(409, 'DAY_NOT_CLOSED', `That day is not closed for the ${scopeLabel(row)} cash book.`);
     }
     const before = toClosing(row);
     reopenClosing(conn, id, reason);

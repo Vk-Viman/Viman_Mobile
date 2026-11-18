@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { FormDialog } from '../../components/FormDialog';
 import { MoneyInput } from '../../components/MoneyInput';
+import { SegmentSelect } from '../../components/SegmentSelect';
 import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useCreateTransfer } from '../../api/transfers';
@@ -20,6 +21,7 @@ import { MAX_NOTE, parseMoney } from '../../lib/amounts';
 import { notifyCashWarnings } from '../../lib/cashWarnings';
 import { errorBanner, fieldError } from '../../lib/errors';
 import type { CashBook, IceFund } from '../../types/cashbooks';
+import type { TelecomSegment } from '../../types/segments';
 import { CASHBOOKS } from '../cashbooks/shared';
 import { BookFundFields } from './BookFundFields';
 
@@ -31,6 +33,8 @@ export function TransferDialog({ onClose }: { onClose: () => void }) {
   const { today, date, setDate } = useBusinessDate();
   const [fromBook, setFromBook] = useState<CashBook>('shop');
   const [toBook, setToBook] = useState<CashBook>('telecom');
+  const [fromSegment, setFromSegment] = useState<TelecomSegment | ''>('');
+  const [toSegment, setToSegment] = useState<TelecomSegment | ''>('');
   const [fromFund, setFromFund] = useState<IceFund>('profit');
   const [toFund, setToFund] = useState<IceFund>('cost');
   const [amount, setAmount] = useState('');
@@ -38,16 +42,19 @@ export function TransferDialog({ onClose }: { onClose: () => void }) {
   const [showErrors, setShowErrors] = useState(false);
 
   const amountCents = parseMoney(amount);
-  const canSubmit = Boolean(date) && fromBook !== toBook && amountCents !== null && note.length <= MAX_NOTE && !create.isPending;
+  // 13D: each Telecom side names its segment; Telecom to Telecom is allowed between two DIFFERENT segments.
+  const segmentsOk = (fromBook !== 'telecom' || fromSegment !== '') && (toBook !== 'telecom' || toSegment !== '')
+    && !(fromBook === 'telecom' && toBook === 'telecom' && fromSegment === toSegment);
+  const canSubmit = Boolean(date) && (fromBook !== toBook || fromBook === 'telecom') && segmentsOk && amountCents !== null && note.length <= MAX_NOTE && !create.isPending;
 
   // Choosing the book that the other side already uses moves the other side to the next free book, so the two never match.
   const chooseFrom = (b: CashBook) => {
     setFromBook(b);
-    if (b === toBook) setToBook(CASHBOOKS.find((x) => x !== b) ?? 'telecom');
+    if (b === toBook && b !== 'telecom') setToBook(CASHBOOKS.find((x) => x !== b) ?? 'telecom');
   };
   const chooseTo = (b: CashBook) => {
     setToBook(b);
-    if (b === fromBook) setFromBook(CASHBOOKS.find((x) => x !== b) ?? 'shop');
+    if (b === fromBook && b !== 'telecom') setFromBook(CASHBOOKS.find((x) => x !== b) ?? 'shop');
   };
 
   const submit = () => {
@@ -55,6 +62,8 @@ export function TransferDialog({ onClose }: { onClose: () => void }) {
     create.mutate(
       {
         businessDate: date, fromBook, toBook,
+        ...(fromBook === 'telecom' && fromSegment ? { fromSegment } : {}),
+        ...(toBook === 'telecom' && toSegment ? { toSegment } : {}),
         ...(fromBook === 'icecream' ? { fromFund } : {}),
         ...(toBook === 'icecream' ? { toFund } : {}),
         amountCents, note: note.trim() || undefined, clientRef,
@@ -72,7 +81,7 @@ export function TransferDialog({ onClose }: { onClose: () => void }) {
   const err = create.error;
   return (
     <FormDialog title="Transfer cash between books" submitLabel="Transfer" canSubmit={canSubmit} loading={create.isPending}
-      error={errorBanner(err, ['businessDate', 'fromBook', 'toBook', 'fromFund', 'toFund', 'amountCents', 'note'])} onSubmit={submit} onClose={onClose}>
+      error={errorBanner(err, ['businessDate', 'fromBook', 'toBook', 'fromSegment', 'toSegment', 'fromFund', 'toFund', 'amountCents', 'note'])} onSubmit={submit} onClose={onClose}>
       <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
         Moves money from one cash book to another. It is not income or an expense in either book and does not change profit.
       </p>
@@ -81,10 +90,12 @@ export function TransferDialog({ onClose }: { onClose: () => void }) {
         <div className="space-y-4">
           <BookFundFields bookLabel="From book" fundLabel="From fund" book={fromBook} fund={fromFund} onBook={chooseFrom} onFund={setFromFund}
             bookError={fieldError(err, 'fromBook')} fundError={fieldError(err, 'fromFund')} />
+          {fromBook === 'telecom' && <SegmentSelect label="From segment" value={fromSegment} onChange={setFromSegment} error={fieldError(err, 'fromSegment') ?? (showErrors && fromSegment === '' ? 'Choose the Telecom segment.' : undefined)} />}
         </div>
         <div className="space-y-4">
-          <BookFundFields bookLabel="To book" fundLabel="To fund" book={toBook} fund={toFund} onBook={chooseTo} onFund={setToFund} disabledBook={fromBook}
+          <BookFundFields bookLabel="To book" fundLabel="To fund" book={toBook} fund={toFund} onBook={chooseTo} onFund={setToFund} disabledBook={fromBook === 'telecom' ? undefined : fromBook}
             bookError={fieldError(err, 'toBook')} fundError={fieldError(err, 'toFund')} />
+          {toBook === 'telecom' && <SegmentSelect label="To segment" value={toSegment} onChange={setToSegment} error={fieldError(err, 'toSegment') ?? (showErrors && toSegment === '' ? 'Choose the Telecom segment.' : (fromBook === 'telecom' && fromSegment !== '' && fromSegment === toSegment ? 'Choose a different segment from the source.' : undefined))} />}
         </div>
       </div>
       <MoneyInput label="Amount (Rs.)" value={amount} onChange={setAmount}

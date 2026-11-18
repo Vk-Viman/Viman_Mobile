@@ -4,7 +4,7 @@ Agents must not change these formulas. Proposed changes go to the orchestrator. 
 
 ## 0. Fundamentals
 - **Fresh start.** No historical workbook data is migrated. Go-live = opening stock + opening balance per cash book.
-- **Cash only**, one physical drawer, three *logical* cash books: `shop`, `telecom`, `icecream`.
+- **Cash only**, one physical drawer, three *logical* cash books: `shop`, `telecom`, `icecream`. The Telecom book is itself divided into **eight segments** (provider x Cards/Reloads, §13D); each segment has its own balance, count, closing and P&L, and the Telecom book is their sum.
 - **Money** is integer cents; **rates** are basis points; display `Rs. 12,345.00` (negative: `-Rs. 1,234.50`).
 - **Rounding:** `mulDivRound(a, b, c) = round(a × b / c)`, computed exactly with BigInt, **half away from zero**. All derived money (removal values, commissions, proportional returns) uses this one helper. Inputs and results must be safe integers.
 - **Segments are disjoint.** Every product, expense, loss, drawing, capital entry, cash entry belongs to exactly one book; Combined P&L = Shop + Telecom + Ice Cream.
@@ -16,26 +16,29 @@ Agents must not change these formulas. Proposed changes go to the orchestrator. 
 | Telecom | reload commission + rounding extra; EZCash commission; scratch-card sales − card COGS; − telecom expenses (**never electricity**, §7) − stock adjustments (net) − cash over/short | full reload collections, full EZCash bill collections, card sales, capital, transfers in | provider top-ups, wallet top-ups, card purchases, telecom expenses, drawings, transfers out |
 | Ice Cream | **recognized profit (§10):** Σ daily profit shares + profit-eligible releases − re-allocations − other costs paid from the Profit Fund ± cash over/short; ⚠ excess cost shown separately (§10.5) | daily sales, capital, transfers in | material payments, **the whole shop's electricity bill** (settlement), other payments, drawings, transfers out |
 
+**Telecom segments (§13D, as built).** The Telecom row above is the **sum of eight segments**: `dialog_cards`, `dialog_reloads`, `mobitel_cards`, `mobitel_reloads`, `airtel_cards`, `airtel_reloads`, `hutch_cards`, `hutch_reloads` (shown as "Telecom - Dialog Cards" and so on). Reloads segments earn reload commission (and EZCash commission under Dialog) less their expenses and over/short; Cards segments earn card sales less card COGS, stock adjustments, their expenses and over/short. Every figure of the Telecom row is the sum of the same figure of the eight segments. Rows that existed before segments belong to one read-only segment "Telecom before segments" (`legacy`), included in the Telecom total. Below, "segment" in the sense of this table means a book; a Telecom segment is always called that.
+
 Below the line (never P&L): owner drawings (cash & goods), capital, transfers, opening balances, provider/wallet top-ups, inventory purchases, ice-cream settlements, printing supplies, ice-cream fund balances and Cost ↔ Electricity moves.
 
 ## 2. Cash entry types → book → P&L
 | Type | Book | P&L effect |
 |---|---|---|
 | `sale_goods`, `sale_service`, `sale_refund` | shop | via sales / returns tables (revenue − cost) |
-| `card_sale`, `card_refund` | telecom | via sales / returns tables |
-| `reload_collection` | telecom | commission + extra only (from `reload_sales`) |
-| `ezcash_collection` | telecom | commission only (from `ezcash_sales`) |
-| `provider_topup`, `wallet_topup` | telecom | none |
-| `purchase_payment`, `purchase_refund` | shop or telecom (by products) | none (stock only) |
-| `expense`, `expense_refund` (reserved, never written: an expense void reverses the `expense` entry) | **shop or telecom only** (never icecream; category never electricity) | that segment's operating expenses |
+| `card_sale`, `card_refund` | telecom, segment = the card's provider + Cards | via sales / returns tables |
+| `reload_collection` | telecom, segment = the provider + Reloads | commission + extra only (from `reload_sales`) |
+| `ezcash_collection` | telecom, segment = Dialog Reloads | commission only (from `ezcash_sales`) |
+| `provider_topup` | telecom, segment = the provider + Reloads | none |
+| `wallet_topup` | telecom, segment = Dialog Reloads | none |
+| `purchase_payment`, `purchase_refund` | shop or telecom (by products; Telecom: the provider's Cards segment) | none (stock only) |
+| `expense`, `expense_refund` (reserved, never written: an expense void reverses the `expense` entry) | **shop or telecom only** (never icecream; category never electricity); Telecom: the segment chosen on the expense | that book's (Telecom: that segment's) operating expenses |
 | `icecream_sale` | icecream | revenue (from `icecream_days`) |
 | `icecream_materials_payment`, `icecream_electricity_payment` | icecream (any fund) | none — settlements of the daily allocations; **never an expense in any segment** |
 | `icecream_other_cost` | icecream (any fund) | from the Profit Fund → other ice-cream expense; from the Cost/Electricity fund → settlement (category never electricity) |
 | `printing_supplies` | shop | none (variance report only) |
-| `cash_adjustment` | any | cash over/short in that book's segment |
-| `opening_balance`, `capital`, `drawing_cash`, `transfer_out`, `transfer_in` | any | none |
+| `cash_adjustment` | any (Telecom: the counted segment) | cash over/short in that book's (Telecom: that segment's) line |
+| `opening_balance`, `capital`, `drawing_cash`, `transfer_out`, `transfer_in` | any (Telecom: the segment named on the entry or on that side of the transfer) | none |
 
-Every Ice Cream cash entry names exactly one fund (§10.2). Ice Cream fund moves create **no** cash entry; their profit effect is defined in §10.3.
+**Every Telecom cash entry names exactly one segment** (a stored `segment`, like the Ice Cream `fund`); Shop and Ice Cream entries have none. A reversal entry has the segment of its original (§13D). Every Ice Cream cash entry names exactly one fund (§10.2). Ice Cream fund moves create **no** cash entry; their profit effect is defined in §10.3.
 Non-cash: goods drawing (no P&L) · stock loss / stocktake (Stock adjustments line of the product's segment) · opening stock (no P&L) · ice-cream fund moves (no cash; profit effect per §10.3).
 
 ## 3. Inventory & weighted-average costing
@@ -73,6 +76,7 @@ Non-cash: goods drawing (no P&L) · stock loss / stocktake (Stock adjustments li
 - Scratch cards: stock products in the Scratch Cards category (book `telecom`); normal stock sale with COGS.
 - Example: 50,000 @ 600 bp + 50 extra → 3,050 commission; 50,000 @ 80 bp → 400.
 - R14: Telecom cash book will not reconcile to Telecom profit (no float tracking — owner decision).
+- **Segments (§13D, as built).** A reload and a provider top-up belong to that provider's Reloads segment; EZCash and a wallet top-up to Dialog Reloads; a scratch-card product, sale, purchase, stock loss, stocktake and personal-use drawing to the Cards segment of the provider linked to the product's category (every Telecom category is linked to one provider; a Telecom stock product needs such a category, otherwise `PRODUCT_NEEDS_PROVIDER`). A cart with cards of several providers is saved as one sale per provider; a purchase or stocktake may hold cards of ONE provider only (`MIXED_SEGMENTS`). The reload commission, EZCash rate and rounding extra rules above are unchanged.
 
 ## 6. Printing and other services (R12; screen renamed "Services", owner 2026-11-13)
 - The screen formerly called "Printing" is **Services**. Printing and photocopying work exactly as before; **other services** (for example phone setup) are configured as additional **service types** (name, price, standard cost) and sold through the same screen. The POS does **not** sell services at this stage; the unusable "Service" product kind is no longer offered when creating products (existing records and history are unchanged).
@@ -91,11 +95,11 @@ Non-cash: goods drawing (no P&L) · stock loss / stocktake (Stock adjustments li
 - Purchases (R11) are always fully paid in cash from the book derived from their products; mixing shop and telecom products in one purchase is rejected ("split into two bills").
 
 ## 8. Cash books, transfers, closings
-- Closing = opening + in − out (sum of ledger rows). Opening balance entered at go-live (`opening_balance`).
-- Transfer = linked `transfer_out` + `transfer_in` with shared `transfer_id`, one DB transaction, no P&L; void reverses both. The Ice Cream side names a fund (§10.2).
-- Cash count → expected vs counted; difference posted as `cash_adjustment` (note required) → "Cash over/short" line (R6).
-- Daily closing per book per date; edits to a closed day require reopen (audited) and are made as reversal + new rows (R9).
-- **Closed-day ordering protection (APPROVED 2026-11-13):** a financial write — create, void or return — dated **earlier than the latest closed day of any cash book it touches** is refused (`409 BACKDATE_BEFORE_CLOSED_DAY`, naming the book, the closed date and the entry date). A write dated **on** a closed day is refused as before (`DAY_CLOSED`). To backdate into an earlier period the owner first reopens the later closed day(s). This protects closed snapshots from drifting when an earlier open day is changed. Closing a day without a count (no cash entry) stays allowed; a count whose adjustment would post a cash entry follows the same rule. Closing without a count remains optional; the closing snapshot and the reopening behaviour (reason ≥ 3 characters, audited) are unchanged.
+- Closing = opening + in − out (sum of ledger rows). Opening balance entered at go-live (`opening_balance`); there is **one posted opening balance per scope** (a book; for Telecom a segment; for Ice Cream a fund).
+- Transfer = linked `transfer_out` + `transfer_in` with shared `transfer_id`, one DB transaction, no P&L; void reverses both. The Ice Cream side names a fund (§10.2); a Telecom side names a segment. A transfer between two different Telecom segments is allowed (the Telecom total does not change).
+- Cash count → expected vs counted; difference posted as `cash_adjustment` (note required) → "Cash over/short" line (R6). A Telecom count is of ONE segment's drawer.
+- Daily closing per **cash scope** per date (Shop, Ice Cream, or one Telecom segment); edits to a closed day require reopen (audited) and are made as reversal + new rows (R9). Closing one Telecom segment does not close the others.
+- **Closed-day ordering protection (APPROVED 2026-11-13):** a financial write — create, void or return — dated **earlier than the latest closed day of any cash scope it touches** (a cash book; for Telecom the segment) is refused (`409 BACKDATE_BEFORE_CLOSED_DAY`, naming the book or "Telecom - segment", the closed date and the entry date). A write dated **on** a closed day is refused as before (`DAY_CLOSED`). To backdate into an earlier period the owner first reopens the later closed day(s). This protects closed snapshots from drifting when an earlier open day is changed. Closing a day without a count (no cash entry) stays allowed; a count whose adjustment would post a cash entry follows the same rule. Closing without a count remains optional; the closing snapshot and the reopening behaviour (reason ≥ 3 characters, audited) are unchanged.
 
 ## 9. Drawings & capital
 - Cash drawing: cash-out from a chosen book (Ice Cream: and a chosen fund); no P&L.
@@ -282,7 +286,8 @@ Owner direction (2026-11-15 and 2026-11-16): discounts are **manually typed rupe
 - **D-10 Voids and records.** Voids, returns, void of a return (R-VR), closed days (R9), stock movements and the append-only ledgers are unchanged; a voided sale contributes to no report.
 - **D-11 Reporting.** Net sales equals today's sales figure; new read-only lines Gross sales / Discounts (price reductions, line discounts, bill discounts) / Net sales and a Discounts report that covers **Shop only**; Telecom discounts are always zero. No profit formula changes. Warnings "below minimum price / below cost" are judged on the net unit price and never block.
 
-## 13D. Telecom segments — APPROVED by the owner 2026-11-15 (Option A), implementation pending
+## 13D. Telecom segments — APPROVED by the owner 2026-11-15 (Option A), **IMPLEMENTED** (migrations 024-026)
+**As built (2026-11-18).** Branch `feature/telecom-segments`; nothing in this section changed in the build, only its wording says what exists now. The data model is a stored `segment` column on every table that holds a Telecom row (migrations 024-025), the view `v_product_segment` for products, `categories.provider_id` for the category-to-provider link, and consistency triggers (026) that keep a cash entry in the segment of its owning record. The restore validation checks all of it independently (`checkSegments`, see ARCHITECTURE.md). Details: DATABASE_SCHEMA.md, API_CONTRACTS.md "Telecom segments", `server/src/db/migrations/README.md`. Owner decisions taken 2026-11-16 ("you decide"): the default "Scratch Cards" category may be given a provider while it has no products; a purchase with cards of several providers is refused `MIXED_SEGMENTS`; a Telecom stocktake belongs to one provider's Cards segment; a correction of an entry-chosen record (expense, capital, cash drawing, transfer) keeps the original's segment unless another is supplied; one opening balance per scope; transfers between two Telecom segments are allowed; the dashboard "day not closed" reminder is per segment with activity; legacy closings can be reopened and closed again but no new legacy closing is made; legacy records can be voided (their reversal stays legacy).
 Owner decisions: **Option A**; **EZCash goes under Dialog Reloads**; **each Telecom expense goes to its own relevant segment**; the old Telecom balance question is moot because the owner will clear all data and start fresh after everything is built (the migration must still keep any existing rows valid). Remaining points of `PROPOSAL_TELECOM_SEGMENTS.md` follow its recommendations (owner: "you can do what you like"). Full design: that file.
 - **TS-1 Segments.** The Telecom book stays one book (`book = 'telecom'`). Every Telecom cash entry and Telecom record carries a **segment** = provider x kind: Dialog / Mobitel / Airtel / Hutch x Cards / Reloads (8 segments). The Telecom total is the sum of the 8; the Shop and Ice Cream books are unchanged. Each segment has its own opening balance, ledger, balance, drawer count (over/short), closing and reopening of a day (R9, ordering rule, R-FD apply **per segment**), negative-cash warning (R13) and profit and loss. Reports show the 8 segments and one Telecom total; the Combined P&L and the dashboard keep one Telecom figure.
 - **TS-2 Mapping.** Reload collection and provider top-up: that provider + Reloads. **EZCash collection and wallet top-up: Dialog + Reloads.** Card purchase, opening stock, card sale and card refund: the card product's category provider + Cards. Telecom expenses, capital and owner cash drawings: the segment chosen on the entry (required). Transfers name a segment on the Telecom side.

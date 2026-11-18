@@ -8,6 +8,8 @@
  * `sales_return_id` (migration 006).
  */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { segmentOfProduct } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { SQL_NOW_UTC, numberOrNull } from './sql-helpers.ts';
 
 export type LossBook = 'shop' | 'telecom';
@@ -17,7 +19,7 @@ export type LossStatus = 'posted' | 'void';
 
 /** One stock loss with its product name. */
 export interface StockLossRow {
-  id: number; businessDate: string; postedAt: string; productId: number; productName: string; book: LossBook;
+  id: number; businessDate: string; postedAt: string; productId: number; productName: string; book: LossBook; segment: StoredSegment | null;
   qty: number; costCents: number; reason: LossReason; note: string; source: LossSource; status: LossStatus;
   clientRef: string; voidedAt: string | null; voidReason: string | null;
   /** The sales return that caused this loss (`source = 'damaged_return'`), otherwise null. */
@@ -26,19 +28,19 @@ export interface StockLossRow {
 
 type N = number | bigint;
 interface Raw {
-  id: N; business_date: string; posted_at: string; product_id: N; product_name: string; book: LossBook;
+  id: N; business_date: string; posted_at: string; product_id: N; product_name: string; book: LossBook; segment: StoredSegment | null;
   qty: N; cost_cents: N; reason: LossReason; note: string; source: LossSource; status: LossStatus;
   client_ref: string; voided_at: string | null; void_reason: string | null; sales_return_id: N | null;
 }
 
-const SELECT = `SELECT l.id, l.business_date, l.posted_at, l.product_id, p.name AS product_name, l.book, l.qty, l.cost_cents,
+const SELECT = `SELECT l.id, l.business_date, l.posted_at, l.product_id, p.name AS product_name, l.book, l.segment, l.qty, l.cost_cents,
   l.reason, l.note, l.source, l.status, l.client_ref, l.voided_at, l.void_reason, l.sales_return_id
   FROM stock_losses l JOIN products p ON p.id = l.product_id`;
 
 function map(r: Raw): StockLossRow {
   return {
     id: Number(r.id), businessDate: r.business_date, postedAt: r.posted_at, productId: Number(r.product_id),
-    productName: r.product_name, book: r.book, qty: Number(r.qty), costCents: Number(r.cost_cents), reason: r.reason,
+    productName: r.product_name, book: r.book, segment: r.segment, qty: Number(r.qty), costCents: Number(r.cost_cents), reason: r.reason,
     note: r.note, source: r.source, status: r.status, clientRef: r.client_ref, voidedAt: r.voided_at,
     voidReason: r.void_reason, salesReturnId: numberOrNull(r.sales_return_id),
   };
@@ -53,11 +55,14 @@ function map(r: Raw): StockLossRow {
 export function insertStockLoss(conn: DatabaseSync, l: {
   businessDate: string; productId: number; book: LossBook; qty: number; costCents: number; reason: LossReason;
   note: string; clientRef: string; source?: LossSource; salesReturnId?: number | null;
+  /** Telecom only: the Cards segment of the loss (BUSINESS_RULES 13D). Omitted = derived from the product (the sale's scope for a damaged return). */
+  segment?: StoredSegment | null;
 }): number {
+  const segment = l.book === 'telecom' ? (l.segment ?? segmentOfProduct(conn, l.productId)) : null;
   const res = conn.prepare(
-    `INSERT INTO stock_losses (business_date, product_id, book, qty, cost_cents, reason, note, source, client_ref, sales_return_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(l.businessDate, l.productId, l.book, l.qty, l.costCents, l.reason, l.note, l.source ?? 'manual', l.clientRef,
+    `INSERT INTO stock_losses (business_date, product_id, book, segment, qty, cost_cents, reason, note, source, client_ref, sales_return_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(l.businessDate, l.productId, l.book, segment, l.qty, l.costCents, l.reason, l.note, l.source ?? 'manual', l.clientRef,
     l.salesReturnId ?? null);
   return Number(res.lastInsertRowid);
 }
@@ -79,7 +84,7 @@ export function getStockLossByClientRef(conn: DatabaseSync, ref: string): StockL
  * (voided rows are listed but not summed). `from`/`to` are inclusive business dates.
  */
 export function listStockLosses(conn: DatabaseSync, q: {
-  from?: string; to?: string; productId?: number; book?: LossBook; reason?: LossReason; status?: LossStatus;
+  from?: string; to?: string; productId?: number; book?: LossBook; segment?: StoredSegment; reason?: LossReason; status?: LossStatus;
   limit: number; offset: number;
 }): { items: StockLossRow[]; total: number; totalCostCents: number } {
   const where: string[] = [];
@@ -88,6 +93,7 @@ export function listStockLosses(conn: DatabaseSync, q: {
   if (q.to !== undefined) { where.push('l.business_date <= ?'); params.push(q.to); }
   if (q.productId !== undefined) { where.push('l.product_id = ?'); params.push(q.productId); }
   if (q.book !== undefined) { where.push('l.book = ?'); params.push(q.book); }
+  if (q.segment !== undefined) { where.push('l.segment = ?'); params.push(q.segment); }
   if (q.reason !== undefined) { where.push('l.reason = ?'); params.push(q.reason); }
   if (q.status !== undefined) { where.push('l.status = ?'); params.push(q.status); }
   const w = where.length ? ` WHERE ${where.join(' AND ')}` : '';

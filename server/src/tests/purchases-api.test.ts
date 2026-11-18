@@ -58,7 +58,7 @@ const reconOk = (s: ApiBase) => expect(reconcileStock(s.ctx.database.conn)).toMa
 
 // Exact field lists of a purchase and a purchase line (contract check: nothing may appear or vanish silently).
 const PURCHASE_KEYS = [
-  'backdated', 'billNo', 'book', 'businessDate', 'clientRef', 'id', 'items', 'notes', 'postedAt', 'returns', 'status',
+  'backdated', 'billNo', 'book', 'businessDate', 'clientRef', 'id', 'items', 'notes', 'postedAt', 'returns', 'segment', 'status',
   'supplierId', 'supplierName', 'totalCents', 'voidedAt', 'voidReason',
 ].sort();
 const ITEM_KEYS = ['id', 'lineTotalCents', 'packSize', 'packs', 'productId', 'productName', 'returnedUnits', 'unitCostCents', 'units'];

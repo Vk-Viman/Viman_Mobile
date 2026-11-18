@@ -29,6 +29,8 @@ import { postCash, reverseCash } from './cash-posting.ts';
 import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayNotClosed, assertDayOpen } from './day-closing.ts';
+import { resolveEntrySegment, toScope } from './segments.ts';
+import type { CashScope, ScopeQuery, StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated, isBackdatedToday,
@@ -38,14 +40,14 @@ import type { Fields } from './validation.ts';
 
 /** A cash count as returned by the API (adds the `backdated` flag). */
 export interface CashCount {
-  id: number; book: CashBook; fund: IceFund | null; businessDate: string; postedAt: string; backdated: boolean;
+  id: number; book: CashBook; fund: IceFund | null; segment: StoredSegment | null; businessDate: string; postedAt: string; backdated: boolean;
   expectedCents: number; countedCents: number; differenceCents: number; note: string; status: RecordStatus;
   voidedAt: string | null; voidReason: string | null; cashEntryId: number | null; clientRef: string;
 }
 
 function toCount(r: CashCountRow): CashCount {
   return {
-    id: r.id, book: r.book, fund: r.fund, businessDate: r.businessDate, postedAt: r.postedAt,
+    id: r.id, book: r.book, fund: r.fund, segment: r.segment, businessDate: r.businessDate, postedAt: r.postedAt,
     backdated: isBackdated(r.businessDate, r.postedAt), expectedCents: r.expectedCents, countedCents: r.countedCents,
     differenceCents: r.differenceCents, note: r.note, status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason,
     cashEntryId: r.cashEntryId, clientRef: r.clientRef,
@@ -59,11 +61,13 @@ function loadCount(conn: DatabaseSync, id: number): CashCount {
 }
 
 /**
- * The balance the drawer SHOULD hold at the end of `date`: every cash entry of the book dated on or before it (sec 8).
+ * The balance the drawer SHOULD hold at the end of `date`: every cash entry of the scope dated on or before it (sec 8).
+ * Telecom counts ONE segment's drawer, so the scope must name its segment (TELECOM_SEGMENT_REQUIRED otherwise).
  * Read-only; also used by the screen to show the expected amount before the owner types the counted one.
  */
-export function expectedCashAsOf(ctx: AppContext, book: CashBook, date: string): { expectedCents: number } {
-  return { expectedCents: cashBalanceAsOf(ctx.database.conn, book, date) };
+export function expectedCashAsOf(ctx: AppContext, scope: CashBook | ScopeQuery | CashScope, date: string): { expectedCents: number } {
+  const sc = toScope(typeof scope === 'string' ? scope : { book: scope.book, segment: scope.segment ?? null });
+  return { expectedCents: cashBalanceAsOf(ctx.database.conn, sc.segment ? { book: sc.book, segment: sc.segment } : { book: sc.book }, date) };
 }
 
 /** One count by id. @throws AppError 404 NOT_FOUND. */
@@ -73,7 +77,7 @@ export function getCashCountById(ctx: AppContext, id: number): CashCount {
 
 /** Lists counts, newest business date first. */
 export function listCashCounts(ctx: AppContext, q: {
-  book?: CashBook; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
+  book?: CashBook; segment?: StoredSegment; from?: string; to?: string; status?: RecordStatus; limit: number; offset: number;
 }): { items: CashCount[]; total: number } {
   const r = listCashCountRows(ctx.database.conn, q);
   return { items: r.items.map(toCount), total: r.total };
@@ -81,11 +85,12 @@ export function listCashCounts(ctx: AppContext, q: {
 
 /** What a count needs from the caller (the route body, or the closing that includes a count). */
 export interface CashCountInput {
-  businessDate: string; book: CashBook; countedCents: number; fund?: IceFund; note?: string; clientRef: string;
+  businessDate: string; book: CashBook; segment?: StoredSegment; countedCents: number; fund?: IceFund; note?: string; clientRef: string;
 }
 
 /**
- * The request-level checks of a count that need no database: a fund may only be named for the Ice Cream book.
+ * The request-level checks of a count that need no database: a fund may only be named for the Ice Cream book (and a
+ * Telecom count needs its segment: see `resolveEntrySegment`).
  * @throws AppError 400 FUND_NOT_ALLOWED.
  */
 export function checkCountFund(book: CashBook, fund: IceFund | undefined): void {
@@ -103,13 +108,15 @@ export function checkCountFund(book: CashBook, fund: IceFund | undefined): void 
  *   400 NOTE_REQUIRED / FUND_REQUIRED.
  */
 export function postCashCount(conn: DatabaseSync, body: CashCountInput, note: string): { item: CashCount; warnings: CashWarning[] } {
-  assertDayNotClosed(conn, [body.book], body.businessDate); // R9: the exact day first
-  const expectedCents = cashBalanceAsOf(conn, body.book, body.businessDate);
+  const segment = resolveEntrySegment(body.book, body.segment); // 13D: Telecom counts ONE segment's drawer
+  const scope = { book: body.book, segment };
+  assertDayNotClosed(conn, [scope], body.businessDate); // R9: the exact day first (of this segment only)
+  const expectedCents = cashBalanceAsOf(conn, segment ? { book: body.book, segment } : { book: body.book }, body.businessDate);
   const differenceCents = body.countedCents - expectedCents; // C4: counted - expected
   if (differenceCents !== 0) {
     // Section 8 ordering: an adjustment dated before a LATER closed day would change that closed day. A count that
     // matches posts no cash entry, changes no balance and so stays allowed (closing without a cash entry is fine).
-    assertDayOpen(conn, [body.book], body.businessDate);
+    assertDayOpen(conn, [scope], body.businessDate);
     if (note.length === 0) {
       throw new AppError(400, 'NOTE_REQUIRED', 'The count does not match the books. Please write a note to explain the difference.',
         { note: 'A note is required when the count differs from the books.' });
@@ -121,13 +128,13 @@ export function postCashCount(conn: DatabaseSync, body: CashCountInput, note: st
   }
   const fund = body.book === 'icecream' && differenceCents !== 0 ? (body.fund as IceFund) : null;
   const id = insertCashCount(conn, {
-    book: body.book, fund, businessDate: body.businessDate, expectedCents, countedCents: body.countedCents, differenceCents,
+    book: body.book, fund, segment, businessDate: body.businessDate, expectedCents, countedCents: body.countedCents, differenceCents,
     note, clientRef: body.clientRef,
   });
   let touched = false;
   if (differenceCents !== 0) {
     const entryId = postCash(conn, {
-      book: body.book, fund, businessDate: body.businessDate, type: 'cash_adjustment', amountCents: differenceCents,
+      book: body.book, fund, segment, businessDate: body.businessDate, type: 'cash_adjustment', amountCents: differenceCents,
       refTable: 'cash_counts', refId: id, fundKind: 'cash_over_short', note: `Cash count #${id}: ${note}`,
     });
     linkCashEntry(conn, id, entryId);
@@ -137,7 +144,7 @@ export function postCashCount(conn: DatabaseSync, body: CashCountInput, note: st
   logAudit(conn, 'cash_count', String(id), 'create', null, item, undefined,
     { businessDate: item.businessDate, backdated: item.backdated });
   // R13: only a SHORT takes cash out; an over (or an exact count) can never newly push a book negative.
-  return { item, warnings: touched && differenceCents < 0 ? negativeCashWarnings(conn, [body.book]) : [] };
+  return { item, warnings: touched && differenceCents < 0 ? negativeCashWarnings(conn, [scope]) : [] };
 }
 
 /**
@@ -155,12 +162,13 @@ export function createCashCount(ctx: AppContext, body: CashCountInput): { item: 
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
   checkCountFund(body.book, body.fund);
+  const segment = resolveEntrySegment(body.book, body.segment);
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
 
   return runWrite(ctx, (conn) => {
     const existing = getCashCountByClientRef(conn, body.clientRef);
     if (existing) {
-      if (existing.book !== body.book || existing.businessDate !== body.businessDate) {
+      if (existing.book !== body.book || existing.segment !== segment || existing.businessDate !== body.businessDate) {
         throw new AppError(409, 'CLIENT_REF_CONFLICT', 'This clientRef was already used for a different count.');
       }
       return { item: toCount(existing), warnings: [], created: false };
@@ -186,8 +194,9 @@ export function voidCashCount(ctx: AppContext, id: number, body: { reason: strin
     if (!row) throw notFound('Cash count');
     // R9: judged on the count's own date. A count with an adjustment is reversed by a cash entry dated like the count,
     // so it also follows the ordering protection; a count without one moves no money and only needs an open day.
-    if (row.cashEntryId !== null) assertDayOpen(conn, [row.book], row.businessDate);
-    else assertDayNotClosed(conn, [row.book], row.businessDate);
+    const scope = { book: row.book, segment: row.segment };
+    if (row.cashEntryId !== null) assertDayOpen(conn, [scope], row.businessDate);
+    else assertDayNotClosed(conn, [scope], row.businessDate);
     if (row.status === 'void') throw alreadyVoid('cash count');
     const before = toCount(row);
 
@@ -200,6 +209,6 @@ export function voidCashCount(ctx: AppContext, id: number, body: { reason: strin
     const after = loadCount(conn, id);
     logAudit(conn, 'cash_count', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return { item: after, warnings: row.cashEntryId !== null ? negativeCashWarnings(conn, [row.book]) : [] };
+    return { item: after, warnings: row.cashEntryId !== null ? negativeCashWarnings(conn, [scope]) : [] };
   });
 }

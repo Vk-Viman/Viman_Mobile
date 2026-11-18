@@ -38,7 +38,10 @@ describe('correct a transfer: legs and books', () => {
     const s = await world();
     const o = (await tr(s, 'shop', 'telecom', 10_000, { businessDate: D(2) })).body.item;
     expect(state(s)).toMatchObject({ shop: 990_000, telecom: 1_010_000 });
-    const r = await fix(s, o.id, { fromBook: 'telecom', toBook: 'icecream', toFund: 'electricity', amountCents: 6_000 });
+    // Phase 26 (13D): the original's Telecom side was the receiving one, so the new Telecom source must name its segment
+    const noSeg = await fix(s, o.id, { fromBook: 'telecom', toBook: 'icecream', toFund: 'electricity', amountCents: 6_000 });
+    expect([noSeg.status, noSeg.body.error.code]).toEqual([400, 'SEGMENT_REQUIRED']);
+    const r = await fix(s, o.id, { fromBook: 'telecom', fromSegment: 'dialog_reloads', toBook: 'icecream', toFund: 'electricity', amountCents: 6_000 });
     expect(r.status).toBe(201);
     expect(r.body.original).toMatchObject({ id: o.id, status: 'void', voidReason: 'wrong books' });
     expect(r.body.replacement).toMatchObject({ fromBook: 'telecom', toBook: 'icecream', fromFund: null, toFund: 'electricity', businessDate: D(2) });

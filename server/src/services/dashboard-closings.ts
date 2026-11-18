@@ -10,6 +10,10 @@
  *    never listed as "behind".
  *  - A day before the book's first ever cash entry is not listed: the book did not exist yet, so there was nothing to close
  *    (a brand-new shop must not open to a list of "unclosed" days).
+ *  - Telecom segments (13D, decision 7): a day is closed per SEGMENT, so Telecom is listed once per segment that has had cash activity
+ *    (`segment`, `label`, `lastClosedDate` on that entry); a Telecom with no active segment is one plain `{ book: 'telecom', dates: [] }` entry.
+ *    The read-only `legacy` segment is never listed (no new closing can be made for it). `lastClosedByBook.telecom` stays the latest closed
+ *    date in any segment.
  *  - `lastClosedByBook` is the latest closed date on or before the dashboard date (so a past dashboard date shows what was true then).
  */
 import type { DatabaseSync } from 'node:sqlite';
@@ -17,6 +21,8 @@ import type { CashBook } from '../repositories/cash-entries.repo.ts';
 import { CLOSED_SQL, closedDates } from '../repositories/daily-closings.repo.ts';
 import { addDays } from './dashboard-dates.ts';
 import { BOOKS } from './day-closing.ts';
+import { SEGMENT_LABEL, TELECOM_SEGMENTS } from './segments.ts';
+import type { TelecomSegment } from './segments.ts';
 
 /** Days back that count as "behind" (the contract's seven). */
 export const OPEN_DAYS_WINDOW = 7;
@@ -25,7 +31,7 @@ export const OPEN_DAYS_WINDOW = 7;
 export interface ClosingsBlock {
   lastClosedByBook: Record<CashBook, string | null>;
   /** One entry per book (always all three, in book order); `dates` is oldest first and empty when the book is up to date. */
-  openDaysBehind: Array<{ book: CashBook; dates: string[] }>;
+  openDaysBehind: Array<{ book: CashBook; dates: string[]; segment?: TelecomSegment; label?: string; lastClosedDate?: string | null }>;
 }
 
 function lastClosedOnOrBefore(conn: DatabaseSync, book: CashBook, asOf: string): string | null {
@@ -34,8 +40,16 @@ function lastClosedOnOrBefore(conn: DatabaseSync, book: CashBook, asOf: string):
   return r.d;
 }
 
-function firstActivity(conn: DatabaseSync, book: CashBook): string | null {
-  const r = conn.prepare('SELECT MIN(business_date) AS d FROM cash_entries WHERE book = ?').get(book) as unknown as { d: string | null };
+function firstActivity(conn: DatabaseSync, book: CashBook, segment?: TelecomSegment): string | null {
+  const r = (segment
+    ? conn.prepare('SELECT MIN(business_date) AS d FROM cash_entries WHERE book = ? AND segment = ?').get(book, segment)
+    : conn.prepare('SELECT MIN(business_date) AS d FROM cash_entries WHERE book = ?').get(book)) as unknown as { d: string | null };
+  return r.d;
+}
+
+function lastClosedOfSegment(conn: DatabaseSync, segment: TelecomSegment, asOf: string): string | null {
+  const r = conn.prepare(`SELECT MAX(business_date) AS d FROM daily_closings WHERE book = 'telecom' AND segment = ? AND ${CLOSED_SQL} AND business_date <= ?`)
+    .get(segment, asOf) as unknown as { d: string | null };
   return r.d;
 }
 
@@ -47,6 +61,20 @@ export function closingsBlock(conn: DatabaseSync, asOf: string): ClosingsBlock {
   const windowTo = addDays(asOf, -1);
   for (const book of BOOKS) {
     lastClosedByBook[book] = lastClosedOnOrBefore(conn, book, asOf);
+    if (book === 'telecom') {
+      let any = false;
+      for (const segment of TELECOM_SEGMENTS) {
+        const firstSeg = firstActivity(conn, book, segment);
+        if (firstSeg === null) continue;
+        any = true;
+        const closed = new Set(closedDates(conn, { book, segment }, windowFrom, windowTo));
+        const segDates: string[] = [];
+        for (let d = windowFrom < firstSeg ? firstSeg : windowFrom; d <= windowTo; d = addDays(d, 1)) if (!closed.has(d)) segDates.push(d);
+        openDaysBehind.push({ book, segment, label: SEGMENT_LABEL[segment], dates: segDates, lastClosedDate: lastClosedOfSegment(conn, segment, asOf) });
+      }
+      if (!any) openDaysBehind.push({ book, dates: [] });
+      continue;
+    }
     const first = firstActivity(conn, book);
     const dates: string[] = [];
     if (first !== null) {

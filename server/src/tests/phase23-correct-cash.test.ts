@@ -333,7 +333,11 @@ describe('10. expenses: E2 and Ice Cream refusals still apply to the replacement
   it('the book of an expense can be corrected (Shop -> Telecom): the cash moves between the books', async () => {
     const s = await world();
     const o = await made(s, k, { amountCents: 5000 });
-    const r = await correct(s, k, o.id, k.replacement({ book: 'telecom', amountCents: 5000 }));
+    // Phase 26 (13D): the original has no segment to keep, so a Telecom replacement must name one
+    const noSeg = await correct(s, k, o.id, k.replacement({ book: 'telecom', amountCents: 5000 }));
+    expect([noSeg.status, noSeg.body.error.code]).toEqual([400, 'SEGMENT_REQUIRED']);
+    expect(row(s, k, o.id).status).toBe('posted');
+    const r = await correct(s, k, o.id, k.replacement({ book: 'telecom', segment: 'dialog_reloads', amountCents: 5000 }));
     expect(r.status).toBe(201);
     expect(state(s)).toMatchObject({ shop: 1_000_000, telecom: 995_000 });
   });

@@ -11,25 +11,32 @@ import { SQL_NOW_UTC } from './sql-helpers.ts';
 /** The two stock-holding cash books. */
 export type Book = 'shop' | 'telecom';
 
-/** A category plus how many products use it (`productCount`, computed by a sub-query). */
+/**
+ * A category plus how many products use it (`productCount`, computed by a sub-query). A Telecom category may be linked to ONE
+ * provider (`providerId` / `providerName`, 13D): its card products then belong to that provider's Cards segment. Shop categories
+ * and provider-less Telecom categories have null.
+ */
 export interface CategoryRow {
   id: number; name: string; book: Book; isDefault: boolean; active: boolean;
+  providerId: number | null; providerName: string | null;
   productCount: number; createdAt: string; updatedAt: string;
 }
 
 interface Raw {
   id: number | bigint; name: string; book: Book; is_default: number | bigint; active: number | bigint;
+  provider_id: number | bigint | null; provider_name: string | null;
   product_count: number | bigint; created_at: string; updated_at: string;
 }
 
-const SELECT = `SELECT c.id, c.name, c.book, c.is_default, c.active,
+const SELECT = `SELECT c.id, c.name, c.book, c.is_default, c.active, c.provider_id, rp.name AS provider_name,
   (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id) AS product_count,
-  c.created_at, c.updated_at FROM categories c`;
+  c.created_at, c.updated_at FROM categories c LEFT JOIN reload_providers rp ON rp.id = c.provider_id`;
 
 function map(r: Raw): CategoryRow {
   return {
     id: Number(r.id), name: r.name, book: r.book,
     isDefault: Number(r.is_default) === 1, active: Number(r.active) === 1,
+    providerId: r.provider_id === null ? null : Number(r.provider_id), providerName: r.provider_name,
     productCount: Number(r.product_count), createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -61,19 +68,26 @@ export function findCategoryByBookName(conn: DatabaseSync, book: Book, name: str
 }
 
 /** Inserts a (non-default, active) category and returns its id. */
-export function insertCategory(conn: DatabaseSync, c: { name: string; book: Book }): number {
-  const res = conn.prepare('INSERT INTO categories (name, book) VALUES (?, ?)').run(c.name, c.book);
+export function insertCategory(conn: DatabaseSync, c: { name: string; book: Book; providerId?: number | null }): number {
+  const res = conn.prepare('INSERT INTO categories (name, book, provider_id) VALUES (?, ?, ?)').run(c.name, c.book, c.providerId ?? null);
   return Number(res.lastInsertRowid);
 }
 
-/** Updates only the fields present in `patch` and stamps `updated_at`; an empty patch does nothing. */
+/** Reload provider (Dialog, Mobitel, Airtel, Hutch) by id, or undefined. */
+export function getProviderRow(conn: DatabaseSync, id: number): { id: number; name: string } | undefined {
+  const r = conn.prepare('SELECT id, name FROM reload_providers WHERE id = ?').get(id) as unknown as { id: number | bigint; name: string } | undefined;
+  return r ? { id: Number(r.id), name: r.name } : undefined;
+}
+
+/** Updates only the fields present in `patch` and stamps `updated_at`; an empty patch does nothing. `providerId: null` clears the provider. */
 export function updateCategory(
-  conn: DatabaseSync, id: number, patch: { name?: string; book?: Book; active?: boolean },
+  conn: DatabaseSync, id: number, patch: { name?: string; book?: Book; active?: boolean; providerId?: number | null },
 ): void {
   const sets: string[] = [];
   const params: SQLInputValue[] = [];
   if (patch.name !== undefined) { sets.push('name = ?'); params.push(patch.name); }
   if (patch.book !== undefined) { sets.push('book = ?'); params.push(patch.book); }
+  if (patch.providerId !== undefined) { sets.push('provider_id = ?'); params.push(patch.providerId); }
   if (patch.active !== undefined) { sets.push('active = ?'); params.push(patch.active ? 1 : 0); }
   if (sets.length === 0) return;
   sets.push(`updated_at = ${SQL_NOW_UTC}`);

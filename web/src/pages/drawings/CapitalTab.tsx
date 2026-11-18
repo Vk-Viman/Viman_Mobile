@@ -64,7 +64,7 @@ export function CapitalTab() {
   const columns: Column<CapitalEntry>[] = [
     { key: 'date', header: 'Date', render: (e) => <span className="inline-flex flex-wrap items-center gap-2">{e.businessDate}{e.backdated && <Badge tone="amber">Backdated</Badge>}</span> },
     { key: 'kind', header: 'Kind', render: (e) => <Badge tone={e.kind === 'capital' ? 'brand' : 'neutral'}>{e.kind === 'capital' ? 'Capital' : 'Opening balance'}</Badge> },
-    { key: 'book', header: 'Book', render: (e) => <CashBookBadge book={e.book} fund={e.fund} /> },
+    { key: 'book', header: 'Book', render: (e) => <CashBookBadge book={e.book} fund={e.fund} segment={e.segment} /> },
     { key: 'note', header: 'Note', render: (e) => e.note || '—' },
     { key: 'amount', header: 'Amount (Rs.)', align: 'right', render: (e) => <Money cents={e.amountCents} /> },
     {

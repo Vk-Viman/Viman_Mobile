@@ -37,6 +37,8 @@ import { negativeCashWarnings } from './cash-warnings.ts';
 import type { CashWarning } from './cash-warnings.ts';
 import { assertDayOpen } from './day-closing.ts';
 import { assertFundMatchesBook } from './fund-rules.ts';
+import { resolveEntrySegment } from './segments.ts';
+import type { CashScope, StoredSegment } from './segments.ts';
 import { runWrite } from './stock-common.ts';
 import {
   NOTE_MAX_LENGTH, REASON_MAX_LENGTH, alreadyVoid, assertNoFieldErrors, checkBusinessDate, isBackdated, isBackdatedToday,
@@ -47,14 +49,14 @@ import type { Fields } from './validation.ts';
 /** A transfer as returned by the API (adds the `backdated` flag). */
 export interface Transfer {
   id: number; businessDate: string; postedAt: string; backdated: boolean; fromBook: CashBook; toBook: CashBook;
-  fromFund: IceFund | null; toFund: IceFund | null; amountCents: number; note: string; status: RecordStatus;
+  fromSegment: StoredSegment | null; toSegment: StoredSegment | null; fromFund: IceFund | null; toFund: IceFund | null; amountCents: number; note: string; status: RecordStatus;
   voidedAt: string | null; voidReason: string | null; clientRef: string;
 }
 
 function toTransfer(r: TransferRow): Transfer {
   return {
     id: r.id, businessDate: r.businessDate, postedAt: r.postedAt, backdated: isBackdated(r.businessDate, r.postedAt),
-    fromBook: r.fromBook, toBook: r.toBook, fromFund: r.fromFund, toFund: r.toFund, amountCents: r.amountCents, note: r.note,
+    fromBook: r.fromBook, toBook: r.toBook, fromSegment: r.fromSegment, toSegment: r.toSegment, fromFund: r.fromFund, toFund: r.toFund, amountCents: r.amountCents, note: r.note,
     status: r.status, voidedAt: r.voidedAt, voidReason: r.voidReason, clientRef: r.clientRef,
   };
 }
@@ -75,7 +77,7 @@ export function getTransfer(ctx: AppContext, id: number): Transfer {
  * the filters (a voided transfer is listed, greyed out, but not counted).
  */
 export function listTransfers(ctx: AppContext, q: {
-  from?: string; to?: string; book?: CashBook; status?: RecordStatus; limit: number; offset: number;
+  from?: string; to?: string; book?: CashBook; segment?: StoredSegment; status?: RecordStatus; limit: number; offset: number;
 }): { items: Transfer[]; total: number; totals: { amountCents: number } } {
   const r = listTransferRows(ctx.database.conn, q);
   return { items: r.items.map(toTransfer), total: r.total, totals: { amountCents: r.amountCents } };
@@ -83,7 +85,7 @@ export function listTransfers(ctx: AppContext, q: {
 
 /** Request body of a transfer. */
 export interface TransferCreate {
-  businessDate: string; fromBook: CashBook; toBook: CashBook; fromFund?: IceFund; toFund?: IceFund; amountCents: number;
+  businessDate: string; fromBook: CashBook; toBook: CashBook; fromSegment?: StoredSegment; toSegment?: StoredSegment; fromFund?: IceFund; toFund?: IceFund; amountCents: number;
   note?: string; clientRef: string;
 }
 
@@ -92,7 +94,7 @@ export interface TransferCreate {
  * @returns The new cash entry id.
  */
 function postLeg(conn: DatabaseSync, e: {
-  transferId: number; book: CashBook; fund: IceFund | null; businessDate: string; type: 'transfer_out' | 'transfer_in';
+  transferId: number; book: CashBook; segment: StoredSegment | null; fund: IceFund | null; businessDate: string; type: 'transfer_out' | 'transfer_in';
   amountCents: number;
 }): number {
   const id = insertTransferLeg(conn, e);
@@ -113,7 +115,7 @@ function postLeg(conn: DatabaseSync, e: {
 function reverseLeg(conn: DatabaseSync, original: CashEntryRow, note: string): void {
   if (original.transferId === null) throw new Error(`Cash entry #${original.id} is not a transfer leg`);
   insertTransferLeg(conn, {
-    transferId: original.transferId, book: original.book, fund: original.fund, businessDate: original.businessDate,
+    transferId: original.transferId, book: original.book, segment: original.segment, fund: original.fund, businessDate: original.businessDate,
     type: original.type as 'transfer_out' | 'transfer_in', amountCents: -original.amountCents, reversesEntryId: original.id, note,
   });
   if (original.book !== 'icecream') return;
@@ -141,13 +143,21 @@ export function createTransfer(ctx: AppContext, body: TransferCreate): { item: T
   const fields: Fields = {};
   const note = trimmed(fields, 'note', 'Note', body.note, 0, NOTE_MAX_LENGTH);
   assertNoFieldErrors(fields);
-  if (body.fromBook === body.toBook) {
+  if (body.fromBook === body.toBook && body.fromBook !== 'telecom') {
     throw new AppError(400, 'SAME_BOOK', 'Choose two different books. Money is moved from one book to another.',
       { toBook: 'Choose a different book from the one the money comes from.' });
   }
   assertFundMatchesBook(body.fromBook, body.fromFund, 'fromFund');
   assertFundMatchesBook(body.toBook, body.toFund, 'toFund');
+  const fromSegment = resolveEntrySegment(body.fromBook, body.fromSegment, { field: 'fromSegment' }); // 13D: one per Telecom side
+  const toSegment = resolveEntrySegment(body.toBook, body.toSegment, { field: 'toSegment' });
+  if (body.fromBook === 'telecom' && body.toBook === 'telecom' && fromSegment === toSegment) {
+    throw new AppError(400, 'SAME_SEGMENT', 'Choose two different segments. Money is moved from one segment to another.',
+      { toSegment: 'Choose a different segment from the one the money comes from.' });
+  }
   checkBusinessDate(body.businessDate); // schema -> real date -> R-FD
+  const fromScope: CashScope = { book: body.fromBook, segment: fromSegment };
+  const toScope: CashScope = { book: body.toBook, segment: toSegment };
   const fromFund = body.fromBook === 'icecream' ? (body.fromFund as IceFund) : null;
   const toFund = body.toBook === 'icecream' ? (body.toFund as IceFund) : null;
 
@@ -155,23 +165,23 @@ export function createTransfer(ctx: AppContext, body: TransferCreate): { item: T
     const existing = getTransferByClientRef(conn, body.clientRef);
     if (existing) return { item: toTransfer(existing), warnings: [], created: false };
 
-    assertDayOpen(conn, [body.fromBook, body.toBook], body.businessDate); // R9: both books
+    assertDayOpen(conn, [fromScope, toScope], body.businessDate); // R9: both scopes
     const id = insertTransfer(conn, {
-      businessDate: body.businessDate, fromBook: body.fromBook, toBook: body.toBook, fromFund, toFund,
+      businessDate: body.businessDate, fromBook: body.fromBook, toBook: body.toBook, fromSegment, toSegment, fromFund, toFund,
       amountCents: body.amountCents, note, clientRef: body.clientRef,
     });
     postLeg(conn, {
-      transferId: id, book: body.fromBook, fund: fromFund, businessDate: body.businessDate, type: 'transfer_out',
+      transferId: id, book: body.fromBook, segment: fromSegment, fund: fromFund, businessDate: body.businessDate, type: 'transfer_out',
       amountCents: -body.amountCents,
     });
     postLeg(conn, {
-      transferId: id, book: body.toBook, fund: toFund, businessDate: body.businessDate, type: 'transfer_in',
+      transferId: id, book: body.toBook, segment: toSegment, fund: toFund, businessDate: body.businessDate, type: 'transfer_in',
       amountCents: body.amountCents,
     });
     const item = loadTransfer(conn, id);
     logAudit(conn, 'cash_transfer', String(id), 'create', null, item, undefined,
       { businessDate: item.businessDate, backdated: item.backdated });
-    return { item, warnings: negativeCashWarnings(conn, [body.fromBook]), created: true }; // R13: warn, never block
+    return { item, warnings: negativeCashWarnings(conn, [fromScope]), created: true }; // R13: warn, never block
   });
 }
 
@@ -190,7 +200,7 @@ export function voidTransfer(ctx: AppContext, id: number, body: { reason: string
   return runWrite(ctx, (conn) => {
     const row = getTransferRow(conn, id);
     if (!row) throw notFound('Transfer');
-    assertDayOpen(conn, [row.fromBook, row.toBook], row.businessDate); // R9: the reversals copy the transfer's date
+    assertDayOpen(conn, [{ book: row.fromBook, segment: row.fromSegment }, { book: row.toBook, segment: row.toSegment }], row.businessDate); // R9: the reversals copy the transfer's date
     if (row.status === 'void') throw alreadyVoid('transfer');
     const before = toTransfer(row);
 
@@ -201,6 +211,6 @@ export function voidTransfer(ctx: AppContext, id: number, body: { reason: string
     const after = loadTransfer(conn, id);
     logAudit(conn, 'cash_transfer', String(id), 'void', before, after, reason,
       { businessDate: after.businessDate, backdated: isBackdatedToday(after.businessDate) });
-    return { item: after, warnings: negativeCashWarnings(conn, [row.toBook]) };
+    return { item: after, warnings: negativeCashWarnings(conn, [{ book: row.toBook, segment: row.toSegment }]) };
   });
 }

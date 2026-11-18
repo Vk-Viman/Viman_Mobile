@@ -6,7 +6,7 @@
  *
  *   GET  /reload-providers          list with effective rates      PUT /reload-providers/:id   edit rate / active
  *   POST /reload-sales              create (201; 200 on a repeated `clientRef`)
- *   GET  /reload-sales              list + totals                  GET /reload-sales/:id       POST /reload-sales/:id/void
+ *   GET  /reload-sales              list + totals (?segment= on every list)                  GET /reload-sales/:id       POST /reload-sales/:id/void
  *   POST /ezcash-sales              create (provider = Dialog)     GET /ezcash-sales (+ /:id)  POST /ezcash-sales/:id/void
  *   POST /telecom/topups            create                         GET /telecom/topups (+ /:id) POST /telecom/topups/:id/void
  *   GET  /telecom/summary?from&to   per-provider and total figures (revenue = commission only)
@@ -24,6 +24,8 @@ import {
   checkEzCashCorrection, checkReloadCorrection, correctEzCash, correctReload, previewEzCashCorrection, previewReloadCorrection,
 } from '../services/correction-telecom.ts';
 import type { TelecomCorrectionRequest } from '../services/correction-telecom.ts';
+import { STORED_SEGMENT_SCHEMA } from '../services/segments.ts';
+import type { StoredSegment } from '../services/segments.ts';
 import { correctionBodySchema } from './corrections.ts';
 import {
   checkQueryDates, clientRef, dateField, dateQuery, idParamsSchema, intQuery, parseId, parsePaging, voidBody,
@@ -100,19 +102,19 @@ const ezcashCorrectionBody = telecomCorrectionBody(ezcashBody);
 const reloadListQuery = {
   type: 'object',
   additionalProperties: false,
-  properties: { from: dateQuery, to: dateQuery, providerId: intQuery, status: statusQuery, limit: intQuery, offset: intQuery },
+  properties: { from: dateQuery, to: dateQuery, providerId: intQuery, status: statusQuery, segment: STORED_SEGMENT_SCHEMA, limit: intQuery, offset: intQuery },
 } as const;
 
 const ezcashListQuery = {
   type: 'object',
   additionalProperties: false,
-  properties: { from: dateQuery, to: dateQuery, status: statusQuery, limit: intQuery, offset: intQuery },
+  properties: { from: dateQuery, to: dateQuery, status: statusQuery, segment: STORED_SEGMENT_SCHEMA, limit: intQuery, offset: intQuery },
 } as const;
 
 const topupListQuery = {
   type: 'object',
   additionalProperties: false,
-  properties: { from: dateQuery, to: dateQuery, kind: kindEnum, providerId: intQuery, status: statusQuery, limit: intQuery, offset: intQuery },
+  properties: { from: dateQuery, to: dateQuery, kind: kindEnum, providerId: intQuery, status: statusQuery, segment: STORED_SEGMENT_SCHEMA, limit: intQuery, offset: intQuery },
 } as const;
 
 const summaryQuery = {
@@ -122,7 +124,7 @@ const summaryQuery = {
 } as const;
 
 type Status = 'posted' | 'void';
-interface RawList { from?: string; to?: string; providerId?: string; status?: Status; kind?: 'provider_topup' | 'wallet_topup'; limit?: string; offset?: string }
+interface RawList { from?: string; to?: string; providerId?: string; status?: Status; kind?: 'provider_topup' | 'wallet_topup'; segment?: StoredSegment; limit?: string; offset?: string }
 
 /** Registers the telecom endpoints under the `/api/v1` prefix. */
 export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -148,6 +150,7 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.providerId !== undefined) q.providerId = Number(raw.providerId);
     if (raw.status !== undefined) q.status = raw.status;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     return listReloadSales(ctx, q);
   });
 
@@ -186,6 +189,7 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (raw.from !== undefined) q.from = raw.from;
     if (raw.to !== undefined) q.to = raw.to;
     if (raw.status !== undefined) q.status = raw.status;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     return listEzCashSales(ctx, q);
   });
 
@@ -226,6 +230,7 @@ export function registerTelecomRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (raw.kind !== undefined) q.kind = raw.kind;
     if (raw.providerId !== undefined) q.providerId = Number(raw.providerId);
     if (raw.status !== undefined) q.status = raw.status;
+    if (raw.segment !== undefined) q.segment = raw.segment;
     return listTopups(ctx, q);
   });
 

@@ -144,7 +144,7 @@ export function CategoryProductPicker({
         >
           <option value="">{requireCategory ? 'Choose a category…' : 'All categories'}</option>
           {categories.map((c) => (
-            <option key={c.id} value={String(c.id)}>{book ? c.name : `${c.name} (${BOOK_LABEL[c.book]})`}</option>
+            <option key={c.id} value={String(c.id)}>{book ? c.name : `${c.name} (${BOOK_LABEL[c.book]})`}{c.providerName ? ` - ${c.providerName}` : ''}</option>
           ))}
         </SelectField>
         {cats.isError && <Button variant="ghost" className="!min-h-8 !px-2" onClick={() => void cats.refetch()}>Retry</Button>}

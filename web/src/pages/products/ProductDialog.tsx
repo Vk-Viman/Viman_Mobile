@@ -6,10 +6,14 @@
  * the details, so a Shop product can never land in a Telecom category by accident. Switching the book clears the
  * chosen category. Reusable: other screens (Purchases, POS, stock) mount it with `defaultBook`, `defaultCategoryId`
  * and `onCreated` (see ProductDialogProps).
+ * Telecom card (stock) products: the category's provider (Dialog, Mobitel, Airtel, Hutch) decides the Cards segment (13D). The dialog shows
+ * the provider inherited from the chosen category (read-only), offers only provider categories, asks for the provider when a NEW Telecom
+ * category is created here, and blocks saving without one (with a link to set it in Products > Categories).
  * Prices are typed in rupees and converted to integer cents with rupeesToCents() so no floating-point money is
  * ever sent. All checks here are quick feedback only: the server validates everything again and is authoritative.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { Button } from '../../components/Button';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { FormDialog } from '../../components/FormDialog';
@@ -24,6 +28,8 @@ import { centsToRupees, rupeesToCents } from '../../lib/units';
 import type { Book, Category, Product, ProductCreate, ProductKind, ProductUpdate } from '../../types/api';
 import { CategoryBookChoice } from './CategoryBookChoice';
 import { CATEGORY_NAME_MAX } from './CategoryDialog';
+import { ProviderChoice } from './ProviderChoice';
+import { SEGMENT_LABEL } from '../../lib/segments';
 
 /** Largest price accepted (in cents), so an accidental extra digit is caught before it reaches the server. */
 const MAX_CENTS = 999999999;
@@ -34,7 +40,7 @@ const MAX_DESCRIPTION = 500;
 /** Whole-number pattern for the reorder level (up to 9 digits). */
 const REORDER_RE = /^\d{1,9}$/;
 /** Server field names this dialog shows under their inputs; any other server error becomes the banner. */
-const KNOWN_FIELDS = ['name', 'code', 'categoryId', 'kind', 'description', 'sellPriceCents', 'minPriceCents', 'reorderLevel', 'active'];
+const KNOWN_FIELDS = ['name', 'code', 'categoryId', 'providerId', 'kind', 'description', 'sellPriceCents', 'minPriceCents', 'reorderLevel', 'active'];
 /** Value of the category drop-down that means "create a new category in this book". */
 const NEW_CATEGORY = '__new';
 
@@ -76,6 +82,8 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
   // '' = none, NEW_CATEGORY = "create new", otherwise a category id as text.
   const [categoryId, setCategoryId] = useState(product ? String(product.categoryId) : defaultCategoryId ? String(defaultCategoryId) : '');
   const [newCategoryName, setNewCategoryName] = useState('');
+  // Provider of a NEW Telecom category ('' = not chosen).
+  const [newProviderId, setNewProviderId] = useState('');
   // Whether the last submit carried `newCategory`, to tell a category-name clash from a product-name clash.
   const [sentNewCategory, setSentNewCategory] = useState(false);
   const [kind, setKind] = useState<ProductKind>(product?.kind ?? 'stock');
@@ -104,11 +112,24 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
     setBookState(b);
     setCategoryId('');
     setNewCategoryName('');
+    setNewProviderId('');
     setServerErr(null);
   };
 
-  // Categories on offer: ACTIVE ones of the chosen book only.
-  const options = useMemo<Category[]>(() => (cats.data?.items ?? []).filter((c) => c.book === book), [cats.data, book]);
+  const isTelecomStock = book === 'telecom' && kind === 'stock';
+  // Categories on offer: ACTIVE ones of the chosen book only. A Telecom card product needs a provider category (13D), so provider-less
+  // Telecom categories are not offered for it (the product's own current category stays visible when editing).
+  const allOfBook = useMemo<Category[]>(() => (cats.data?.items ?? []).filter((c) => c.book === book), [cats.data, book]);
+  const options = useMemo<Category[]>(
+    () => (isTelecomStock ? allOfBook.filter((c) => c.providerId !== null || c.id === product?.categoryId) : allOfBook),
+    [allOfBook, isTelecomStock, product],
+  );
+  const hiddenNoProvider = allOfBook.length - options.length;
+  const selectedCat = categoryId && !creatingCategory ? (cats.data?.items ?? []).find((c) => c.id === Number(categoryId)) : undefined;
+  // The provider-less case that blocks saving: a new card product, or an edit that MOVES the product to a provider-less category.
+  const categoryMoved = editing && product !== null && Number(categoryId) !== product.categoryId;
+  const needsProvider = isTelecomStock
+    && (creatingCategory ? newProviderId === '' : selectedCat !== undefined && selectedCat.providerId === null && (!editing || categoryMoved));
   // When editing, the current category may be inactive and so missing from the list; it is then added back.
   const currentMissing = product && cats.data && book === product.book && !options.some((c) => c.id === product.categoryId);
 
@@ -122,6 +143,7 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
     if (description.length > MAX_DESCRIPTION) e.description = `Description can be at most ${MAX_DESCRIPTION} characters.`;
     if (!book) e.book = 'Choose Shop or Telecom.';
     if (!categoryId) e.categoryId = 'Choose a category.';
+    if (needsProvider) e.provider = 'Choose a Telecom category that is linked to a provider (Dialog, Mobitel, Airtel or Hutch) first.';
     if (creatingCategory) {
       const cn = newCategoryName.trim();
       if (cn.length < 1) e.newCategory = 'Enter the new category name.';
@@ -137,7 +159,7 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
     }
     if (!isService && (!REORDER_RE.test(reorder.trim()))) e.reorderLevel = 'Enter a whole number, 0 or more.';
     return e;
-  }, [name, code, description, book, categoryId, creatingCategory, newCategoryName, sell, min, reorder, isService]);
+  }, [name, code, description, book, categoryId, creatingCategory, newCategoryName, needsProvider, sell, min, reorder, isService]);
 
   // When editing: the partial update containing ONLY the fields that differ from the saved product.
   const body = useMemo<ProductUpdate>(() => {
@@ -216,7 +238,7 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
       reorderLevel: isService ? 0 : Number(reorder),
     };
     // Exactly one of categoryId / newCategory (the new category is created in the same transaction).
-    if (creatingCategory && book !== '') payload.newCategory = { name: newCategoryName.trim(), book };
+    if (creatingCategory && book !== '') payload.newCategory = { name: newCategoryName.trim(), book, ...(isTelecomStock && newProviderId !== '' ? { providerId: Number(newProviderId) } : {}) };
     else payload.categoryId = Number(categoryId);
     if (code.trim()) payload.code = code.trim();
     if (description) payload.description = description;
@@ -264,7 +286,7 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
             <option value="">{book === '' ? 'Choose the book first…' : 'Choose a category…'}</option>
             {currentMissing && product && <option value={String(product.categoryId)}>{product.categoryName} (inactive)</option>}
             {options.map((c) => (
-              <option key={c.id} value={String(c.id)}>{c.name}</option>
+              <option key={c.id} value={String(c.id)}>{c.name}{book === 'telecom' && c.providerName ? ` (${c.providerName})` : ''}</option>
             ))}
             {!editing && book !== '' && <option value={NEW_CATEGORY}>+ Create new category…</option>}
           </SelectField>
@@ -272,6 +294,12 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
             <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-red-600">
               Could not load categories.
               <Button variant="ghost" className="!min-h-8 !px-2" onClick={() => void cats.refetch()}>Retry</Button>
+            </p>
+          )}
+          {isTelecomStock && hiddenNoProvider > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              {hiddenNoProvider} Telecom {hiddenNoProvider === 1 ? 'category has' : 'categories have'} no provider and {hiddenNoProvider === 1 ? 'is' : 'are'} not offered for card products.{' '}
+              <Link to="/products/categories" target="_blank" rel="noreferrer" className="font-medium text-brand-700 underline">Set the provider in Products &gt; Categories</Link>.
             </p>
           )}
           {book !== '' && cats.isSuccess && options.length === 0 && !creatingCategory && (
@@ -289,6 +317,17 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
               maxLength={CATEGORY_NAME_MAX + 20}
               autoComplete="off"
             />
+            {isTelecomStock && (
+              <div className="mt-3">
+                <ProviderChoice
+                  required
+                  value={newProviderId}
+                  onChange={(v) => { setNewProviderId(v); setServerErr(null); }}
+                  error={serverErr instanceof ApiError ? serverErr.fields.providerId : undefined}
+                  hint="Card products of this category stock and sell in this provider's Cards segment. It cannot be changed later."
+                />
+              </div>
+            )}
             {existingCategory && (
               <Button
                 variant="secondary"
@@ -299,6 +338,24 @@ export function ProductDialog({ product = null, defaultBook, defaultCategoryId, 
               </Button>
             )}
           </div>
+        )}
+        {/* Inherited provider of a Telecom card product: read-only, comes from the category (13D). */}
+        {isTelecomStock && !creatingCategory && selectedCat && (
+          selectedCat.providerName ? (
+            <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+              Provider: <strong>{selectedCat.providerName}</strong> (from the category). This product stocks and sells in{' '}
+              <strong>{SEGMENT_LABEL[`${selectedCat.providerName.toLowerCase()}_cards` as keyof typeof SEGMENT_LABEL]}</strong>.
+              {editing && (
+                <span className="mt-1 block text-xs text-slate-500">A product that already has stock history can only move to a category of the same provider.</span>
+              )}
+            </p>
+          ) : (
+            <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              This Telecom category has no provider, so it cannot hold card products
+              {editing && !categoryMoved ? ' (this product is from before the provider segments and keeps working as it is)' : ''}.{' '}
+              <Link to="/products/categories" target="_blank" rel="noreferrer" className="font-medium underline">Set the provider in Products &gt; Categories</Link>, then come back.
+            </p>
+          )
         )}
         {/* Step 3: the details. */}
         <TextField label="3. Product name *" value={name} onChange={(e) => setName(e.target.value)} error={fieldErr('name')} maxLength={200} autoComplete="off" />

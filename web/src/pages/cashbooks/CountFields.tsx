@@ -12,10 +12,13 @@ import { TextField } from '../../components/TextField';
 import { useExpectedCash } from '../../api/cashbooks';
 import { MAX_NOTE } from '../../lib/amounts';
 import type { CashBook, IceFund } from '../../types/cashbooks';
+import type { StoredSegment } from '../../types/segments';
 import { FUNDS, FUND_LABEL, countDifference } from './shared';
 
 interface Props {
   book: CashBook;
+  /** Telecom: the segment whose drawer is counted (the expected amount is that segment's balance, 13D). */
+  segment: StoredSegment | null;
   date: string;
   counted: string;
   onCounted: (v: string) => void;
@@ -32,8 +35,8 @@ interface Props {
 }
 
 /** Expected amount, counted input, over/short preview, note and (Ice Cream) fund. */
-export function CountFields({ book, date, counted, onCounted, countedCents, note, onNote, fund, onFund, fieldErrors, showErrors }: Props) {
-  const expected = useExpectedCash(book, date);
+export function CountFields({ book, segment, date, counted, onCounted, countedCents, note, onNote, fund, onFund, fieldErrors, showErrors }: Props) {
+  const expected = useExpectedCash(book, date, segment);
   const diff = expected.data && countedCents !== null ? countDifference(expected.data.expectedCents, countedCents) : null;
   const differs = diff !== null && diff !== 0;
   return (

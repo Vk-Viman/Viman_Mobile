@@ -15,9 +15,10 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Granularity, ReportTable } from '../../lib/report-table.ts';
 import { addInto, fillPeriods, num, periodKeySql } from './ops-common.ts';
 import type { ReportWarning, SqlRow, StockBook } from './ops-common.ts';
+import type { StoredSegment } from '../segments.ts';
 
 /** Request: dates, granularity and optional filters. */
-export interface PurchasesQuery { from: string; to: string; granularity: Granularity; book?: StockBook; supplierId?: number }
+export interface PurchasesQuery { from: string; to: string; granularity: Granularity; book?: StockBook; supplierId?: number; segment?: StoredSegment }
 
 /** Figures of a period row (cents). */
 export interface PurchaseFigures { purchaseCount: number; purchasesCents: number; returnCount: number; returnsCents: number; netCents: number }
@@ -48,6 +49,7 @@ export function purchasesReport(conn: DatabaseSync, q: PurchasesQuery): Purchase
   const fp: SQLInputValue[] = [];
   if (q.book !== undefined) { f.push('pu.book = ?'); fp.push(q.book); }
   if (q.supplierId !== undefined) { f.push('pu.supplier_id = ?'); fp.push(q.supplierId); }
+  if (q.segment !== undefined) { f.push('pu.segment = ?'); fp.push(q.segment); }
   const filt = f.length > 0 ? ` AND ${f.join(' AND ')}` : '';
   const args: SQLInputValue[] = [q.from, q.to, ...fp];
 

@@ -7,6 +7,7 @@ import { apiBase, mkProduct } from './helpers/inventory.ts';
 import type { ApiBase } from './helpers/inventory.ts';
 import { auditRows, count, get, post, put } from './helpers/catalog.ts';
 import { importFile, previewFile, xlsx } from './helpers/phase13.ts';
+import { providerIdByName } from './helpers/segments.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
@@ -16,7 +17,9 @@ const TEL_DUP = 'A Telecom category with this name already exists.';
 
 async function setup(): Promise<ApiBase> { return apiBase(await env.build()); }
 const mkCat = async (s: ApiBase, name: string, book: 'shop' | 'telecom') => {
-  const r = await post(s.app, '/categories', { name, book });
+  // 13D: a Telecom category that may hold card products is linked to a provider (Dialog here); Shop categories have none
+  const providerId = book === 'telecom' ? (await providerIdByName(s.app)).Dialog : undefined;
+  const r = await post(s.app, '/categories', { name, book, ...(providerId !== undefined ? { providerId } : {}) });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return r.body.item;
 };
@@ -200,8 +203,10 @@ describe('POST /products: categoryId or newCategory', () => {
     const a = await post(s.app, '/products', prodBody({ name: 'Shop item', newCategory: { name: '  Fresh Shop  ', book: 'shop' } }));
     expect(a.status, JSON.stringify(a.body)).toBe(201);
     expect(a.body.item).toMatchObject({ categoryName: 'Fresh Shop', book: 'shop' });
-    const b = await post(s.app, '/products', prodBody({ name: 'Tel item', newCategory: { name: 'Fresh Tel', book: 'telecom' } }));
-    expect(b.status).toBe(201);
+    // 13D: a Telecom newCategory for a stock product names its provider
+    const dialog = (await providerIdByName(s.app)).Dialog;
+    const b = await post(s.app, '/products', prodBody({ name: 'Tel item', newCategory: { name: 'Fresh Tel', book: 'telecom', providerId: dialog } }));
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
     expect(b.body.item).toMatchObject({ categoryName: 'Fresh Tel', book: 'telecom' });
     expect(count(s.ctx, 'categories')).toBe(before + 2);
     const cats = (await get(s.app, '/categories')).body.items;
@@ -228,8 +233,8 @@ describe('POST /products: categoryId or newCategory', () => {
     expect(d.body.error).toMatchObject({ code: 'DUPLICATE_NAME', existingCategoryId: def.id });
     expect([count(s.ctx, 'categories'), count(s.ctx, 'products'), count(s.ctx, 'audit_logs')]).toEqual(before);
     // the same name in the OTHER book is a different category and is created
-    const other = await post(s.app, '/products', prodBody({ newCategory: { name: 'Taken', book: 'telecom' } }));
-    expect(other.status).toBe(201);
+    const other = await post(s.app, '/products', prodBody({ newCategory: { name: 'Taken', book: 'telecom', providerId: (await providerIdByName(s.app)).Dialog } }));
+    expect(other.status, JSON.stringify(other.body)).toBe(201);
     expect(other.body.item.book).toBe('telecom');
   });
 

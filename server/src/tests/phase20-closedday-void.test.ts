@@ -7,9 +7,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { TestEnv } from './helpers/tmp.ts';
 import { apiBase, ref } from './helpers/inventory.ts';
-import { closeNew, reopenNew } from './helpers/phase8.ts';
+import { reopenNew } from './helpers/phase8.ts';
+import { SEGMENTS } from './helpers/segments.ts';
+import { seg } from './helpers/seg.ts';
 import { stDraft } from './helpers/phase4.ts';
-import { C, E, allOps, closeBooks, fixture, must } from './helpers/phase19cd.ts';
+import { C, E, allOps, closeBooks, fixture, must, opSegment, recloseAll, reopenAll } from './helpers/phase19cd.ts';
 import type { Book, Fx } from './helpers/phase19cd.ts';
 
 const env = new TestEnv();
@@ -95,7 +97,7 @@ describe('M1: raw void flip of a record dated E / C, per voidable table', () => 
     const other = BOOKS3.find((b) => !op.books.includes(b))!;
     const oc = await closeBooks(s, [other], C());
     expect(both(), `${table}: ${other} closed`).toEqual(['ok', 'ok']);
-    must(await reopenNew(s, oc[other].id, 'reopen test'));
+    await reopenAll(s, oc, 'reopen test');
 
     // own books closed on C
     const own = await closeBooks(s, books, C());
@@ -103,10 +105,10 @@ describe('M1: raw void flip of a record dated E / C, per voidable table', () => 
     expect(e1, `${table} dated E`).toContain(BACK);
     expect(c1, `${table} dated C`).toContain(DAY);
     // reopen: accepted again
-    for (const c of Object.values(own)) must(await reopenNew(s, c.id, 'raw flip test'));
+    await reopenAll(s, own, 'raw flip test');
     expect(both(), `${table}: after reopen`).toEqual(['ok', 'ok']);
     // re-close the same rows: refused again
-    for (const b of books) expect((await closeNew(s, b, C())).status).toBe(201);
+    await recloseAll(s, own, C()); // the same rows (Telecom: all eight segments)
     const [e2, c2] = both();
     expect(e2, `${table} re-closed, dated E`).toContain(BACK);
     expect(c2, `${table} re-closed, dated C`).toContain(DAY);
@@ -161,7 +163,7 @@ describe('M1: void flips with their own rules', () => {
       const cl = await closeBooks(s, [book], C());
       expect(flip(idE), `${book} closed`).toContain(BACK);
       expect(flip(idC), `${book} closed`).toContain(DAY);
-      must(await reopenNew(s, cl[book].id, 'reopen test'));
+      await reopenAll(s, cl, 'reopen test');
     }
     const ic = await closeBooks(s, ['icecream'], C());
     expect([flip(idE), flip(idC)], 'Ice Cream closed: unrelated').toEqual(['ok', 'ok']);
@@ -179,5 +181,29 @@ describe('M1: void flips with their own rules', () => {
     // notes is not an immutable column of expenses? either way the closed-day trigger must not fire for it
     const r = probe(fx, () => conn.prepare("UPDATE expenses SET status = 'posted' WHERE id = ?").run(id));
     expect(r).toBe('ok');
+  });
+});
+
+// 13D: the scope of a Telecom flip is the record's SEGMENT: closing only another segment never refuses it; closing only its own does.
+describe('M1 (13D): a raw void flip of a Telecom record is judged by its own segment only', () => {
+  const TEL = CASES.filter((c) => c[2].includes('telecom'));
+  it.each(TEL.map((c) => [`${c[0]} <- ${c[1]}`, c] as const))('%s', async (_n, [table, opKey]) => {
+    const op = allOps().find((o) => o.key === opKey)!;
+    const own = opSegment(op, 'telecom')!;
+    const s = await apiBase(await env.build());
+    const fx = await fixture(s, { returns: op.returns ? 4 : 0 });
+    const conn = s.ctx.database.conn;
+    must(await op.create(fx, E())); const idE = lastId(fx, table);
+    must(await op.create(fx, C())); const idC = lastId(fx, table);
+    const flip = (id: number) => probe(fx, () => conn.prepare(`UPDATE ${table} SET ${VOID_SET} WHERE id = ?`).run(id));
+    // every segment but the record's own closed on C: the flip is accepted
+    for (const other of SEGMENTS.filter((x) => x !== own)) await seg.closeOk(s, other, C());
+    expect([flip(idE), flip(idC)], `${table}: every segment but ${own} closed`).toEqual(['ok', 'ok']);
+    // the record's own segment closed: refused (E: BACKDATE, C: DAY_CLOSED)
+    const mine = await seg.closeOk(s, own as any, C());
+    expect(flip(idE), `${table} dated E`).toContain(BACK);
+    expect(flip(idC), `${table} dated C`).toContain(DAY);
+    must(await reopenNew(s, mine.id, 'segment test'));
+    expect([flip(idE), flip(idC)], `${table}: own segment reopened`).toEqual(['ok', 'ok']);
   });
 });

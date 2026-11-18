@@ -59,7 +59,7 @@ export function TopupDialog({ onClose }: { onClose: () => void }) {
       <TextField label="Date" type="date" value={date} max={today || undefined} onChange={(e) => setDate(e.target.value)} error={fieldError(err, 'businessDate')} />
       <SelectField label="Top-up for" value={kind} onChange={(e) => setKind(e.target.value as TopupKind)}>
         <option value="provider_topup">A reload provider</option>
-        <option value="wallet_topup">The EZCash wallet</option>
+        <option value="wallet_topup">The EZCash wallet (Dialog Reloads)</option>
       </SelectField>
       {kind === 'provider_topup' && (
         <SelectField label="Provider" value={providerId} onChange={(e) => setProviderId(e.target.value)}

@@ -1,7 +1,7 @@
 /**
  * SaleResult: the panel shown after a successful "Save sale" on the POS.
  * Where: Sales > POS (replaces the cart until the cashier presses "New sale").
- * Data: the `POST /sales` response (api/sales.ts): one sale per book plus the server's non-blocking warnings
+ * Data: the `POST /sales` response (api/sales.ts): one sale per scope (Shop, each provider's Cards segment) plus the server's non-blocking warnings
  * (R13: PRICE_BELOW_MINIMUM, PRICE_BELOW_COST, ZERO_COST). Each warning names the cart line it refers to via
  * `lineIndex`, which we resolve against the cart snapshot that was submitted.
  * C13: when a sale carries extra cost the panel shows the cost as "charged (automatic + extra)"; figures are the
@@ -12,6 +12,7 @@ import { Button } from '../../components/Button';
 import { Money } from '../../components/Money';
 import { BookBadge } from '../../components/StatusBadges';
 import type { Sale, Warning } from '../../types/api';
+import { saleScopeLabel } from './scope';
 import type { CartLine } from './cart';
 
 interface Props {
@@ -28,7 +29,7 @@ export function SaleResult({ sales, warnings, submitted, onNewSale }: Props) {
     <div className="space-y-4">
       <div role="status" className="flex items-start gap-3 rounded-lg bg-brand-50 p-3 text-sm text-brand-800">
         <CheckCircle2 size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>Sale saved. {sales.length > 1 ? 'The mixed cart was saved as one Shop sale and one Telecom sale.' : ''}</span>
+        <span>{sales.length > 1 ? `Saved as ${sales.length} sales, one for each of: ${sales.map(saleScopeLabel).join(', ')}.` : 'Sale saved.'}</span>
       </div>
 
       <ul className="space-y-2">
@@ -38,6 +39,7 @@ export function SaleResult({ sales, warnings, submitted, onNewSale }: Props) {
               <span className="flex items-center gap-2">
                 <span className="font-medium">Sale #{s.id}</span>
                 <BookBadge book={s.book} />
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700">{saleScopeLabel(s)}</span>
                 <span className="text-slate-500">{s.items.length} item{s.items.length === 1 ? '' : 's'}</span>
               </span>
               <Money cents={s.totalCents} className="font-semibold" />

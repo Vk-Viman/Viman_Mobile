@@ -8,16 +8,19 @@
 import { Badge } from '../../components/Badge';
 import { SelectField } from '../../components/SelectField';
 import type { CashBook, IceFund } from '../../types/cashbooks';
+import type { StoredSegment } from '../../types/segments';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { CASHBOOKS, CASHBOOK_LABEL, FUNDS, FUND_LABEL } from '../cashbooks/shared';
 
 /** "Shop", "Telecom" or "Ice Cream - Cost" (a book with its fund). */
-export function bookFundLabel(book: CashBook, fund: IceFund | null | undefined): string {
+export function bookFundLabel(book: CashBook, fund: IceFund | null | undefined, segment?: StoredSegment | null): string {
+  if (segment) return `${CASHBOOK_LABEL[book]} - ${SEGMENT_LABEL[segment]}`; // 13D: "Telecom - Dialog Reloads"
   return fund ? `${CASHBOOK_LABEL[book]} - ${FUND_LABEL[fund]}` : CASHBOOK_LABEL[book];
 }
 
 /** A pill with the book (and fund) name; Shop is green, the others grey, like the book badges elsewhere. */
-export function CashBookBadge({ book, fund }: { book: CashBook; fund?: IceFund | null }) {
-  return <Badge tone={book === 'shop' ? 'brand' : 'neutral'}>{bookFundLabel(book, fund)}</Badge>;
+export function CashBookBadge({ book, fund, segment }: { book: CashBook; fund?: IceFund | null; segment?: StoredSegment | null }) {
+  return <Badge tone={book === 'shop' ? 'brand' : 'neutral'}>{bookFundLabel(book, fund, segment)}</Badge>;
 }
 
 interface Props {

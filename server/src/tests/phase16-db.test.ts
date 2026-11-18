@@ -28,13 +28,15 @@ const L = (): string => daysAgo(1);
 function cash(c: DatabaseSync, book: Book, date: string, amount = -100, extra: Record<string, string | number | null> = {}): number {
   const row: Record<string, string | number | null> = {
     book, business_date: date, type: book === 'icecream' ? 'icecream_other_cost' : 'expense', amount_cents: amount,
-    ...(book === 'icecream' ? { fund: 'cost' } : {}), ...extra,
+    ...(book === 'icecream' ? { fund: 'cost' } : {}),
+    ...(book === 'telecom' ? { segment: 'dialog_reloads' } : {}), // 13D: a Telecom row names its segment; the closed-day rules judge that segment
+    ...extra,
   };
   const cols = Object.keys(row);
   return Number(c.prepare(`INSERT INTO cash_entries (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((k) => row[k] as string | number | null)).lastInsertRowid);
 }
 const close = (c: DatabaseSync, book: Book, date: string): void => {
-  c.prepare('INSERT INTO daily_closings (book, business_date, expected_cents) VALUES (?, ?, 0)').run(book, date);
+  c.prepare('INSERT INTO daily_closings (book, segment, business_date, expected_cents) VALUES (?, ?, ?, 0)').run(book, book === 'telecom' ? 'dialog_reloads' : null, date);
 };
 const reopen = (c: DatabaseSync, book: Book, date: string): void => {
   c.prepare(`UPDATE daily_closings SET reopened_at = max(strftime('%Y-%m-%dT%H:%M:%fZ','now'), closed_at), reopen_reason = 'fix' WHERE book = ? AND business_date = ?`).run(book, date);

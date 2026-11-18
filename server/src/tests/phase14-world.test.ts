@@ -203,9 +203,9 @@ describe('cash books and Ice Cream funds (hand-calculated, cents)', () => {
     const all = (await get(s.app, '/cash-counts?status=posted')).body.items as any[];
     const pick = (book: string, date: string) => all.find((c) => c.book === book && c.businessDate === date);
     expect([pick('shop', '2025-08-08').expectedCents, pick('shop', '2025-08-08').differenceCents]).toEqual([3510000, -5000]);
-    expect([pick('telecom', '2025-08-15').expectedCents, pick('telecom', '2025-08-15').differenceCents]).toEqual([7824566, 20000]);
+    expect([pick('telecom', '2025-08-15').expectedCents, pick('telecom', '2025-08-15').differenceCents]).toEqual([7024567, 20000]);
     expect([pick('shop', '2025-09-10').expectedCents, pick('shop', '2025-09-10').differenceCents]).toEqual([2965000, 12000]);
-    expect([pick('telecom', '2025-09-10').expectedCents, pick('telecom', '2025-09-10').differenceCents]).toEqual([9724566, -30000]);
+    expect([pick('telecom', '2025-09-10').expectedCents, pick('telecom', '2025-09-10').differenceCents]).toEqual([8424567, -30000]);
     expect([pick('icecream', '2025-09-10').expectedCents, pick('icecream', '2025-09-10').differenceCents]).toEqual([1450000, -10000]);
   });
 });
@@ -456,7 +456,7 @@ describe('Excel export pack (rupees, from the same hand figures)', () => {
     const p = await pack(s, 'from=2025-08-01&to=2025-09-30');
     expect(p.status).toBe(200);
     const names = p.wb!.worksheets.map((x) => x.name);
-    expect(names).toEqual(['Combined P&L (by month)', 'Shop P&L', 'Telecom P&L', 'Ice Cream P&L', 'Ice Cream funds', 'Ice Cream profit and excess', 'Cash book - Shop', 'Cash book - Telecom',
+    expect(names).toEqual(['Combined P&L (by month)', 'Shop P&L', 'Telecom P&L', 'Telecom P&L by segment', 'Ice Cream P&L', 'Ice Cream funds', 'Ice Cream profit and excess', 'Cash book - Shop', 'Cash book - Telecom', 'Cash book - Telecom segments',
       'Cash book - Ice Cream', 'Inventory valuation', 'Low stock', 'Sales', 'Purchases', 'Drawings', 'Printing variance']);
     const c = sheet(p.wb, 'Combined P&L (by month)');
     expect(rowOf(c, '2025-08')).toEqual(['2025-08', -1437.55, -186.23, 12200, 10576.22, 0, 10576.22, 5300, 7500, 0]);

@@ -15,7 +15,7 @@ import { Money } from '../../components/Money';
 import { Spinner } from '../../components/Spinner';
 import { useTelecomSummary } from '../../api/telecom';
 import { formatLKR } from '../../lib/format';
-import type { ProviderSummary } from '../../types/telecom';
+import type { ProviderSummary, TelecomSegmentSummary } from '../../types/telecom';
 
 /** One headline figure. */
 function Tile({ label, cents, strong = false, hint }: { label: string; cents: number; strong?: boolean; hint?: string }) {
@@ -44,6 +44,16 @@ export function TelecomSummaryCard() {
     { key: 'rev', header: 'Commission revenue', align: 'right', render: (p) => <Money cents={p.commissionRevenueCents} className="font-semibold" /> },
   ];
 
+  const segmentColumns: Column<TelecomSegmentSummary>[] = [
+    { key: 'seg', header: 'Segment', render: (g) => <span className="font-medium text-slate-900">{g.label}</span> },
+    { key: 'rs', header: 'Reload collected', align: 'right', render: (g) => <Money cents={g.reloadSalesCents} /> },
+    { key: 'rc', header: 'Reload commission', align: 'right', render: (g) => <Money cents={g.reloadCommissionCents} /> },
+    { key: 'eb', header: 'EZCash bills', align: 'right', render: (g) => <Money cents={g.ezcashBillCents} /> },
+    { key: 'ec', header: 'EZCash commission', align: 'right', render: (g) => <Money cents={g.ezcashCommissionCents} /> },
+    { key: 'tp', header: 'Top-ups paid', align: 'right', render: (g) => <Money cents={g.topupsCents} /> },
+    { key: 'rev', header: 'Commission revenue', align: 'right', render: (g) => <Money cents={g.commissionRevenueCents} className="font-semibold" /> },
+  ];
+
   return (
     <Card title="Telecom summary" className="mb-4">
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -64,6 +74,9 @@ export function TelecomSummaryCard() {
           <div className="mt-4">
             <DataTable columns={columns} rows={summary.data.providers} rowKey={(p) => p.providerId} />
           </div>
+          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-900">By segment</h3>
+          <p className="mb-2 text-xs text-slate-500">EZCash and wallet top-ups are Dialog Reloads.</p>
+          <DataTable columns={segmentColumns} rows={summary.data.bySegment} rowKey={(g) => g.segment} />
           <p className="mt-3 text-xs text-slate-500">
             Only the commission is Telecom income. Collections and top-ups are cash movements. The Telecom cash book is not expected to
             match the profit because reload balances are not tracked.

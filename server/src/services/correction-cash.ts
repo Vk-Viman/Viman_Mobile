@@ -28,6 +28,14 @@ import { voidCapitalEntry } from './opening-balance.service.ts';
 import { createDrawing, getDrawing, voidDrawing } from './drawings.service.ts';
 import type { Drawing, DrawingCreate } from './drawings.service.ts';
 import { validationError } from './validation.ts';
+import type { StoredSegment } from './segments.ts';
+
+/** 13D: the replacement keeps the original's real segment unless the caller names one; `legacy` is never carried over. */
+function keepSegment(original: StoredSegment | null, replacementBook: string | undefined, supplied: StoredSegment | undefined): StoredSegment | undefined {
+  if (supplied !== undefined) return supplied;
+  if (replacementBook === 'telecom' && original !== null && original !== 'legacy') return original;
+  return undefined;
+}
 
 /** The replacement body: the normal create body with `businessDate` optional. */
 export type Replacement<C extends { businessDate: string }> = Omit<C, 'businessDate'> & { businessDate?: string };
@@ -49,6 +57,8 @@ interface Adapter<T extends { id: number; status: 'posted' | 'void'; businessDat
   assertSupported: (original: T) => void;
   /** Optional (Phase 2): refuses a replacement that does not fit the original (e.g. another drawing kind); called before the void. */
   assertReplacement?: (original: T, replacement: Replacement<C>) => void;
+  /** Optional (13D): fills the segment field(s) the caller left out from the original (corrections keep the segment by default). */
+  withSegments?: (original: T, replacement: Replacement<C>) => Replacement<C>;
   /** Optional (Phase 2): the `comparison` of the answer; undefined = none. */
   compare?: (original: T, replacement: T) => unknown;
   /** Calls the existing void; returns the voided record and any warnings it produced. */
@@ -104,7 +114,8 @@ function build<T extends { id: number; status: 'posted' | 'void'; businessDate: 
       createReplacement: (): T => {
         if (replacement === null) throw new Error('A replacement body is required');
         const date = captured.original?.businessDate as string; // G5: defaults to the original's business date
-        const body = { ...replacement, businessDate: replacement.businessDate ?? date } as unknown as C;
+        const filled = a.withSegments && captured.original ? a.withSegments(captured.original, replacement) : replacement;
+        const body = { ...filled, businessDate: replacement.businessDate ?? date } as unknown as C;
         const c = a.create(ctx, body);
         if (!c.created) {
           // The reference belongs to an existing record: never link a correction to it.
@@ -167,6 +178,10 @@ const expenses = build<Expense, ExpenseCreate>({
   entity: 'expenses',
   find: (ctx, id) => findOrNull(() => getExpense(ctx, id)),
   assertSupported: () => {},
+  withSegments: (o, r) => {
+    const segment = keepSegment(o.segment, r.book, r.segment);
+    return segment === undefined ? r : { ...r, segment };
+  },
   voidIt: (ctx, id, reason) => ({ item: voidExpense(ctx, id, { reason }), warnings: [] }),
   create: createExpense,
   notFoundMessage: 'Expense not found.',
@@ -176,6 +191,11 @@ const transfers = build<Transfer, TransferCreate>({
   entity: 'cash_transfers',
   find: (ctx, id) => findOrNull(() => getTransfer(ctx, id)),
   assertSupported: () => {},
+  withSegments: (o, r) => {
+    const fromSegment = keepSegment(o.fromSegment, r.fromBook, r.fromSegment);
+    const toSegment = keepSegment(o.toSegment, r.toBook, r.toSegment);
+    return { ...r, ...(fromSegment !== undefined ? { fromSegment } : {}), ...(toSegment !== undefined ? { toSegment } : {}) };
+  },
   voidIt: (ctx, id, reason) => voidTransfer(ctx, id, { reason }),
   create: createTransfer,
   notFoundMessage: 'Transfer not found.',
@@ -189,6 +209,10 @@ const capital = build<CapitalEntry, CapitalCreate>({
       throw unsupported('Only capital entries can be corrected here. An opening balance is changed by voiding it and setting it again.');
     }
   },
+  withSegments: (o, r) => {
+    const segment = keepSegment(o.segment, r.book, r.segment);
+    return segment === undefined ? r : { ...r, segment };
+  },
   voidIt: (ctx, id, reason) => voidCapitalEntry(ctx, id, { reason }),
   create: createCapital,
   notFoundMessage: 'Capital entry not found.',
@@ -200,6 +224,12 @@ const drawings = build<Drawing, DrawingCreate>({
   assertSupported: () => {}, // Phase 2: goods drawings are correctable too (the replacement must keep the kind)
   assertReplacement: (d, r) => {
     if (r.kind !== d.kind) throw validationError({ 'replacement.kind': `The replacement must be a ${d.kind} drawing, like the original.` });
+  },
+  withSegments: (o, r) => {
+    // Cash drawings only; a goods drawing's segment follows its product (package F).
+    if (o.kind !== 'cash' || r.kind !== 'cash') return r;
+    const segment = keepSegment(o.segment, r.book, r.segment);
+    return segment === undefined ? r : { ...r, segment };
   },
   compare: (o, r) => (o.kind === 'goods'
     ? { originalCostCents: o.amountCents, replacementCostCents: r.amountCents, differenceCents: r.amountCents - o.amountCents }

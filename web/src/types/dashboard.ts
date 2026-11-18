@@ -48,7 +48,8 @@ export interface Dashboard {
   };
   closings: {
     lastClosedByBook: Record<Segment, string | null>;
-    openDaysBehind: Array<{ book: Segment; dates: string[] }>;
+    /** Telecom is one entry per segment with activity (`segment`, `label`, `lastClosedDate` set), see 13D. */
+    openDaysBehind: Array<{ book: Segment; dates: string[]; segment?: string; label?: string; lastClosedDate?: string | null }>;
   };
   backup: { latestAt: string | null; ageHours: number | null; status: 'ok' | 'stale' | 'none'; external: ExternalBackupSummary };
   series: {

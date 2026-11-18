@@ -25,6 +25,7 @@ import { useCategories, useProducts } from '../../api/catalog';
 import { useDebounced } from '../../hooks/useDebounced';
 import { BOOK_LABEL, CHECKBOX_CLASS, PAGE_SIZE } from '../../lib/constants';
 import type { Book, Product, ProductQuery } from '../../types/api';
+import { SEGMENT_LABEL } from '../../lib/segments';
 import { ProductDialog } from './ProductDialog';
 import { MovementsDialog } from '../purchases/MovementsDialog';
 import { StatusFilterOptions, statusToActive } from './shared';
@@ -76,6 +77,11 @@ export function ProductsTab() {
     },
     { key: 'cat', header: 'Category', render: (p) => p.categoryName },
     { key: 'book', header: 'Book', render: (p) => <BookBadge book={p.book} /> },
+    {
+      key: 'segment',
+      header: 'Provider / segment',
+      render: (p) => (p.segment === null ? '—' : p.segment === 'legacy' ? <Badge tone="amber">No provider (legacy)</Badge> : `${p.providerName ?? ''} · ${SEGMENT_LABEL[p.segment]}`),
+    },
     { key: 'kind', header: 'Kind', render: (p) => (p.kind === 'stock' ? 'Stock item' : 'Service') },
     { key: 'sell', header: 'Selling price', align: 'right', render: (p) => <Money cents={p.sellPriceCents} /> },
     { key: 'min', header: 'Min price', align: 'right', render: (p) => <Money cents={p.minPriceCents} /> },
