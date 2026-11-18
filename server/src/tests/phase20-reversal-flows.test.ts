@@ -294,10 +294,10 @@ describe('migration 020 on a populated database', () => {
     const before23 = snapT(c, Object.fromEntries(tables(c).map((t) => [t, cols(c, t)])));
     const colsBefore23 = Object.fromEntries(tables(c).map((t) => [t, cols(c, t)]));
     const out2 = migrate(c);
-    expect(out2.applied.map((n) => n.slice(0, 3))).toEqual(['024', '025', '026']);
+    expect(out2.applied.map((n) => n.slice(0, 3))).toEqual(['024', '025', '026', '027', '028']);
     expect(currentVersion(c)).toBe(latestVersion());
     const after = snapT(c, colsBefore23);
-    for (const t of Object.keys(colsBefore23).filter((x) => x !== 'schema_migrations')) expect(after[t], `table ${t} changed by 024-026`).toBe(before23[t]);
+    for (const t of Object.keys(colsBefore23).filter((x) => x !== 'schema_migrations')) expect(after[t], `table ${t} changed by 024-028`).toBe(before23[t]);
     expect(rows({ database: { conn: c } } as any, 'PRAGMA foreign_key_check')).toEqual([]);
     expect(rows({ database: { conn: c } } as any, 'PRAGMA integrity_check').map((r) => Object.values(r)[0])).toEqual(['ok']);
   });
