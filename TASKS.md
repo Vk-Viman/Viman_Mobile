@@ -64,7 +64,7 @@ Each item below was checked in the code.
 - (built 2026-11-18 on `feature/telecom-segments`; integration pass, owner browser check and the pull request to `main` still to do) Telecom split into 4 providers x (Cards, Reloads) = 8 separately calculated segments: `PROPOSAL_TELECOM_SEGMENTS.md`, BUSINESS_RULES 13D, migrations 024-026, backup validation `segments`.
 - (done 2026-11-16) Product names are unique per category (migration 023); the same name may exist in different categories.
 - (done) Correct-this-entry Phase 1 and Phase 2 (`PROPOSAL_TRANSACTION_CORRECTION.md`, BUSINESS_RULES 13E).
-- Sales discounts (Shop only, per unit, largest remainder; migration 027): FINAL DESIGN APPROVED 2026-11-17 (`PROPOSAL_SALES_DISCOUNTS.md`, BUSINESS_RULES 13C); implementation waits for the owner's separate instruction.
+- Sales discounts (Shop POS goods AND Shop services - printing, photocopying, other services; Telecom never; per unit, largest remainder; migrations 027 `sale_items` and 028 `print_sales`): FINAL DESIGN APPROVED 2026-11-17 (`PROPOSAL_SALES_DISCOUNTS.md`, BUSINESS_RULES 13C); implementation waits for the owner's separate instruction. Open small confirmations: migration numbering, list price on corrections, goods+services stay separate records, no service returns.
 - Real USB drive verification: `USB_VERIFICATION_CHECKLIST.md` (not yet performed).
 
 ### Hardening pass M1-M7 (owner-approved and DONE 2026-11-14)
