@@ -10,11 +10,19 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TestEnv } from './helpers/tmp.ts';
-import { MIGRATIONS_DIR, loadMigrations, migrate } from '../db/migrate.ts';
+import { MIGRATIONS_DIR, loadMigrations, migrate as migrateAll } from '../db/migrate.ts';
 import { generate024, generate025, generate026 } from '../db/gen/telecom-segments-sql.ts';
 import { all, one } from './helpers/phase26db.ts';
 
 const env = new TestEnv();
+// Migrations 027/028 (sales discounts) came later: this file proves 024-026 on the schema-23 fixture, so it migrates only up to 026
+// (phase27-migration.test.ts covers 027/028).
+function upTo26(): string {
+  const dir = env.newDir();
+  for (const f of loadMigrations().filter((m) => m.version <= 26)) writeFileSync(join(dir, f.name), f.sql);
+  return dir;
+}
+const migrate = (c: DatabaseSync, dir: string = upTo26()) => migrateAll(c, dir);
 const open: DatabaseSync[] = [];
 // every connection is closed BEFORE the temp folders are removed (Windows cannot delete an open database file)
 afterEach(async () => { for (const c of open.splice(0)) { try { c.close(); } catch { /* already closed */ } } await env.cleanup(); });
@@ -236,7 +244,7 @@ describe('the in-migration guards abort the whole migration (nothing half-applie
   /** A temp copy of the migrations folder with one file's text changed. */
   function patchedDir(file: string, patch: (sql: string) => string): string {
     const dir = env.newDir();
-    for (const f of loadMigrations()) writeFileSync(join(dir, f.name), f.name === file ? patch(f.sql) : f.sql);
+    for (const f of loadMigrations().filter((m) => m.version <= 26)) writeFileSync(join(dir, f.name), f.name === file ? patch(f.sql) : f.sql);
     expect(readFileSync(join(dir, file), 'utf8')).not.toBe(loadMigrations().find((f) => f.name === file)!.sql); // the patch really changed something
     return dir;
   }
