@@ -26,15 +26,17 @@ import { capVoid, closeNew, closeOk, countNew, countVoid, expNew, expVoid, openN
 import type { Book } from './helpers/phase8.ts';
 import { capNew, drawCash, tr, trVoid } from './helpers/phase9.ts';
 import { dayNew, dayReplace, dayVoid, moveNew, moveVoid, payNew, payVoid } from './helpers/phase10.ts';
+import { backMsg, closedMsg, backdateBody, dayClosedBody } from './helpers/phase19cd.ts';
+import { SEGMENTS } from './helpers/segments.ts';
+import { seg } from './helpers/seg.ts';
 
 const env = new TestEnv();
 afterEach(async () => { await env.cleanup(); });
 const setup = async (): Promise<ApiBase> => apiBase(await env.build());
 
-const LABEL: Record<Book, string> = { shop: 'Shop', telecom: 'Telecom', icecream: 'Ice Cream' };
-const closedMsg = (book: Book) => `That day is closed for the ${LABEL[book]} cash book. Reopen it first (it will be recorded in the audit log).`;
-const backMsg = (book: Book, closed: string) =>
-  `A later day (${closed}) is already closed for the ${LABEL[book]} cash book. Entries dated before it would change a closed day. Reopen that day first, or use a date after it.`;
+// 13D: a Telecom refusal names the SEGMENT (message "Telecom - Dialog Cards", body.segment); helpers/phase19cd.ts builds the exact texts.
+const RL = 'dialog_reloads'; // the segment of reloads, EZCash, top-ups and the entry-chosen records made with the default builders
+const DC = 'dialog_cards'; // the segment of card products (purchases, sales, losses, opening stock)
 const shop0 = (s: ApiBase, o: Record<string, unknown> = {}) => mkProduct(s, { minPriceCents: 0, ...o });
 const tel0 = (s: ApiBase, o: Record<string, unknown> = {}) => mkTelecom(s, { minPriceCents: 0, ...o });
 
@@ -59,6 +61,8 @@ interface Scenario {
   name: string;
   /** Every cash book that gets closed (the matrix closes them all; the refusal names the first in shop, telecom, icecream order). */
   book: Book;
+  /** 13D: the Telecom segment the write posts into (and that the matrix closes); ignored for Shop / Ice Cream. Default 'dialog_reloads'. */
+  seg?: string;
   prep?: (s: ApiBase) => Promise<any>;
   create: (s: ApiBase, ctx: any, date: string) => Promise<Res>;
   void?: (s: ApiBase, ctx: any, created: Res) => Promise<Res>;
@@ -77,7 +81,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => post(s.app, `/purchases/${c.body.item.id}/void`, { reason: 'test void' }),
   },
   {
-    name: 'purchase (telecom)', book: 'telecom',
+    name: 'purchase (telecom)', book: 'telecom', seg: DC,
     prep: async (s) => tel0(s),
     create: (s, p, date) => post(s.app, '/purchases', { businessDate: date, items: [{ productId: p.id, packs: 1, packSize: 2, lineTotalCents: 2000 }], clientRef: ref() }),
     void: (s, _p, c) => post(s.app, `/purchases/${c.body.item.id}/void`, { reason: 'test void' }),
@@ -89,7 +93,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => voidSaleNew(s, c.body.sales[0].id),
   },
   {
-    name: 'sale (telecom card)', book: 'telecom',
+    name: 'sale (telecom card)', book: 'telecom', seg: DC,
     prep: async (s) => stocked(s, tel0, 100, 100000, { sellPriceCents: 3000 }),
     create: (s, p, date) => sellNew(s, [cl(p.id, 1, 3000)], { businessDate: date }),
     void: (s, _p, c) => voidSaleNew(s, c.body.sales[0].id),
@@ -101,7 +105,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => lossVoid(s, c.body.item.id),
   },
   {
-    name: 'stock loss (telecom product)', book: 'telecom',
+    name: 'stock loss (telecom product)', book: 'telecom', seg: DC,
     prep: async (s) => stocked(s, tel0, 100, 100000),
     create: (s, p, date) => lossNew(s, p.id, 1, { businessDate: date }),
     void: (s, _p, c) => lossVoid(s, c.body.item.id),
@@ -146,7 +150,7 @@ const scenarios: Scenario[] = [
     void: (s, _p, c) => post(s.app, `/opening-stock/${c.body.item.id}/void`, { reason: 'test void' }),
   },
   {
-    name: 'opening stock (telecom product)', book: 'telecom',
+    name: 'opening stock (telecom product)', book: 'telecom', seg: DC,
     prep: async (s) => tel0(s),
     create: (s, p, date) => post(s.app, '/opening-stock', { businessDate: date, items: [{ productId: p.id, qty: 1, unitCostCents: 1000 }], clientRef: ref() }),
     void: (s, _p, c) => post(s.app, `/opening-stock/${c.body.item.id}/void`, { reason: 'test void' }),
@@ -252,30 +256,28 @@ describe.each(scenarios)('ordering - $name', (sc) => {
   it('E < M < C: refused before the latest closed day (create AND void, exact body, nothing written); DAY_CLOSED on closed days; later dates fine; reopen restores', async () => {
     const s = await setup();
     const ctx = sc.prep ? await sc.prep(s) : undefined;
+    const sg = sc.book === 'telecom' ? sc.seg ?? RL : undefined; // the scope the refusals name
 
     // 1. everything is open: the first record is saved, dated E
     const first = ok201(await sc.create(s, ctx, E()));
 
     // 2. two days of the book are closed: M, then C (the latest)
-    const cM = await closeOk(s, sc.book, M());
-    const cC = await closeOk(s, sc.book, C());
+    const closeSeg = sc.book === 'telecom' ? { segment: sg } : {};
+    const cM = await closeOk(s, sc.book, M(), closeSeg);
+    const cC = await closeOk(s, sc.book, C(), closeSeg);
 
     // 3. a create dated E is earlier than the latest closed day C: refused, full body, nothing written
     const before = world(s, sc.omit);
     const refused = await sc.create(s, ctx, E());
     expect(refused.status, JSON.stringify(refused.body)).toBe(409);
-    expect(refused.body.error).toEqual({
-      code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(sc.book, C()), book: sc.book, closedDate: C(), businessDate: E(),
-    });
+    expect(refused.body.error).toEqual(backdateBody(sc.book, C(), E(), sg));
     expect(world(s, sc.omit)).toEqual(before);
 
     // 4. a void of the record dated E is refused the same way (its reversal would copy date E)
     if (sc.void) {
       const v = await sc.void(s, ctx, first);
       expect(v.status, JSON.stringify(v.body)).toBe(409);
-      expect(v.body.error).toEqual({
-        code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(sc.book, C()), book: sc.book, closedDate: C(), businessDate: E(),
-      });
+      expect(v.body.error).toEqual(backdateBody(sc.book, C(), E(), sg));
       expect(world(s, sc.omit)).toEqual(before);
     }
 
@@ -283,7 +285,7 @@ describe.each(scenarios)('ordering - $name', (sc) => {
     for (const d of [M(), C()]) {
       const r = await sc.create(s, ctx, d);
       expect(r.status, JSON.stringify(r.body)).toBe(409);
-      expect(r.body.error).toEqual({ code: 'DAY_CLOSED', message: closedMsg(sc.book), book: sc.book, businessDate: d });
+      expect(r.body.error).toEqual(dayClosedBody(sc.book, d, sg));
     }
     expect(world(s, sc.omit)).toEqual(before);
 
@@ -293,9 +295,7 @@ describe.each(scenarios)('ordering - $name', (sc) => {
     // 7. reopening the LATEST closed day C: the latest closed day is now M, so the same create names M (a reopened day no longer counts)
     expect((await reopenNew(s, cC.id, 'correcting a mistake')).status).toBe(200);
     const stillRefused = await sc.create(s, ctx, E());
-    expect(stillRefused.body.error).toEqual({
-      code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg(sc.book, M()), book: sc.book, closedDate: M(), businessDate: E(),
-    });
+    expect(stillRefused.body.error).toEqual(backdateBody(sc.book, M(), E(), sg));
     // the reopened day C itself is no longer DAY_CLOSED, and it is later than M, so a write dated C is accepted
     const onReopened = sc.single ? undefined : ok201(await sc.create(s, ctx, once(sc) ? daysAgo(2) : C()));
 
@@ -308,11 +308,11 @@ describe.each(scenarios)('ordering - $name', (sc) => {
     const again = ok201(await sc.create(s, ctx, E()));
 
     // 9. closing M and C again protects E again (the re-close updated the same closing rows)
-    expect((await closeNew(s, sc.book, M())).status).toBe(201);
-    expect((await closeNew(s, sc.book, C())).status).toBe(201);
+    expect((await closeNew(s, sc.book, M(), closeSeg)).status).toBe(201);
+    expect((await closeNew(s, sc.book, C(), closeSeg)).status).toBe(201);
     const blocked = await sc.create(s, ctx, E());
     expect(blocked.status).toBe(409);
-    expect(err(blocked)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', closedDate: C() });
+    expect(err(blocked)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', closedDate: C(), ...(sg ? { segment: sg } : {}) });
     if (sc.void) {
       const v = await sc.void(s, ctx, again);
       expect(v.status).toBe(409);
@@ -320,6 +320,23 @@ describe.each(scenarios)('ordering - $name', (sc) => {
     }
     expect(later?.status ?? 201).toBe(201);
     expect(onReopened?.status ?? 201).toBe(201);
+  });
+});
+
+// 13D: the SAME script for every Telecom write, closing a DIFFERENT segment: nothing is refused (a closed day of one segment never blocks another)
+describe.each(scenarios.filter((sc) => sc.book === 'telecom' && !sc.name.startsWith('transfer')))('ordering (13D other segment closed) - $name', (sc) => {
+  it('the closed days of every OTHER segment (and of Shop / Ice Cream) do not touch the write: create, void, backdated create and a same-day create are all accepted', async () => {
+    const s = await setup();
+    const ctx = sc.prep ? await sc.prep(s) : undefined;
+    const own = sc.seg ?? RL;
+    const first = ok201(await sc.create(s, ctx, E()));
+    for (const other of SEGMENTS.filter((x) => x !== own)) { await seg.closeOk(s, other, M()); await seg.closeOk(s, other, C()); }
+    await closeOk(s, 'shop', C());
+    await closeOk(s, 'icecream', C());
+    // a created-and-voided record in the record's own (open) segment, dated before and exactly on days that are closed ELSEWHERE
+    ok201(await sc.create(s, ctx, E()));
+    ok201(await sc.create(s, ctx, C()));
+    if (sc.void) expect((await sc.void(s, ctx, first)).status).toBe(200);
   });
 });
 
@@ -435,9 +452,9 @@ describe('ordering - several books and precedence', () => {
     const before = world(s);
     const a = await tr(s, 'shop', 'telecom', 500, { businessDate: E() });
     expect(a.status).toBe(409);
-    expect(a.body.error).toEqual({ code: 'BACKDATE_BEFORE_CLOSED_DAY', message: backMsg('telecom', C()), book: 'telecom', closedDate: C(), businessDate: E() });
+    expect(a.body.error).toEqual(backdateBody('telecom', C(), E(), RL));
     const b = await tr(s, 'telecom', 'shop', 500, { businessDate: E() });
-    expect(err(b)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book: 'telecom' });
+    expect(err(b)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book: 'telecom', segment: RL });
     expect(world(s)).toEqual(before); // neither leg was written
     // Shop <-> Ice Cream (no closed day on either): backdated transfer is fine
     ok201(await tr(s, 'shop', 'icecream', 500, { businessDate: E(), toFund: 'cost' }));
@@ -462,23 +479,23 @@ describe('ordering - several books and precedence', () => {
     await closeOk(s, 'shop', daysAgo(2)); // shop: dated 3 days ago is BEFORE a closed day
     await closeOk(s, 'telecom', C()); // telecom: dated 3 days ago is exactly ON a closed day
     const r = await tr(s, 'shop', 'telecom', 500, { businessDate: C() });
-    expect(r.body.error).toEqual({ code: 'DAY_CLOSED', message: closedMsg('telecom'), book: 'telecom', businessDate: C() });
+    expect(r.body.error).toEqual(dayClosedBody('telecom', C(), RL));
     // and the reverse: shop exact-closed, telecom backdated
     await closeOk(s, 'shop', daysAgo(5));
     await closeOk(s, 'telecom', L());
     const r2 = await tr(s, 'shop', 'telecom', 500, { businessDate: daysAgo(5) });
-    expect(r2.body.error).toEqual({ code: 'DAY_CLOSED', message: closedMsg('shop'), book: 'shop', businessDate: daysAgo(5) });
+    expect(r2.body.error).toEqual(dayClosedBody('shop', daysAgo(5)));
   });
 
   it('a cart touching a shop AND a telecom product is refused when either book has a later closed day, and nothing of it is saved', async () => {
     const s = await setup();
     const a = await stocked(s, shop0, 10, 10000);
     const b = await stocked(s, tel0, 10, 10000);
-    await closeOk(s, 'telecom', C());
+    await closeOk(s, 'telecom', C(), { segment: DC }); // the Telecom line is a Dialog card
     const before = world(s);
     const r = await sellNew(s, [cl(a.id, 1, 3000), cl(b.id, 1, 3000)], { businessDate: E() });
     expect(r.status).toBe(409);
-    expect(err(r)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book: 'telecom', closedDate: C(), businessDate: E() });
+    expect(err(r)).toMatchObject({ code: 'BACKDATE_BEFORE_CLOSED_DAY', book: 'telecom', segment: DC, closedDate: C(), businessDate: E() });
     expect(world(s)).toEqual(before); // not even the shop half
     ok201(await sellNew(s, [cl(a.id, 1, 3000)], { businessDate: E() })); // shop-only cart: shop has no closed day
   });
@@ -529,7 +546,7 @@ describe('ordering - validation order and idempotence', () => {
     // a NEW clientRef with the same date is refused
     expect(err(await post(s.app, '/expenses', { ...body, clientRef: ref() })).code).toBe('BACKDATE_BEFORE_CLOSED_DAY');
     // and a repeat of a transfer
-    const tbody = { businessDate: daysAgo(10), fromBook: 'telecom', toBook: 'icecream', toFund: 'cost', amountCents: 100, clientRef: ref() };
+    const tbody = { businessDate: daysAgo(10), fromBook: 'telecom', fromSegment: RL, toBook: 'icecream', toFund: 'cost', amountCents: 100, clientRef: ref() };
     const t1 = ok201(await post(s.app, '/cash-transfers', tbody));
     await closeOk(s, 'telecom', C());
     const t2 = await post(s.app, '/cash-transfers', tbody);
